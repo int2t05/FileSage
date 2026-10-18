@@ -176,6 +176,9 @@ func TestScanScopesAndCollapsesHardLinkAliases(t *testing.T) {
 			}
 		}
 	}
+	for left, right := 0, len(filesystem.entries)-1; left < right; left, right = left+1, right-1 {
+		filesystem.entries[left], filesystem.entries[right] = filesystem.entries[right], filesystem.entries[left]
+	}
 
 	groups, err := Scan(context.Background(), filesystem, []string{"docs", "docs/a.txt"}, Options{}, nil)
 	if err != nil {

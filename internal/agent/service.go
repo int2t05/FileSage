@@ -2451,7 +2451,7 @@ func (s *Service) snapshotArchiveOperation(ctx context.Context, proposal Proposa
 		parentPath = proposal.TargetPath
 		if inspectArchive {
 			manifest, inspectErr := s.root.InspectArchive(ctx, proposal.SourcePath, agentArchiveReadLimits())
-			if inspectErr != nil || manifest.Fingerprint != entry.Fingerprint() || len(manifest.Entries) == 0 {
+			if inspectErr != nil || !sameFileFingerprint(manifest.Fingerprint, entry.Fingerprint()) || len(manifest.Entries) == 0 {
 				return source, input, outputs, ErrConflict
 			}
 			input.ManifestDigest = manifest.Digest
@@ -2465,7 +2465,7 @@ func (s *Service) snapshotArchiveOperation(ctx context.Context, proposal Proposa
 
 	if sourceJSON != nil {
 		var expected archiveSourceState
-		if json.Unmarshal([]byte(*sourceJSON), &expected) != nil || expected.Fingerprint != input.Fingerprint ||
+		if json.Unmarshal([]byte(*sourceJSON), &expected) != nil || !sameFileFingerprint(expected.Fingerprint, input.Fingerprint) ||
 			proposal.Action == "create_archive" && expected.TreeDigest != input.TreeDigest {
 			return source, input, outputs, ErrConflict
 		}
@@ -2888,7 +2888,7 @@ func matchesTargetDirectoryParent(relativePath string, actual fsroot.Entry, expe
 		return matchesDirectoryIdentity(actual.Fingerprint(), expectedJSON)
 	}
 	var expected fsroot.Fingerprint
-	return json.Unmarshal([]byte(expectedJSON), &expected) == nil && expected == actual.Fingerprint()
+	return json.Unmarshal([]byte(expectedJSON), &expected) == nil && sameFileFingerprint(expected, actual.Fingerprint())
 }
 
 // validateCopyDirectorySnapshot 校验目录树快照与复制目标，快照仅保存摘要到审批记录。

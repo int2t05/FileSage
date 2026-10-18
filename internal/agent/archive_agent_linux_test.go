@@ -242,6 +242,40 @@ func TestArchiveRecoveryMarksPublishedOutputPartial(t *testing.T) {
 	}
 }
 
+// TestArchiveSnapshotIgnoresTimeLocationIdentity 验证持久化时间按时刻而非时区指针比较。
+func TestArchiveSnapshotIgnoresTimeLocationIdentity(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "source"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPath, "source", "a.txt"), []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	proposal := Proposal{Action: "create_archive", SourcePath: "source", TargetPath: "source.zip"}
+	_, source, target, err := service.snapshotArchiveOperation(ctx, proposal, nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source.Fingerprint.ModifiedAt = source.Fingerprint.ModifiedAt.In(time.FixedZone("same-offset", 3600))
+	source.Fingerprint.ChangeTime = source.Fingerprint.ChangeTime.In(time.FixedZone("same-offset", 3600))
+	sourceJSON, err := json.Marshal(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetJSON, err := json.Marshal(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceJSONText, targetJSONText := string(sourceJSON), string(targetJSON)
+	if _, _, _, err := service.snapshotArchiveOperation(ctx, proposal, &sourceJSONText, &targetJSONText, false); err != nil {
+		t.Fatalf("equivalent stored snapshot rejected: %v", err)
+	}
+}
+
 func proposeAgentArchive(t *testing.T, ctx context.Context, service *Service, sourcePath, targetPath string) store.PlanRecord {
 	t.Helper()
 	plan, err := service.Propose(ctx, Proposal{

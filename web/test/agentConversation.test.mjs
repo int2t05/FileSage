@@ -507,6 +507,12 @@ describe('Agent 对话 API 解析', () => {
       dataTypes: ['命令与范围'], provider: 'ollama', model: 'qwen3:8b', destination: 'local',
     };
     assert.equal(parseAgentConversation(conversation({ analysisCard: card })).analysisCard.workingDir, '资料');
+    const rootWorkingDirectory = {
+      ...card,
+      workingDir: '.',
+      operations: [{ ...card.operations[0], workingDir: '.' }],
+    };
+    assert.equal(parseAgentConversation(conversation({ analysisCard: rootWorkingDirectory })).analysisCard.workingDir, '.');
     assert.throws(() => parseAgentConversation(conversation({
       analysisCard: { ...card, operations: [{ ...card.operations[0], shellCommand: 'rm -rf .' }] },
     })), AgentConversationApiError);

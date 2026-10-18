@@ -616,7 +616,7 @@ export function AgentPlanReview({
     ? `确认永久删除 ${permanentDeleteCount} 项`
     : permanentDeleteCount > 0
       ? `确认执行 ${plan?.operations.length ?? 0} 项（永久删除 ${permanentDeleteCount} 项）`
-      : shellPlan ? '执行已批准的 Shell 命令' : photoArchivePlan ? '执行照片归档' : `执行 ${plan?.operations.length ?? 0} 项`;
+      : shellPlan ? '写入已批准的文件变化' : photoArchivePlan ? '执行照片归档' : `执行 ${plan?.operations.length ?? 0} 项`;
 
   function beginEditing() {
     if (!plan || !editableNow) return;
@@ -873,7 +873,7 @@ export function AgentPlanReview({
 
           {canExecute(plan) && (
             <footer className="agent-execution-panel">
-              <p>{permanentDeleteCount > 0 ? `${permanentDeleteCount} 项永久删除后无法恢复。` : ''}{shellPlan ? '已批准全部文件变化，确认后运行 Shell 命令。' : `已批准全部 ${plan.operations.length} 项${photoArchivePlan ? '照片归档' : '操作'}，确认后立即执行。`}</p>
+              <p>{permanentDeleteCount > 0 ? `${permanentDeleteCount} 项永久删除后无法恢复。` : ''}{shellPlan ? '已批准全部文件变化，确认后写入原目录。' : `已批准全部 ${plan.operations.length} 项${photoArchivePlan ? '照片归档' : '操作'}，确认后立即执行。`}</p>
               <button className="agent-primary-button" type="button" onClick={onExecute} disabled={Boolean(actionBusy)}>
                 {actionBusy === 'execute' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
                 {executeButtonLabel}

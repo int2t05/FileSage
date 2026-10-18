@@ -289,7 +289,7 @@ func (r *Root) extractArchiveWithPublisher(ctx context.Context, archivePath, des
 		}
 		manifest.Digest = archiveManifestDigest(manifest.Entries)
 		outputs := archiveOutputPaths(destination, selected)
-		if manifest.Fingerprint != expected.manifest.Fingerprint || manifest.Digest != expected.manifest.Digest ||
+		if !sameFingerprint(manifest.Fingerprint, expected.manifest.Fingerprint) || manifest.Digest != expected.manifest.Digest ||
 			!sameArchivePaths(outputs, expected.paths) || !sameDirectoryFingerprint(destinationSnapshot, expected.destination, true) {
 			return result, ErrConflict
 		}
@@ -316,7 +316,7 @@ func (r *Root) extractArchiveWithPublisher(ctx context.Context, archivePath, des
 		return result, err
 	}
 	currentArchive, err := r.LstatEntry(archivePath)
-	if err != nil || currentArchive.Symlink || currentArchive.Kind != KindFile || !opened.entry.IdentityAvailable || currentArchive.Fingerprint() != opened.entry.Fingerprint() {
+	if err != nil || currentArchive.Symlink || currentArchive.Kind != KindFile || !opened.entry.IdentityAvailable || !sameFingerprint(currentArchive.Fingerprint(), opened.entry.Fingerprint()) {
 		if err != nil {
 			return result, err
 		}
@@ -324,7 +324,7 @@ func (r *Root) extractArchiveWithPublisher(ctx context.Context, archivePath, des
 	}
 	if destination != "" {
 		current, statErr := r.LstatEntry(destination)
-		if statErr != nil || current.Symlink || current.Kind != KindDirectory || !current.IdentityAvailable || current.Fingerprint() != destinationSnapshot {
+		if statErr != nil || current.Symlink || current.Kind != KindDirectory || !current.IdentityAvailable || !sameFingerprint(current.Fingerprint(), destinationSnapshot) {
 			if statErr != nil {
 				return result, statErr
 			}

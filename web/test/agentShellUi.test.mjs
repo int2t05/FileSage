@@ -25,7 +25,8 @@ describe('Agent Shell 审核界面', () => {
 
   it('保留整份方案拒绝和最后执行确认，并适配窄屏状态摘要', () => {
     assert.match(review, /拒绝整份方案/);
-    assert.match(review, /已批准全部文件变化，确认后运行 Shell 命令/);
+    assert.match(review, /已批准全部文件变化，确认后写入原目录/);
+    assert.match(review, /写入已批准的文件变化/);
     assert.match(styles, /@media \(max-width: 700px\)[\s\S]*?\.agent-shell-change-states\s*\{\s*grid-template-columns: minmax\(0, 1fr\);/);
     assert.match(styles, /\.agent-shell-command\s*\{[\s\S]*?overflow-wrap: anywhere/);
   });

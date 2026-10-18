@@ -354,7 +354,7 @@ function parseAnalysisCard(value: unknown): AgentAnalysisCard | null {
     const shellCommand = value.shellCommand ?? operation.shellCommand;
     const workingDir = value.workingDir ?? operation.workingDir;
     if (typeof filePath !== 'string' || !isSafeRelativePath(filePath, true)
-      || !isShellCommand(shellCommand) || typeof workingDir !== 'string' || !isSafeRelativePath(workingDir, true)
+      || !isShellCommand(shellCommand) || typeof workingDir !== 'string' || !isShellWorkingDirectory(workingDir)
       || value.targetPath !== undefined && value.targetPath !== ''
       || value.files !== undefined || value.categories !== undefined
       || value.requestedMode != null || value.requestedOwnerUid != null || value.requestedGroupGid != null) {
