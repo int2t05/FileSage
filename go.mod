@@ -6,7 +6,7 @@ require (
 	github.com/bep/imagemeta v0.17.2
 	github.com/tus/lockfile v1.2.0
 	github.com/tus/tusd/v2 v2.10.1
-	golang.org/x/sys v0.48.0
+	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.60.1
 )
 
