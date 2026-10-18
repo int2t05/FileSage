@@ -57,6 +57,7 @@ type conversationSummaryResponse struct {
 	UpdatedAt       string                  `json:"updatedAt"`
 	Title           string                  `json:"title"`
 	TaskID          string                  `json:"taskId,omitempty"`
+	TaskStatus      store.TaskStatus        `json:"taskStatus,omitempty"`
 	PlanID          string                  `json:"planId,omitempty"`
 	DuplicateScanID string                  `json:"duplicateScanId,omitempty"`
 }
@@ -116,7 +117,7 @@ func (api *API) listAgentConversations(w http.ResponseWriter, r *http.Request) {
 	response := conversationListResponse{Conversations: make([]conversationSummaryResponse, 0, len(summaries)), Limit: limit, Offset: offset, HasMore: hasMore}
 	for _, item := range summaries {
 		response.Conversations = append(response.Conversations, conversationSummaryResponse{
-			ID: item.ID, State: item.State, UpdatedAt: item.UpdatedAt.Format(time.RFC3339Nano), Title: item.Title, TaskID: item.TaskID, PlanID: item.PlanID, DuplicateScanID: item.DuplicateScanID,
+			ID: item.ID, State: item.State, UpdatedAt: item.UpdatedAt.Format(time.RFC3339Nano), Title: item.Title, TaskID: item.TaskID, TaskStatus: item.TaskStatus, PlanID: item.PlanID, DuplicateScanID: item.DuplicateScanID,
 		})
 	}
 	writeJSON(w, http.StatusOK, response)

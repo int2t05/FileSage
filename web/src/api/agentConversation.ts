@@ -83,6 +83,7 @@ export interface AgentConversationSummary {
   title: string;
   updatedAt: string;
   taskId?: string;
+  taskStatus?: string;
   planId?: string;
 }
 
@@ -595,6 +596,7 @@ export function parseAgentConversationPage(value: unknown): AgentConversationPag
       title: item.title,
       updatedAt: item.updatedAt,
       ...(item.taskId === undefined ? {} : { taskId: optionalString(item.taskId, '任务 ID') }),
+      ...(item.taskStatus === undefined ? {} : { taskStatus: optionalString(item.taskStatus, '任务状态') }),
       ...(item.planId === undefined ? {} : { planId: optionalString(item.planId, '方案 ID') }),
     };
   });

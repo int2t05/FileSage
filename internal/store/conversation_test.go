@@ -87,6 +87,34 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	}
 }
 
+// TestConversationSummaryIncludesCurrentTaskStatus 验证摘要读取关联任务的最新状态。
+func TestConversationSummaryIncludesCurrentTaskStatus(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.CreateConversation(ctx, "conversation-task", "整理文件", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PutTask(ctx, TaskRecord{ID: "task-current", Kind: "agent", Status: TaskSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `INSERT INTO plans (id, task_id, version, status, data_scope_json, created_at_ns, updated_at_ns) VALUES (?, ?, 1, 'completed', '{}', 1, 1)`, "plan-current", "task-current"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `UPDATE agent_conversations SET state = ?, task_id = ?, plan_id = ? WHERE id = ?`, ConversationAwaitingApproval, "task-current", "plan-current", "conversation-task"); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, _, err := db.ListConversations(ctx, 20, 0)
+	if err != nil || len(summaries) != 1 || summaries[0].TaskStatus != TaskSucceeded {
+		t.Fatalf("ListConversations() = (%#v, %v)", summaries, err)
+	}
+}
+
 func TestClarifyingConversationCanFinishWithoutAnalysisCard(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))

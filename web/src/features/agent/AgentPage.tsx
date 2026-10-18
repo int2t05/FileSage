@@ -1314,7 +1314,7 @@ export function AgentPage() {
                       aria-current={selectedConversationId === item.id ? 'true' : undefined}
                     >
                       <span className="agent-history-item-main"><strong>{conversationTitle(item)}</strong><small>{formatDate(item.updatedAt)}</small></span>
-                      <span className="agent-history-state">{conversationStatusLabel(item.state)}</span>
+                      <span className="agent-history-state">{item.taskStatus ? taskStatusLabel(item.taskStatus) : conversationStatusLabel(item.state)}</span>
                     </button>
                   ))}
                 </div>
