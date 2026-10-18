@@ -295,6 +295,7 @@ type ConversationSummary struct {
 	State           ConversationState
 	Title           string
 	TaskID          string
+	TaskStatus      TaskStatus
 	PlanID          string
 	DuplicateScanID string
 	UpdatedAt       time.Time
@@ -595,8 +596,9 @@ func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]Con
 			WHEN 'unsupported' THEN '暂不支持的任务'
 			WHEN 'failed' THEN '需要处理的任务'
 			ELSE 'Agent 对话' END),
-		COALESCE(c.task_id, ''), COALESCE(c.plan_id, ''), COALESCE(c.duplicate_scan_id, ''), c.updated_at_ns
-		FROM agent_conversations c ORDER BY c.updated_at_ns DESC, c.id DESC LIMIT ? OFFSET ?`, limit+1, offset)
+		COALESCE(c.task_id, ''), COALESCE(t.status, ''), COALESCE(c.plan_id, ''), COALESCE(c.duplicate_scan_id, ''), c.updated_at_ns
+		FROM agent_conversations c LEFT JOIN tasks t ON t.id = c.task_id
+		ORDER BY c.updated_at_ns DESC, c.id DESC LIMIT ? OFFSET ?`, limit+1, offset)
 	if err != nil {
 		return nil, false, fmt.Errorf("list agent conversations: %w", err)
 	}
@@ -605,7 +607,7 @@ func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]Con
 	for rows.Next() {
 		var item ConversationSummary
 		var updated int64
-		if err := rows.Scan(&item.ID, &item.State, &item.Title, &item.TaskID, &item.PlanID, &item.DuplicateScanID, &updated); err != nil {
+		if err := rows.Scan(&item.ID, &item.State, &item.Title, &item.TaskID, &item.TaskStatus, &item.PlanID, &item.DuplicateScanID, &updated); err != nil {
 			return nil, false, fmt.Errorf("scan conversation summary: %w", err)
 		}
 		item.Title = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(item.Title)
