@@ -1,0 +1,53 @@
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button, input, textarea, select { font: inherit; }
+button { color: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgb(73 120 93 / 35%); outline-offset: 2px; }
+.app-shell { display: grid; grid-template-columns: 224px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { position: sticky; top: 0; display: flex; flex-direction: column; height: 100vh; padding: 24px 14px 16px; border-right: 1px solid var(--color-line); background: #fbfcfa; }
+.brand { display: flex; align-items: center; gap: 10px; margin: 0 6px 34px; color: inherit; text-decoration: none; }
+.brand-mark { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; color: var(--color-accent-strong); background: #e5eee7; }
+.brand strong, .brand small { display: block; }
+.brand strong { font-size: 15px; letter-spacing: -.2px; }
+.brand small { margin-top: 3px; color: var(--color-text-muted); font-size: 11px; }
+.nav-label { margin: 0 11px 8px; color: #90968e; font-size: 11px; }
+.side-nav { display: grid; gap: 3px; }
+.nav-item, .settings-link { display: flex; align-items: center; gap: 11px; min-height: 42px; padding: 0 11px; border: 0; border-radius: var(--radius-md); background: transparent; color: #626a61; text-align: left; cursor: pointer; }
+.nav-item:hover:not(.active), .settings-link:hover:not(:disabled) { background: var(--color-surface-muted); }
+.nav-item.active { background: var(--color-accent-soft); color: var(--color-accent-strong); font-weight: 600; }
+.nav-item span:nth-child(2) { flex: 1; }
+.volume-card { margin: 30px 3px 0; padding: 13px 12px; border: 1px solid var(--color-line); border-radius: 10px; background: #fff; }
+.volume-title { display: flex; align-items: center; gap: 7px; color: var(--color-text-muted); font-size: 11px; }
+.volume-title .status-dot { margin-left: auto; }
+.volume-card strong, .volume-card small { display: block; }
+.volume-card strong { margin-top: 12px; font-size: 13px; }
+.volume-card small { margin-top: 4px; color: var(--color-text-muted); font-size: 11px; }
+.status-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #9da49b; }
+.status-dot:not(.is-offline) { background: var(--color-success); }
+.status-dot.is-offline { background: var(--color-danger); }
+.settings-link { margin-top: auto; color: #6f766e; }
+.settings-link:disabled { cursor: not-allowed; opacity: .62; }
+.sidebar-foot { margin: 16px 10px 0; color: #747b72; font-size: 11px; line-height: 1.7; }
+.sidebar-foot span { color: #9ba198; }
+.main-panel { min-width: 0; }
+.topbar { position: sticky; z-index: 5; top: 0; display: flex; align-items: center; justify-content: space-between; height: 62px; padding: 0 32px; border-bottom: 1px solid var(--color-line); background: rgb(255 255 255 / 93%); backdrop-filter: blur(12px); }
+.top-crumb { display: flex; align-items: center; gap: 10px; color: #858b83; font-size: 12px; }
+.top-crumb strong { color: #3d443c; font-weight: 600; }
+.crumb-divider { color: #c4c9c2; }
+.service-indicator { display: inline-flex; align-items: center; gap: 7px; color: #838b82; font-size: 11px; }
+.mobile-brand, .mobile-nav { display: none; }
+.page-content { width: min(100%, 1440px); margin: 0 auto; padding: 32px; }
+.eyebrow { color: var(--color-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+@media (max-width: 760px) {
+  .app-shell { display: block; }
+  .sidebar { display: none; }
+  .topbar { height: 56px; padding: 0 16px; }
+  .mobile-brand { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
+  .mobile-brand .brand-mark { width: 29px; height: 29px; border-radius: 8px; }
+  .top-crumb { display: none; }
+  .service-indicator { font-size: 10px; }
+  .page-content { padding: 24px 16px 92px; }
+  .mobile-nav { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4, 1fr); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--color-line); background: rgb(255 255 255 / 96%); backdrop-filter: blur(14px); }
+  .mobile-nav-item { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; min-width: 44px; min-height: 50px; border: 0; border-radius: var(--radius-md); background: transparent; color: #7c847b; font-size: 10px; cursor: pointer; }
+  .mobile-nav-item.active { color: var(--color-accent-strong); font-weight: 600; }
+}

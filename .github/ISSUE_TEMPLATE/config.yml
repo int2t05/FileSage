@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/int2t05/FileSage/security/advisories/new
+    about: Use a private report; do not post vulnerability details publicly.

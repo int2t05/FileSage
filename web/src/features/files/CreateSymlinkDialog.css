@@ -1,0 +1,55 @@
+.files-symlink-dialog {
+  width: min(100%, 480px);
+}
+
+.files-symlink-details {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.files-symlink-details > div {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.files-symlink-details span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.files-symlink-details strong {
+  min-width: 0;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+
+.files-symlink-form {
+  margin-bottom: 4px;
+}
+
+.files-symlink-help {
+  margin: 1px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+@media (max-width: 520px) {
+  .files-symlink-details {
+    padding: 11px 12px;
+  }
+
+  .files-symlink-details > div {
+    grid-template-columns: 58px minmax(0, 1fr);
+    gap: 8px;
+  }
+}

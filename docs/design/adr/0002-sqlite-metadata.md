@@ -1,0 +1,37 @@
+# ADR-0002：SQLite 保存辅助元数据
+
+## 状态
+
+**已决定；迁移、持久状态与恢复自动测试通过，目标服务数据目录核验及容量基线仍待完成。**
+
+## 背景
+
+产品需要目录／文件索引、搜索、可恢复任务、审批绑定、操作历史和并发状态。原生文件内容仍须作为唯一事实来源；SQLite 不能成为文件内容存储或旧文件备份。
+
+## 建议决策
+
+在本机服务数据目录使用 SQLite，启用 WAL；保存可重建目录索引及持久化任务／审批／审计元数据。初版选用 `modernc.org/sqlite` 纯 Go 驱动（调研时 v1.60.1），避免服务构建依赖 CGo；同时把该包包含的 SQLite 核心版本纳入依赖漏洞巡检和 SBOM。索引可全量扫描重建；任务通过状态机、租约和提交标识恢复。数据库不放在管理根目录内，也不放在网络文件系统。
+
+## 备选方案
+
+| 方案 | 优点 | 代价／取舍 |
+| --- | --- | --- |
+| PostgreSQL | 多进程高并发写、查询与运维工具成熟 | 额外常驻服务、安装升级和备份管理；当前没有多机／高并发要求 |
+| 不建索引 | 没有索引一致性问题，始终遍历真实目录 | 搜索和大目录响应依赖全盘遍历，任务／审批重启恢复也缺少持久状态 |
+| SQLite | 部署简单、事务和 FTS5 可用，适合单机 | WAL 只允许单写者、要求同机本地协作，不适合数据库置于 NFS 等网络文件系统 |
+
+## 影响
+
+增加索引更新与重建职责，避免目录记录替代真实文件状态。inotify 用作低延迟更新通知，不能作为唯一真相；队列溢出、卸载和进程重启后扫描重建。FTS5 trigram 可支持长子串，1–2 字符查询需备用路径。SQLite WAL 可能受长读事务影响 checkpoint，需验证任务历史查询与维护策略。日志／审计不能保存可恢复旧内容的文本或差异。
+
+## 证据
+
+- [SQLite WAL 官方文档](https://www.sqlite.org/wal.html)（访问 2026-10-15）：WAL 支持读写并行、单写者，依赖同机共享内存且不适用于网络文件系统。
+- [SQLite FTS5 官方文档](https://www.sqlite.org/fts5.html)（访问 2026-10-15）：trigram 支持一般子串匹配，少于三个字符不参与一般 trigram 搜索。
+- [inotify 官方手册](https://man7.org/linux/man-pages/man7/inotify.7.html)（访问 2026-10-15）：事件可能丢失／溢出，缓存需一致性检查和重建。
+- [mattn/go-sqlite3](https://github.com/mattn/go-sqlite3/blob/dbbe931904f2ee06546448fbe7cf7780f61bc110/README.md)、[modernc.org/sqlite](https://github.com/modernc-org/sqlite/blob/0fc3f90d9e280a7356d8609520bc2ba081bfc248/README.md)：分别作为 cgo 与纯 Go 驱动候选；具体构建、平台和许可证需在原型时比较。
+- [Asynq](https://github.com/hibiken/asynq/blob/d135f1439bee74e989b7f9b41ecd542cc87f024a/README.md)：以 Redis 为基础的任务队列参考，不是本建议中的运行依赖。
+
+## 决策记录
+
+2026-10-15：用户授权助手决定 Proposed ADR。本 ADR 选定本机 SQLite WAL 与纯 Go 驱动，避免额外数据库服务和 CGo 构建依赖。性能基准若无法达到 `docs/TECH.md` 的首轮门槛，再用同一真实样本对照 `mattn/go-sqlite3`，不得凭假设宣称驱动速度相同。

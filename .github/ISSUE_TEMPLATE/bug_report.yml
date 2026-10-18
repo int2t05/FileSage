@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible problem in FileSage
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include real file contents, personal paths, server addresses, logs with credentials, or API keys.
+  - type: input
+    id: version
+    attributes:
+      label: FileSage version or commit
+      placeholder: "commit SHA or release tag"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Linux distribution, filesystem, browser, and relevant optional tools.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Use synthetic files and anonymized paths.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant redacted logs
+      render: text
+    validations:
+      required: false

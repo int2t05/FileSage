@@ -1,0 +1,99 @@
+.reader-content-docx { overflow: hidden; padding: 0; }
+
+.reader-docx {
+  display: flex;
+  grid-column: 1 / -1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #f3f5f2;
+}
+
+.reader-docx-controls {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--color-line);
+  background: var(--color-surface);
+}
+
+.reader-docx-nav,
+.reader-docx-toc {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.reader-docx-nav .reader-action-button { min-width: 40px; min-height: 40px; padding: 0 8px; }
+.reader-docx-toc select {
+  width: min(460px, 52vw);
+  min-width: 140px;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+}
+.reader-docx-toc select:focus-visible { outline: 3px solid var(--color-accent-soft); outline-offset: 2px; }
+.reader-docx-note {
+  flex: none;
+  margin: 0;
+  padding: 6px 16px;
+  background: #f3f5f2;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.reader-docx-scroll { flex: 1 1 auto; min-width: 0; min-height: 0; overflow: auto; padding: 20px; overscroll-behavior: contain; }
+.reader-docx-page {
+  width: min(100%, 900px);
+  min-height: 100%;
+  margin: 0 auto;
+  padding: clamp(22px, 5vw, 64px);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 4px 20px rgb(22 32 25 / 5%);
+  color: var(--color-text);
+  font-size: 16px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.reader-docx-page h1,.reader-docx-page h2,.reader-docx-page h3,.reader-docx-page h4,.reader-docx-page h5,.reader-docx-page h6 { margin: 1.35em 0 .6em; line-height: 1.4; }
+.reader-docx-page [id] { scroll-margin-top: 16px; }
+.reader-docx-page h1:first-child,.reader-docx-page h2:first-child,.reader-docx-page h3:first-child { margin-top: 0; }
+.reader-docx-paragraph { white-space: pre-wrap; }
+.reader-docx-page img { display: block; max-width: 100%; max-height: 70vh; margin: 12px auto; object-fit: contain; }
+.reader-docx-table-wrap { max-width: 100%; margin: 16px 0; overflow: auto; border: 1px solid var(--color-line); border-radius: var(--radius-sm); }
+.reader-docx-table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: .92em; line-height: 1.55; }
+.reader-docx-table td { min-width: 72px; max-width: 420px; padding: 8px 10px; border: 1px solid var(--color-line); vertical-align: top; white-space: pre-wrap; }
+.reader-docx-table td > :first-child { margin-top: 0; }
+.reader-docx-table td > :last-child { margin-bottom: 0; }
+.reader-docx-state { display: flex; flex: 1 1 auto; flex-direction: column; align-items: center; justify-content: center; gap: 10px; min-height: 240px; padding: 24px; color: var(--color-text-muted); text-align: center; }
+.reader-docx-state > svg { color: var(--color-accent); }
+.reader-docx-state strong { color: var(--color-text); font-size: 15px; }
+.reader-docx-state p { max-width: 520px; margin: 0; font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.reader-docx-error > svg { color: var(--color-warning); }
+.reader-docx-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 6px; }
+.reader-docx-actions a { text-decoration: none; }
+.reader-docx-empty { color: var(--color-text-muted); text-align: center; }
+.reader-docx-image-placeholder { display: block; margin: 10px auto; padding: 10px; border: 1px dashed var(--color-line); color: var(--color-text-muted); font-size: 12px; text-align: center; }
+
+@media (max-width: 760px) {
+  .reader-docx-controls { align-items: stretch; flex-direction: column; gap: 6px; padding: 8px 10px; }
+  .reader-docx-nav { justify-content: center; }
+  .reader-docx-toc { display: grid; grid-template-columns: auto minmax(0, 1fr); }
+  .reader-docx-toc select { width: 100%; min-width: 0; }
+  .reader-docx-note { padding: 6px 10px; font-size: 10px; }
+  .reader-docx-scroll { padding: 0; }
+  .reader-docx-page { width: 100%; min-height: 100%; padding: 24px 20px 40px; border: 0; border-radius: 0; box-shadow: none; font-size: 16px; }
+  .reader-docx-table td { max-width: 240px; }
+}

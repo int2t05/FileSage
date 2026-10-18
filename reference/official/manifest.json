@@ -1,0 +1,418 @@
+[
+  {
+    "name": "libreoffice-conversion",
+    "url": "https://help.libreoffice.org/latest/en-US/text/shared/guide/convertfilters.html",
+    "retrieved_at": "2026-10-15T03:37:15.949538+00:00",
+    "files": [
+      {
+        "bytes": 123286,
+        "sha256": "40d684c22802d6349cf578e2ef75c0ae2726805fe44988497c10f13a7ad759ba"
+      },
+      {
+        "bytes": 16568,
+        "sha256": "ce2680c25d7d4f13fd726f89fa3a9aa3ffd8fa88d3cf4cd550735f11ccdbfead"
+      }
+    ],
+    "source_url": "https://help.libreoffice.org/latest/en-US/text/shared/guide/convertfilters.html"
+  },
+  {
+    "name": "sheetjs-html",
+    "url": "https://docs.sheetjs.com/docs/api/utilities/html/",
+    "retrieved_at": "2026-10-15T03:37:15.950454+00:00",
+    "files": [
+      {
+        "bytes": 191744,
+        "sha256": "64fa5eac3dfccb354263c5bd5983f60267ca817741fbf26630057339ed54c526"
+      },
+      {
+        "bytes": 14021,
+        "sha256": "f5f859f93cac030e5798107779a984249ac679675c3b0f7b6cd242286136afbe"
+      }
+    ],
+    "source_url": "https://docs.sheetjs.com/docs/api/utilities/html/"
+  },
+  {
+    "name": "linux-openat2",
+    "url": "https://man7.org/linux/man-pages/man2/openat2.2.html",
+    "retrieved_at": "2026-10-15T03:37:15.950829+00:00",
+    "files": [
+      {
+        "bytes": 27757,
+        "sha256": "c80f85bca4a6babd75fadb7f6730cd78a9a00f072df9346a9a20e01e22b28e4a"
+      },
+      {
+        "bytes": 14847,
+        "sha256": "eb854bb8a7aff997d1a516d67e3508e35e170f61b0ad40c091dec5c3623ce75f"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man2/openat2.2.html"
+  },
+  {
+    "name": "linux-rename",
+    "url": "https://man7.org/linux/man-pages/man2/rename.2.html",
+    "retrieved_at": "2026-10-15T03:37:15.951416+00:00",
+    "files": [
+      {
+        "bytes": 23571,
+        "sha256": "8772946a809a0db54f4854f200908f10bee758ea452e8df5efd955bc3b8e6e57"
+      },
+      {
+        "bytes": 12212,
+        "sha256": "1d33bb3caa584a2d823a096a0585fd203deb03d58a403f74dc85936043e107b9"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man2/rename.2.html"
+  },
+  {
+    "name": "linux-chmod",
+    "url": "https://man7.org/linux/man-pages/man2/chmod.2.html",
+    "retrieved_at": "2026-10-15T03:37:16.526778+00:00",
+    "files": [
+      {
+        "bytes": 19585,
+        "sha256": "57ea4002d88a87d4ea6142dd02ee7fb935db09b2094c1ba5a5441c490b63cc6d"
+      },
+      {
+        "bytes": 8823,
+        "sha256": "ba54fa0139b5082f9648d697da6d7c91d3ca16aac3426a880164a0150fd25720"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man2/chmod.2.html"
+  },
+  {
+    "name": "linux-chown",
+    "url": "https://man7.org/linux/man-pages/man2/chown.2.html",
+    "retrieved_at": "2026-10-15T03:37:16.927540+00:00",
+    "files": [
+      {
+        "bytes": 22246,
+        "sha256": "830723f3029546a284ea756569572ab4e29701d78a0506a72f3c340e6d61fb3b"
+      },
+      {
+        "bytes": 11006,
+        "sha256": "a2a462ce6698b15d73af1a73621d54f20d4dbfa40475460d870ce873a3ab06d9"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man2/chown.2.html"
+  },
+  {
+    "name": "linux-symlink",
+    "url": "https://man7.org/linux/man-pages/man7/symlink.7.html",
+    "retrieved_at": "2026-10-15T03:37:17.035604+00:00",
+    "files": [
+      {
+        "bytes": 27528,
+        "sha256": "496f76eea4960d73f3a485744adeab8b61e2c55a6a4f2ada55fc19587ae8be02"
+      },
+      {
+        "bytes": 15858,
+        "sha256": "5a7cec9a884c87333dbbc9ebbffd891b05e09d80196e86a069a49e4b0609cd45"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man7/symlink.7.html"
+  },
+  {
+    "name": "linux-landlock",
+    "url": "https://man7.org/linux/man-pages/man7/landlock.7.html",
+    "retrieved_at": "2026-10-15T03:37:17.246473+00:00",
+    "files": [
+      {
+        "bytes": 39816,
+        "sha256": "15335f85cdf9041e89073a664483b9463cbc24aa5a5334a3907212e9cb3df557"
+      },
+      {
+        "bytes": 26235,
+        "sha256": "2406fe4b352fe37c2af8b097f415162965c59cacb81d4b65dd9f45b565179e60"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man7/landlock.7.html"
+  },
+  {
+    "name": "http-conditional-requests",
+    "url": "https://www.rfc-editor.org/rfc/rfc9110.html",
+    "retrieved_at": "2026-10-15T03:37:17.458770+00:00",
+    "files": [
+      {
+        "bytes": 1187554,
+        "sha256": "d431760660ea44e130f6e919dab216df2d0b3a490567a98089267523368fe1e5"
+      },
+      {
+        "bytes": 450718,
+        "sha256": "268172bfaf96a7bc56a89d98bfcef5f3484372900a4328421d54c772bd43d9c7"
+      }
+    ],
+    "source_url": "https://www.rfc-editor.org/rfc/rfc9110.html"
+  },
+  {
+    "name": "sqlite-wal",
+    "url": "https://www.sqlite.org/wal.html",
+    "retrieved_at": "2026-10-15T03:37:17.799232+00:00",
+    "files": [
+      {
+        "bytes": 42143,
+        "sha256": "f3467b530b883d4a00574fe1a898b3d121ed72764ae28cf66941080ac0badb9e"
+      },
+      {
+        "bytes": 31523,
+        "sha256": "5509b222e2f322272d2a22f57bbce0154a0dcf1bb53a9b8cb3d5608837f00f68"
+      }
+    ],
+    "source_url": "https://www.sqlite.org/wal.html"
+  },
+  {
+    "name": "sqlite-fts5",
+    "url": "https://www.sqlite.org/fts5.html",
+    "retrieved_at": "2026-10-15T03:37:17.958690+00:00",
+    "files": [
+      {
+        "bytes": 215354,
+        "sha256": "de3092630358518a6869bf047055b3938e18b476e3fbc54f4e2146d1e593497f"
+      },
+      {
+        "bytes": 158365,
+        "sha256": "34258967c150c28949c11f3822d8fcc77b13376ca53765d03c2a1788c25a13ef"
+      }
+    ],
+    "source_url": "https://www.sqlite.org/fts5.html"
+  },
+  {
+    "name": "go-osroot",
+    "url": "https://go.dev/blog/osroot",
+    "retrieved_at": "2026-10-15T03:37:18.173817+00:00",
+    "files": [
+      {
+        "bytes": 44045,
+        "sha256": "e42314430a5f69ee3cb0110dc7d9e24dd4df65fce938e430399f8757a91748da"
+      },
+      {
+        "bytes": 11675,
+        "sha256": "c6e79c0096bb994ca91d6611db05e283f7a6ab9bc5762332eeba2cd274c1876e"
+      }
+    ],
+    "source_url": "https://go.dev/blog/osroot"
+  },
+  {
+    "name": "go-release",
+    "url": "https://go.dev/doc/devel/release",
+    "retrieved_at": "2026-10-15T03:37:18.484343+00:00",
+    "files": [
+      {
+        "bytes": 148674,
+        "sha256": "640388567ddc4442288c4c57a29c693cc5bf6c5a0296cf710040c4ca9c022565"
+      },
+      {
+        "bytes": 63111,
+        "sha256": "26d529badaa92422c54d7e7c2e2c9808e83c667d8b60414daf8faf41bf0f07c2"
+      }
+    ],
+    "source_url": "https://go.dev/doc/devel/release"
+  },
+  {
+    "name": "go-root-vulnerability",
+    "url": "https://pkg.go.dev/vuln/GO-2026-4970",
+    "retrieved_at": "2026-10-15T03:37:18.816439+00:00",
+    "files": [
+      {
+        "bytes": 34844,
+        "sha256": "be26c32983b7148a6ba3ae4235587f77717f620e47da3423ecf6406392b49408"
+      },
+      {
+        "bytes": 2673,
+        "sha256": "a4d0726c30b0f41e3d7ee9ae6ca47136f2b9b0cbfe626a3fd62b9d7cd1e32d79"
+      }
+    ],
+    "source_url": "https://pkg.go.dev/vuln/GO-2026-4970"
+  },
+  {
+    "name": "linux-inotify",
+    "url": "https://man7.org/linux/man-pages/man7/inotify.7.html",
+    "retrieved_at": "2026-10-15T03:37:19.315120+00:00",
+    "files": [
+      {
+        "bytes": 44066,
+        "sha256": "79f5ab18e2fc423631cf4949ef82ca1384844353ea11a4dba42e1a77e8fdd8fd"
+      },
+      {
+        "bytes": 26819,
+        "sha256": "fac94f652ac2696be79ebe1f8ce0a6ca2123dbc1a6099edf6cc28107df064ede"
+      }
+    ],
+    "source_url": "https://man7.org/linux/man-pages/man7/inotify.7.html"
+  },
+  {
+    "name": "owasp-csrf",
+    "url": "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html",
+    "retrieved_at": "2026-10-15T03:37:19.404744+00:00",
+    "files": [
+      {
+        "bytes": 172652,
+        "sha256": "d9f7e34eede44d2e143f440090d06ef397e0416ddfd312e92d800481faa9fc36"
+      },
+      {
+        "bytes": 58608,
+        "sha256": "8c8674eb3924e9ed8ae24c7fae805c97b8bd23b819b5f50a17086721f9635118"
+      }
+    ],
+    "source_url": "https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html"
+  },
+  {
+    "name": "tus-protocol",
+    "url": "https://tus.io/protocols/resumable-upload.html",
+    "retrieved_at": "2026-10-15T03:37:19.906683+00:00",
+    "files": [
+      {
+        "bytes": 210884,
+        "sha256": "868947ec6573ff745f31649d730616bfcd7d154af0c22ab39f1af4937f3e3a21"
+      },
+      {
+        "bytes": 23741,
+        "sha256": "b1261162c4ec94b4122124d912dbdf7a9d60195aa9479f45d56a78728106f505"
+      }
+    ],
+    "source_url": "https://tus.io/protocols/resumable-upload.html"
+  },
+  {
+    "name": "pdfjs-getting-started",
+    "url": "https://mozilla.github.io/pdf.js/getting_started/?lang=en",
+    "retrieved_at": "2026-10-15T03:37:19.907319+00:00",
+    "files": [
+      {
+        "bytes": 8258,
+        "sha256": "574910bac73357a43e36aa6d9e1395fb1a83d8bc333441c958a4be92a95eceb3"
+      },
+      {
+        "bytes": 4506,
+        "sha256": "16a8547d9b8a4b119a4c014204b07240f51171299c6289dfe5342d1282ce0952"
+      }
+    ],
+    "source_url": "https://mozilla.github.io/pdf.js/getting_started/?lang=en"
+  },
+  {
+    "name": "onlyoffice-license",
+    "url": "https://github.com/ONLYOFFICE/DocumentServer/blob/master/LICENSE",
+    "retrieved_at": "2026-10-15T03:37:20.169471+00:00",
+    "files": [
+      {
+        "bytes": 533244,
+        "sha256": "0b8e2ec10689adbb79f707f95fae5e01888b0a4d31ede5c09d53f7758edf5c41"
+      },
+      {
+        "bytes": 42503,
+        "sha256": "8817d617156b7b4e301de14838d12c76a44301193cdc4b9aae40936f64eeed55"
+      }
+    ],
+    "source_url": "https://github.com/ONLYOFFICE/DocumentServer/blob/master/LICENSE"
+  },
+  {
+    "name": "radix-accessibility",
+    "url": "https://www.radix-ui.com/primitives/docs/overview/accessibility",
+    "retrieved_at": "2026-10-15T03:37:20.210658+00:00",
+    "files": [
+      {
+        "bytes": 100587,
+        "sha256": "c665becbaea5be011c88161602eb35ea7c922be52c53958a6dcad5349216b85b"
+      },
+      {
+        "bytes": 3839,
+        "sha256": "1be694c8ac7a0529e48f6098151a1c3eb1017f5c6cad66ce293fb88e14bfdaa4"
+      }
+    ],
+    "source_url": "https://www.radix-ui.com/primitives/docs/overview/accessibility"
+  },
+  {
+    "name": "radix-introduction",
+    "url": "https://www.radix-ui.com/primitives/docs/overview/introduction",
+    "retrieved_at": "2026-10-15T03:37:20.355551+00:00",
+    "files": [
+      {
+        "bytes": 130436,
+        "sha256": "0f1a17e1645940563ded57b68ca39921f17f359d9423d57a2487e06b8f215657"
+      },
+      {
+        "bytes": 4350,
+        "sha256": "18e81f46e5b77cc277f47e0e9185e15d7e09b41229eb1b99df73a9f3537e67bb"
+      }
+    ],
+    "source_url": "https://www.radix-ui.com/primitives/docs/overview/introduction"
+  },
+  {
+    "name": "tabler-license",
+    "url": "https://tabler.io/license",
+    "retrieved_at": "2026-10-15T03:37:20.355803+00:00",
+    "files": [
+      {
+        "bytes": 93034,
+        "sha256": "ef75ef97d109ecd5c738b993a302bbe322874adf2fa3163203b5e11a5762e123"
+      },
+      {
+        "bytes": 16265,
+        "sha256": "e6043d62901baadf6a849a5437ac764507ced02b1d393cabbff7dc3f1e251b3b"
+      }
+    ],
+    "source_url": "https://tabler.io/license"
+  },
+  {
+    "name": "lucide-icons",
+    "url": "https://lucide.dev/guide/",
+    "retrieved_at": "2026-10-15T03:37:21.178915+00:00",
+    "files": [
+      {
+        "bytes": 157397,
+        "sha256": "c951cadc9c76dec051e70bee0c7c02f2fbc4bd91e6fa6727634da90a2202fb44"
+      },
+      {
+        "bytes": 3174,
+        "sha256": "7da7972c63e893b0693c052f39ee06111a667a704025ac84b6a2f88c9017916b"
+      }
+    ],
+    "source_url": "https://lucide.dev/guide/"
+  },
+  {
+    "name": "phosphor-icons",
+    "url": "https://phosphoricons.com/",
+    "retrieved_at": "2026-10-15T03:37:21.179860+00:00",
+    "files": [
+      {
+        "bytes": 3926,
+        "sha256": "49cc6dd516da40376e449bb53031f9e32213bda265756904a1b2b733df63e121"
+      },
+      {
+        "bytes": 208,
+        "sha256": "16b6798776b1e23e7b267630f7ee083e0407ed728e9bb437c4408d4d1a7b97d9"
+      }
+    ],
+    "source_url": "https://phosphoricons.com/"
+  },
+  {
+    "name": "shadcn-ui",
+    "url": "https://ui.shadcn.com/docs",
+    "retrieved_at": "2026-10-15T03:37:21.226433+00:00",
+    "files": [
+      {
+        "bytes": 588912,
+        "sha256": "e795f7bd849ac7e9b41394d04234675d79cc3e4601ef4aca1dcb220480f17ac3"
+      },
+      {
+        "bytes": 5567,
+        "sha256": "575d52cf2f17d2a1275d98f07f9d830ee376dd96ef2fa41a99951fa58dbddb01"
+      }
+    ],
+    "source_url": "https://ui.shadcn.com/docs"
+  },
+  {
+    "name": "primevue",
+    "url": "https://primevue.org/",
+    "retrieved_at": "2026-10-15T03:37:21.801246+00:00",
+    "files": [
+      {
+        "bytes": 979096,
+        "sha256": "266fcb55ceb4fb3eed4c707840dfa245719fdba3d4a4cc40b0f6a0af8b67f269"
+      },
+      {
+        "bytes": 3229,
+        "sha256": "41c9f570935892bf2854d957e61acfff0c70ff16c9154d5f0fef2981b1192d29"
+      }
+    ],
+    "source_url": "https://primevue.dev/"
+  }
+]

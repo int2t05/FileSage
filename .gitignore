@@ -1,0 +1,40 @@
+# Dependencies and generated frontend output
+**/node_modules/
+/web/dist/
+/docs/design/prototype/dist/
+*.tsbuildinfo
+
+# 本地调研快照含第三方原文，仅同步自写索引和总结
+/reference/projects/
+/reference/official/*.html
+/reference/official/*.txt
+/reference/context7/
+
+# 私有维护记录，不随公开仓库发布
+/docs/USER_ACTIONS.md
+
+# 本地运行测试残留
+/undefined/
+
+# Local service data
+/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Build artifacts
+/filesage
+*.exe
+*.test
+*.out
+
+# Local configuration and operating-system files
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+desktop.ini

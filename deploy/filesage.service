@@ -1,0 +1,23 @@
+[Unit]
+Description=FileSage file management service
+After=network.target
+# 与环境文件中的 FILESAGE_ROOT 保持一致；其他挂载卷也应列在此处。
+RequiresMountsFor=/srv/filesage-files
+
+[Service]
+Type=simple
+User=filesage
+Group=filesage
+StateDirectory=filesage
+StateDirectoryMode=0700
+WorkingDirectory=/usr/local/lib/filesage
+EnvironmentFile=/etc/filesage/filesage.env
+ExecStart=/usr/local/lib/filesage/filesage
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+# 为隔离 Shell 子任务委托聚合资源控制器。
+Delegate=cpu memory pids
+
+[Install]
+WantedBy=multi-user.target

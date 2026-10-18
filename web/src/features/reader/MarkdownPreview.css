@@ -1,0 +1,154 @@
+.reader-markdown-preview {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-height: 0;
+}
+
+.reader-markdown-toc,
+.reader-markdown-body {
+  width: min(100%, 920px);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.reader-markdown-toc summary {
+  min-height: 44px;
+  padding: 12px 16px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reader-markdown-toc nav {
+  max-height: min(38dvh, 360px);
+  overflow: auto;
+  padding: 0 12px 12px;
+}
+
+.reader-markdown-toc ol {
+  display: grid;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reader-markdown-toc li a {
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.reader-markdown-toc li a:hover,
+.reader-markdown-toc li a:focus-visible {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.reader-markdown-toc-level-2 a { padding-left: 22px; }
+.reader-markdown-toc-level-3 a { padding-left: 36px; }
+.reader-markdown-toc-level-4 a,
+.reader-markdown-toc-level-5 a,
+.reader-markdown-toc-level-6 a { padding-left: 50px; }
+
+.reader-markdown-body {
+  min-width: 0;
+  padding: clamp(16px, 4vw, 36px);
+  color: var(--color-text);
+  font-size: 15px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+
+.reader-markdown-body > :first-child { margin-top: 0; }
+.reader-markdown-body > :last-child { margin-bottom: 0; }
+
+.reader-markdown-body h1,
+.reader-markdown-body h2,
+.reader-markdown-body h3,
+.reader-markdown-body h4,
+.reader-markdown-body h5,
+.reader-markdown-body h6 {
+  margin: 1.7em 0 0.6em;
+  line-height: 1.35;
+  scroll-margin-top: 18px;
+}
+
+.reader-markdown-body h1 { font-size: 1.8em; }
+.reader-markdown-body h2 { padding-bottom: 0.3em; border-bottom: 1px solid var(--color-line); font-size: 1.5em; }
+.reader-markdown-body h3 { font-size: 1.25em; }
+.reader-markdown-body p,
+.reader-markdown-body ul,
+.reader-markdown-body ol,
+.reader-markdown-body blockquote,
+.reader-markdown-body pre,
+.reader-markdown-body table { margin: 0 0 1em; }
+
+.reader-markdown-body a {
+  color: var(--color-accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.reader-markdown-body blockquote {
+  margin-left: 0;
+  padding: 2px 0 2px 16px;
+  border-left: 3px solid var(--color-accent-soft);
+  color: var(--color-text-muted);
+}
+
+.reader-markdown-body :not(pre) > code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--color-surface-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.9em;
+}
+
+.reader-markdown-body pre {
+  max-width: 100%;
+  padding: 14px;
+  overflow: auto;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: #f5f7f5;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.reader-markdown-body pre code { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
+.reader-markdown-body img { max-width: 100%; height: auto; border-radius: var(--radius-sm); }
+.reader-markdown-body table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.reader-markdown-body th,
+.reader-markdown-body td { padding: 7px 10px; border: 1px solid var(--color-line); text-align: left; }
+.reader-markdown-body th { background: var(--color-surface-muted); }
+.reader-markdown-body input[type="checkbox"] { margin-right: 7px; accent-color: var(--color-accent-strong); }
+
+.reader-markdown-image-blocked {
+  display: inline-block;
+  padding: 7px 10px;
+  border: 1px dashed var(--color-line);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .reader-markdown-toc summary { padding: 10px 12px; }
+  .reader-markdown-toc nav { max-height: 30dvh; padding: 0 8px 8px; }
+  .reader-markdown-body { padding: 18px 16px; font-size: 15px; }
+  .reader-markdown-body h1 { font-size: 1.55em; }
+  .reader-markdown-body h2 { font-size: 1.35em; }
+  .reader-markdown-body pre { font-size: 12px; }
+}
