@@ -2,7 +2,7 @@
 
 **用途：** 对照 [PRD 第 3 节](PRD.md#L35) 与[第 6 节](PRD.md#L92)，索引当前实现、自动化测试和路线图中已有的 Linux 验收记录。本文是证据汇总，不新增测试结果或产品验收结论。
 
-**范围与状态：** 模型超时修复提交 `71b30c1` 将 OpenAI 兼容请求上限从 30 秒调整为 90 秒。Go 全量测试、vet 及 Linux 服务器构建通过；前端 239 项测试、类型检查和生产构建在本轮变更前通过。真实 `glm-5.3-flash` 已完成隔离 Linux 浏览器 Shell 闭环，详见 `filesage-real-shell-e2e-20261018-01`。服务只监听回环并以临时用户单元运行；持久 systemd 部署尚未验收。历史快照不代表本次执行通过。
+**范围与状态：** 模型超时修复提交 `71b30c1` 将 OpenAI 兼容请求上限从 30 秒调整为 90 秒。Go 全量测试、vet 及 Linux 服务器构建通过；前端 239 项测试、类型检查和生产构建在本轮变更前通过。真实 `glm-5.3-flash` 已完成隔离 Linux 浏览器 Shell 闭环，详见 `filesage-real-shell-e2e-20261018-01`。隔离模型闭环记录使用临时回环服务；源码提交 `c2800e6` 已部署为专用账户的持久 systemd 服务，并通过重启和双盘文件验收（详见 Linux QA 台账）；整机重启与持久服务上的完整模型操作未复验。历史快照不代表本次执行通过。
 
 2026-10-18 环境复核：服务器模型环境文件目录和文件权限分别为 `700`、`600`；模型连接检查在完整应用 E2E 之前完成。服务器已有第二块独立 SSD 并挂载在用户数据卷，无需创建虚拟盘。
 
@@ -33,7 +33,7 @@
 
 | 能力 | 实现 / 自动测试 | 路线图记载的 Linux 验收 | 对应独立复验记录 |
 | --- | --- | --- | --- |
-| Linux 构建、服务启动、Host/监听边界 | README 有源码构建与手动启动步骤；配置与主程序有实现和测试（[`config.go`](../internal/config/config.go)、[`config_test.go`](../internal/config/config_test.go)、[`main.go`](../cmd/filesage/main.go)、[`trusted_host_test.go`](../internal/httpapi/trusted_host_test.go)）。 | 历史 Linux QA 快照记录过 Go/前端构建、健康检查、React 首页和 Agent 状态 API；这些结果未绑定当前工作区修订。专用非 root 服务账户、持久 systemd 安装和重启恢复仍未验收（[README 运行说明](../README.md#quick-start)、[QA 基线](IMPLEMENTATION_PLAN.md#L9)、[后续验收清单](IMPLEMENTATION_PLAN.md#L95)）。 | 提交 `ec1454a0…` 在 Linux amd64 完成全量 Go 测试、vet、主程序构建、健康检查及真实浏览器首页；仅回环监听，通过临时用户单元启动。当前工作树的 Linux 修复也在隔离服务完成全量 Go 测试、vet、build 和 Shell 浏览器 mock 闭环，服务与测试目录随后清理。持久 systemd 安装和重启恢复仍未验收。 |
+| Linux 构建、服务启动、Host/监听边界 | README 有源码构建与手动启动步骤；配置与主程序有实现和测试（[`config.go`](../internal/config/config.go)、[`config_test.go`](../internal/config/config_test.go)、[`main.go`](../cmd/filesage/main.go)、[`trusted_host_test.go`](../internal/httpapi/trusted_host_test.go)）。 | 历史 Linux QA 快照记录过 Go/前端构建、健康检查、React 首页和 Agent 状态 API；这些结果未绑定当前工作区修订。专用非 root 服务账户、持久 systemd 安装和重启恢复仍未验收（[README 运行说明](../README.md#quick-start)、[QA 基线](IMPLEMENTATION_PLAN.md#L9)、[后续验收清单](IMPLEMENTATION_PLAN.md#L95)）。 | 提交 `ec1454a0…` 在 Linux amd64 完成全量 Go 测试、vet、主程序构建、健康检查及真实浏览器首页；仅回环监听，通过临时用户单元启动。当前工作树的 Linux 修复也在隔离服务完成全量 Go 测试、vet、build 和 Shell 浏览器 mock 闭环，服务与测试目录随后清理。该历史隔离记录未验证持久 systemd 安装和重启；当前服务器验收见下方双卷 systemd 记录。 |
 | 网页窄屏布局 | React 主导航和各页面均有响应式布局；对应样式见 [`global.css`](../web/src/styles/global.css) 与各页面 CSS。 | 历史浏览器验收覆盖 390px；不替代实体手机测试。 | 本轮真实浏览器在 320、360、390px 检查文件、照片、Agent、任务页；所有视口均无横向溢出，手机主导航可见，页面可切换，浏览器控制台 error/warn 为 0。 |
 | 浏览、搜索、筛选、创建、重命名、复制／移动、回收站、历史 | 有实现及 Go/API、前端测试；例如 [`fileOperations.test.mjs`](../web/test/fileOperations.test.mjs)、[`batchFileOperations.test.mjs`](../web/test/batchFileOperations.test.mjs)、[`auditHistory.test.mjs`](../web/test/auditHistory.test.mjs)、[`directory_copy_test.go`](../internal/httpapi/directory_copy_test.go)、[`directory_move_test.go`](../internal/httpapi/directory_move_test.go)、[`batch_rename_test.go`](../internal/httpapi/batch_rename_test.go)。能力与限制见 [README 当前状态](../README.md#status)。 | 记录了 Linux 目录复制／移动及批量复制／移动测试、浏览器桌面操作和 390px 视口检查；本轮新增文件页批量改名浏览器验收（[本轮 QA](#linux-qa-台账)、[FS-07](IMPLEMENTATION_PLAN.md#L72)）。 | Linux 隔离服务 390×844 浏览器验证了批量改名目标冲突整批拒绝、两项成功改名、同名软链接自动编号与内容跟随；另验证越界、循环、失效链接在列表和详情中明确标注，访问均返回 400。文件哈希和人工操作审计一致，页面无横向溢出，控制台无 error/warn。搜索、复制／移动未纳入本轮流程。 |
 | 上传与断点续传 | 有服务端和前端实现及测试：[`upload_test.go`](../test/upload_test.go)、[`uploadRecovery.test.mjs`](../web/test/uploadRecovery.test.mjs)；规则见 [README](../README.md#what-it-does)。 | 记载了刷新与服务重启续传；本轮另有隔离 Linux 网络中断续传 E2E（[QA 记录](#linux-qa-台账)、[UP-03](IMPLEMENTATION_PLAN.md#L88)）。 | Linux 隔离目录浏览器 E2E 已验证单文件上传与 SHA-256、嵌套文件夹相对路径与内容、同名自动编号且旧文件不变、单文件下载 SHA-256、回收站恢复，以及 128 MiB 文件暂停、服务重启、重新选择原文件后续传成功；续传前后服务端偏移从 47,349,760 增至 134,217,728，最终 SHA-256 与本地一致。文件夹选择入口已修正并复验。另以生产 `tus-js-client` 依赖验证 SSH 网络中断后续传；该断网验证未通过浏览器文件选择器触发，详情见下方 QA 台账。 |
@@ -42,7 +42,7 @@
 | Agent 内容分类 | 有服务端流程与 Linux 回归：[`classify_documents_linux_test.go`](../internal/agent/classify_documents_linux_test.go)；前端确认卡严格校验清单与编号：[`agentConversation.test.mjs`](../web/test/agentConversation.test.mjs)、[`AgentPage.tsx`](../web/src/features/agent/AgentPage.tsx)。 | 新增切片此前无独立验收记录（[AG-09](IMPLEMENTATION_PLAN.md#L62)）。 | Linux amd64 浏览器 E2E 使用本地 OpenAI-compatible mock 和隔离合成目录：确认卡展示根目录范围、2 个候选文件与 2 个类别；前两次对话请求不含正文标记，确认后分类请求包含两份正文且类别子树标记为 0。方案的两项操作分别批准，执行前源文件仍在原位；显式执行后任务 `succeeded`、方案 `completed`，SHA-256 与来源一致、同名目标编号且既有目标未覆盖。审计包含方案、逐项审批、执行确认和逐项结果；SQLite／应用日志正文标记均为 0。后续 Linux 沙箱集成测试已覆盖 PDF、DOCX、PPTX 抽取及确认后才发送正文；本轮又在服务器验证了扫描 PDF 的默认关闭、显式开启中文／英文 OCR 和 Agent 分类确认后提交正文。OCR 浏览器与真实模型体验仍未独立验收。 |
 | Agent 照片归档 | 有服务端实现及 Linux 流程测试：[`photo_archive_linux_test.go`](../internal/agent/photo_archive_linux_test.go)；前端确认卡与逐项审核见 [`agentConversation.test.mjs`](../web/test/agentConversation.test.mjs)、[`agentPlanReview.test.mjs`](../web/test/agentPlanReview.test.mjs)。 | 新增能力此前无独立验收记录（[PH-02](IMPLEMENTATION_PLAN.md#L71)）。 | Linux amd64 浏览器 E2E 使用本地 OpenAI-compatible mock 和合成 EXIF JPEG：根目录范围排除目标子树，3 张有日期照片生成 `YYYY/MM` 清单，1 张无日期照片跳过；服务端已有同名文件未覆盖，冲突目标编号稳定。确认分析和逐项审批阶段文件均未移动，最终确认后 3 项完成；归档文件 SHA-256 与来源相同，审计记录 3 次审批、一次执行确认和 3 次完成。mock 请求、SQLite、应用日志未发现图片标记。 |
 | Agent 压缩包创建／解压 | 有服务端与前端实现及测试：[`archive_agent_linux_test.go`](../internal/agent/archive_agent_linux_test.go)、[`archive_read.go`](../internal/fsroot/archive_read.go)、[`AgentPlanReview.tsx`](../web/src/features/agent/AgentPlanReview.tsx)。解压清单按批次展开。 | 新增能力此前无独立验收记录（[AG-14](IMPLEMENTATION_PLAN.md#L67)）。 | 本轮 Linux amd64 服务级 E2E 验证 ZIP 创建、解压到既有子目录与管理根目录、完整输出路径、逐项审批、最终执行确认和审计；冲突使方案失效，重启不会自动重放。durability 失败注入证明已发布路径会作为部分结果返回。未做浏览器或真实模型归档流程验收；RAR 无真实样本。 |
-| Agent Shell | Linux Bubblewrap 暂存执行原语使用 cgroup v2 的 `memory.max`、`pids.max`、单核 `cpu.max` 与聚合 CPU 用量监测；Agent 对话确认、HTTP 审批路由、React 差异审阅及统一写回已接入（[`conversation.go`](../internal/agent/conversation.go)、[`shell.go`](../internal/agent/shell.go)、[`httpapi.go`](../internal/httpapi/httpapi.go)、[`AgentPlanReview.tsx`](../web/src/features/agent/AgentPlanReview.tsx)）。Linux Agent 闭环自动化用例见 [`shell_linux_test.go`](../internal/agent/shell_linux_test.go)；缺少 Bubblewrap、委托控制器、clone3 入组或清理能力时拒绝运行。 | Linux 服务器临时委托 systemd 测试单元通过 Shellstage cgroup 集成测试（见下方快照）；该记录只验证隔离原语。 | 当前工作树先以隔离 mock 完成 Shell 审阅闭环，再以远程 `glm-5.3-flash` 完成真实浏览器 E2E：确认范围、运行隔离命令、查看差异、逐项批准、最终确认写回，任务与操作成功且审计链完整。模型请求上限已调为 90 秒。持久 systemd 安装及重启恢复仍未验收。 |
+| Agent Shell | Linux Bubblewrap 暂存执行原语使用 cgroup v2 的 `memory.max`、`pids.max`、单核 `cpu.max` 与聚合 CPU 用量监测；Agent 对话确认、HTTP 审批路由、React 差异审阅及统一写回已接入（[`conversation.go`](../internal/agent/conversation.go)、[`shell.go`](../internal/agent/shell.go)、[`httpapi.go`](../internal/httpapi/httpapi.go)、[`AgentPlanReview.tsx`](../web/src/features/agent/AgentPlanReview.tsx)）。Linux Agent 闭环自动化用例见 [`shell_linux_test.go`](../internal/agent/shell_linux_test.go)；缺少 Bubblewrap、委托控制器、clone3 入组或清理能力时拒绝运行。 | Linux 服务器临时委托 systemd 测试单元通过 Shellstage cgroup 集成测试（见下方快照）；该记录只验证隔离原语。 | 当前工作树先以隔离 mock 完成 Shell 审阅闭环，再以远程 `glm-5.3-flash` 完成真实浏览器 E2E：确认范围、运行隔离命令、查看差异、逐项批准、最终确认写回，任务与操作成功且审计链完整。模型请求上限已调为 90 秒。该 Shell 浏览器记录使用临时服务；当前持久 systemd 安装和重启健康已在下方双卷记录验收，完整模型流程仍未在该服务实例复跑。 |
 
 ## 阅读、编辑与归档格式
 
@@ -65,10 +65,11 @@
 
 ## Linux QA 台账
 
-以下记录来自**不同服务器 QA 副本/快照**，没有提交哈希；测试数属于各自快照，不得相加。本轮新建的 E2E 副本只用于隔离验证，服务、测试文件和数据均位于该副本。
+以下记录来自不同服务器 QA 副本、快照或持久服务，测试数属于各自对应运行，不得相加。新记录标明源码提交和运行边界；早期 E2E 使用隔离副本，持久部署单独列明，合成测试数据均在验收后清理。
 
 | QA 快照 | 路线图所记结果 | 本轮独立复验 |
 | --- | --- | --- |
+| `filesage-systemd-two-volume-e2e-20261018-01` | Linux Mint amd64；部署源码提交 `c2800e63c81eed1204b0c41f35636a38ac8dbd32`。Go 1.27.2 全量测试、vet、生产二进制构建通过；Node 24.21.0／npm 11.19.0，前端 239 项测试、类型检查和生产构建通过。 | `filesage.service` 以非 root `filesage` 账户运行，仅监听 `192.168.2.172:8080`；React 页面 HTTP 200，Agent 状态显示 `glm-5.3-flash` 可用且不返回密钥字段。系统盘管理根目录 `/srv/filesage-files`；第二块 ext4 SSD `/dev/sda` 通过启用的 systemd bind mount `/home/filesage-data` → `/srv/filesage-files/home` 接入，服务 `RequiresMountsFor` 包含该路径。使用合成 UTF-8 文件验证跨卷 API 复制和移动，SHA-256 一致、同名目标自动编号、移动后源路径消失。systemd 服务重启后仍为 active，挂载保持 active，健康 API 返回 `ok`；测试目录已删除。未执行主机重启，未在此持久实例运行完整模型 Agent 对话／审批／执行；实体手机留给用户验收。 |
 | `filesage-file-ops-e2e-20261018-01` | Linux amd64 隔离服务与生产 React 页面，仅使用合成文件；Go API 与前端相关测试已通过。 | 390×844 真实浏览器中，批量改名指向已占用名称时整批未执行，三个文件与原始 SHA-256 保持不变；修正目标后两项改名成功并逐项展示。随后创建同名软链接，服务端自动编号为 `alpha-renamed.txt (2)`，`readlink` 指向原文件；文件页显示软链接，下载接口返回 200 且内容／SHA-256 与目标相同。越界、循环、失效链接在列表与详情中均有明确状态，访问返回 400。审计记录两项 `manual_batch_rename` 和一项 `manual_create_symlink`，结果均为 `succeeded`。页面无横向溢出，浏览器无 error/warn。隔离服务、隧道和测试文件已停止并清理；真实模型与实体手机仍待验。 |
 | `filesage-upload-picker-linux-20261018-01` | Linux amd64 隔离服务与生产 React 页面；仅使用合成测试文件。 | 390×844 真实浏览器通过单文件选择器上传；同名文件自动编号为 `client (2).txt`，既有 `client.txt` 的 SHA-256 保持不变。再通过文件夹选择器上传顶层和嵌套文件，目录相对路径保留。3 个上传任务均为 `succeeded`，审计均记录接收、排队、发布和完成；下载内容与本地合成源 SHA-256 一致。页面重载后可浏览新文件夹及嵌套文件；文档宽度与 390px 视口相同，控制台无 error/warn。隔离服务、隧道和测试文件已清理。选择器触发的断网恢复、实体手机和真实模型仍待验。 |
 | `filesage-real-shell-e2e-20261018-01` | Linux Mint amd64、Go 1.27.2；Go 全量 `go test ./...`、`go vet ./...` 和 Linux 主程序构建通过；隔离服务健康检查为 `ok`。模型客户端超时从 30 秒调至 90 秒。 | 真实远程 `glm-5.3-flash`，服务只监听 `127.0.0.1`，根目录、数据库和服务均位于 `/var/tmp`；使用合成文件 `notes/a.txt`（2 行）和 `notes/b.txt`（3 行）。网页对话先澄清范围、格式与覆盖风险，再生成单条 Shell 命令；命令只在 Bubblewrap 隔离副本运行。差异只包含新文件 `notes/counts.txt`（`a.txt: 2`、`b.txt: 3`）；逐项审批并再次确认后写入。任务 `completed`、操作 `succeeded`，审计 API 返回 9 条完整事件；原文件行数保持不变，范围外未创建文件。密钥只由 600 权限环境文件供进程读取，未输出。测试服务、隧道和 QA 目录已停止并清理；持久 systemd 部署及重启恢复未验。 |
@@ -96,14 +97,14 @@
 | `FileSage-e2e-20261016-01` | Agent 状态文案修正前的 Linux QA 快照；Go 1.27.2、Node 24.21.0、npm 11.19.0。`go test -race ./...`、`go vet ./...`、主程序构建、前端 **165 项**测试、类型检查及生产构建通过；入口 JS 234.56 kB（gzip 73.37 kB），无 500 kB 拆包警告。 | Agent 重命名闭环通过；使用本地 OpenAI 兼容 mock，不是远端模型实测。浏览器无 error/warn；原文件与重命名后文件 SHA-256 一致；审计 API 返回 5 条预期事件。之后隐藏了已显示方案时重复的对话阶段标签，并简化方案区标题；该小改动在工作区重跑 165 项测试、类型检查和构建，未重跑浏览器 E2E。 |
 | `filesage-documenttext-e2e-20261017-01` | Linux amd64、Go 1.27.2；全量 `go test -race -count=1 -p 1 ./...`（含真实解析器集成开关）、`go vet ./...`、`go build ./...` 通过。工作区 Windows 全量 Go 测试、vet、build 及前端 202 项测试、类型检查、生产构建通过。 | Bubblewrap 隔离下用 Poppler 提取合成 PDF、中文 DOCX 转 PDF、PPTX 正文；DOCX 与 PDF 均识别“中文合同分类测试文本”。Agent 服务 E2E 确认分类卡生成时未读取正文，用户确认后才抽取并提交给脚本模型；版本变化拒绝分析，数据库会话不含正文。该切片未做浏览器或真实模型测试；扫描件 OCR 仍未实现。工作区临时压缩包已清理；服务器源码副本仍在 `/tmp/filesage-documenttext-qa-20261017214349`，工具策略拒绝递归清理。 |
 
-本次（2026-10-18）验证：Go 全量测试、vet、Linux 服务器构建和真实模型 Shell 浏览器 E2E 通过；前端 239 项测试、类型检查和生产构建已在本轮变更前通过。`71b30c1` 对应的完整实测见[Linux QA 台账](#linux-qa-台账)，GitHub Actions 结果见[工作流记录](https://github.com/int2t05/FileSage/actions)。其他快照的测试数量属于各自当时的结果，不代表当前数量，也不可合并。
+本次（2026-10-18）验证：Go 全量测试、vet、Linux 生产构建、前端 239 项测试、类型检查与生产构建通过；真实模型 Shell 浏览器闭环在隔离服务通过，源码提交 `c2800e6` 已部署到持久 systemd 服务并验收健康、重启及双盘跨卷文件操作。完整 Agent 模型操作未在持久服务上复跑，整机重启与实体手机未验。`71b30c1` 对应的完整实测见[Linux QA 台账](#linux-qa-台账)，GitHub Actions 结果见[工作流记录](https://github.com/int2t05/FileSage/actions)。其他快照的测试数量属于各自当时的结果，不代表当前数量，也不可合并。
 
 ## 仍待验或未交付
 
-- 专用非 root 服务账户、持久 systemd 安装与重启恢复、多卷持久挂载权限、并发外部修改和性能基线仍待验（[后续验收清单](IMPLEMENTATION_PLAN.md#L95)）。当前提交已在两块真实磁盘间验收列表、阅读、上传／下载、复制和移动；实体手机触控及软键盘留给设备持有人，窄屏浏览器视口覆盖 320、360、390px。
-- 真实模型 Agent 重命名与 Shell 浏览器流程均有隔离 E2E 记录；持久 systemd 安装与重启恢复仍待验。当前代码的自动化结果见 GitHub Actions。
+- 专用非 root 账户、systemd 常驻服务、第二块 SSD 的持久挂载、挂载权限、服务重启与跨卷文件操作已通过实机验收；主机重启后的自动挂载与服务恢复、外部进程并发修改、低磁盘空间和性能基线仍待验。实体手机触控及软键盘留给设备持有人，窄屏浏览器视口覆盖 320、360、390px。
+- 真实模型 Agent 重命名与 Shell 浏览器流程有隔离 E2E 记录；持久服务的 Agent 状态显示模型可用，但完整对话、审批和执行未在该实例复跑。当前代码的自动化结果见 GitHub Actions。
 - RAR 没有真实样本验收；相机拍摄的 HEIC、FileSage 服务端 RAW／HEIF 预览端点、复杂 DOCX/PPTX、真实 EPUB 书籍及完整浏览器兼容边界仍待验（[README](../README.md#what-it-does)、[后续验收清单](IMPLEMENTATION_PLAN.md#L95)）。
-- Agent Shell 已完成对话、隔离执行、差异审阅、逐项审批和二次确认写回；真实模型浏览器闭环已记录。持久 systemd 安装仍待验。PDF／Office 正文提取、OCR、Agent 压缩包创建／解压、永久删除和软链接的既有验收范围及未验内容见上方对应记录。
+- Agent Shell 已完成对话、隔离执行、差异审阅、逐项审批和二次确认写回；真实模型浏览器闭环已在隔离服务记录。持久 systemd 服务已部署，但该服务实例尚未复跑完整模型 Agent 浏览器流程。PDF／Office 正文提取、OCR、Agent 压缩包创建／解压、永久删除和软链接的既有验收范围及未验内容见上方对应记录。
 
 ## 本台账的完成标准
 
