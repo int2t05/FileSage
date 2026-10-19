@@ -1,4 +1,4 @@
-// 本文件保存 Shell 暂存方案及逐路径审批状态。
+// 本文件保存 Shell 隔离差异及其审核、执行状态。
 package store
 
 import (
@@ -35,13 +35,15 @@ const (
 	ShellRunPartial          ShellRunStatus = "partial"
 )
 
-// ShellRunRecord 只保存命令元数据与暂存引用，不保存命令输出或差异正文。
+// ShellRunRecord 保存命令元数据，不保存原始输出。
 type ShellRunRecord struct {
 	ID               string
 	PlanID           string
 	OperationID      string
 	Command          string
 	WorkingDirectory string
+	OutputDiscarded  bool
+	ExitCode         int
 	StageID          string
 	Status           ShellRunStatus
 	CreatedAt        time.Time
@@ -96,7 +98,7 @@ func (s *Store) CreateConversationShellTaskPlan(ctx context.Context, conversatio
 	} else if task.Status != TaskAwaitingApproval || plan.Status != PlanAwaitingApproval || run.Status != ShellRunAwaitingApproval || len(changes) > MaxShellChanges || audit.Outcome != "awaiting_approval" {
 		return errors.New("Shell changes must await approval")
 	}
-	if !validShellRun(run) || !validShellReply(reply) || strings.Contains(reply, run.Command) || run.WorkingDirectory != "." && strings.Contains(reply, run.WorkingDirectory) || audit.EventType != "shell_plan_created" ||
+	if !validShellRun(run) || !validShellReply(reply) || reply != "" && (strings.Contains(reply, run.Command) || run.WorkingDirectory != "." && strings.Contains(reply, run.WorkingDirectory)) || audit.EventType != "shell_plan_created" ||
 		len(audit.Message) > maxShellChangeMessage || !utf8.ValidString(audit.Message) ||
 		strings.Contains(audit.Message, run.Command) || run.WorkingDirectory != "." && strings.Contains(audit.Message, run.WorkingDirectory) || audit.SourcePath != plan.ScopePath || audit.TargetPath != "" {
 		return errors.New("Shell run, changes, audit, or reply is invalid")
@@ -181,7 +183,7 @@ func (s *Store) CreateConversationShellTaskPlan(ctx context.Context, conversatio
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_conversation_messages WHERE conversation_id = ?`, conversationID).Scan(&count); err != nil {
 		return fmt.Errorf("count Shell conversation messages: %w", err)
 	}
-	if count >= maxConversationMessages {
+	if reply != "" && count >= maxConversationMessages {
 		return ErrConversationLimit
 	}
 	updatedAt := timestampOrNow(task.UpdatedAt)
@@ -197,8 +199,10 @@ func (s *Store) CreateConversationShellTaskPlan(ctx context.Context, conversatio
 	if err := requireOneRow(result, "Shell conversation"); err != nil {
 		return ErrConversationConflict
 	}
-	if err := s.insertConversationMessage(ctx, tx, conversationID, count+1, "assistant", reply, task.UpdatedAt); err != nil {
-		return err
+	if reply != "" {
+		if err := s.insertConversationMessage(ctx, tx, conversationID, count+1, "assistant", reply, task.UpdatedAt); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit Shell plan transaction: %w", err)
@@ -211,7 +215,7 @@ func (s *Store) ShellRun(ctx context.Context, planID string) (ShellRunRecord, er
 	if !validShellID(planID) {
 		return ShellRunRecord{}, ErrNotFound
 	}
-	return scanShellRun(s.db.QueryRowContext(ctx, `SELECT id, plan_id, operation_id, command, working_directory, stage_id, status, created_at_ns, updated_at_ns
+	return scanShellRun(s.db.QueryRowContext(ctx, `SELECT id, plan_id, operation_id, command, working_directory, output_discarded, exit_code, stage_id, status, created_at_ns, updated_at_ns
 		FROM shell_runs WHERE plan_id = ?`, planID))
 }
 
@@ -410,6 +414,124 @@ func (s *Store) SetShellChangeApproval(ctx context.Context, planID, changeID str
 		return fmt.Errorf("commit Shell change approval: %w", err)
 	}
 	return nil
+}
+
+// ReviewShellPlan 批准整个隔离执行差异集，将 Shell 作为一个受控工具步骤。
+func (s *Store) ReviewShellPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string, at time.Time) (string, error) {
+	if !validShellID(planID) || expectedVersion < 1 || expectedMode != "bypass" && expectedMode != "manual" {
+		return "", ErrConflict
+	}
+	at = conversationTime(at)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin Shell plan review: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var taskID, parentID string
+	var version int
+	var planStatus PlanStatus
+	var operationApproval ApprovalState
+	var operationStatus OperationStatus
+	var runStatus ShellRunStatus
+	if err := tx.QueryRowContext(ctx, `SELECT p.task_id, p.version, p.status, o.id, o.approval_state, o.execution_status, r.status
+		FROM plans p JOIN operations o ON o.plan_id = p.id JOIN shell_runs r ON r.plan_id = p.id
+		WHERE p.id = ? AND o.action = 'run_shell'`, planID).
+		Scan(&taskID, &version, &planStatus, &parentID, &operationApproval, &operationStatus, &runStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("read Shell plan for review: %w", err)
+	}
+	if version != expectedVersion || planStatus != PlanAwaitingApproval || operationApproval != ApprovalPending ||
+		operationStatus != OperationPending || runStatus != ShellRunAwaitingApproval {
+		return "", ErrConflict
+	}
+	var bypass int
+	if err := tx.QueryRowContext(ctx, `SELECT bypass_permission FROM agent_settings WHERE id = 1`).Scan(&bypass); err != nil {
+		return "", fmt.Errorf("read Agent permission setting for Shell review: %w", err)
+	}
+	mode := "manual"
+	if bypass == 1 {
+		mode = "bypass"
+	}
+	if mode != expectedMode {
+		return "", ErrConflict
+	}
+	var total, pending int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN approval_state = 'pending' AND execution_status = 'pending' THEN 1 ELSE 0 END), 0)
+		FROM shell_changes WHERE plan_id = ?`, planID).Scan(&total, &pending); err != nil {
+		return "", err
+	}
+	if total < 1 || total > MaxShellChanges || pending != total {
+		return "", ErrConflict
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT path FROM shell_changes WHERE plan_id = ? ORDER BY ordinal`, planID)
+	if err != nil {
+		return "", err
+	}
+	paths := make([]string, 0, total)
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			_ = rows.Close()
+			return "", err
+		}
+		paths = append(paths, value)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return "", err
+	}
+	if err := rows.Close(); err != nil {
+		return "", err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE shell_changes SET approval_state = 'approved', approved_by = 'user', approved_at_ns = ?, updated_at_ns = ?
+		WHERE plan_id = ? AND approval_state = 'pending' AND execution_status = 'pending'`, at.UnixNano(), at.UnixNano(), planID)
+	if err != nil {
+		return "", fmt.Errorf("approve reviewed Shell changes: %w", err)
+	}
+	if count, countErr := result.RowsAffected(); countErr != nil || count != int64(total) {
+		return "", ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE operations SET approval_state = 'approved', approved_by = 'user', approved_at_ns = ?, updated_at_ns = ?
+		WHERE id = ? AND plan_id = ? AND action = 'run_shell' AND approval_state = 'pending' AND execution_status = 'pending'`,
+		at.UnixNano(), at.UnixNano(), parentID, planID); err != nil {
+		return "", ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'approved', execution_mode = ?, reviewed_at_ns = ?, updated_at_ns = ?
+		WHERE id = ? AND version = ? AND status = 'awaiting_approval' AND reviewed_at_ns IS NULL`,
+		mode, at.UnixNano(), at.UnixNano(), planID, expectedVersion); err != nil {
+		return "", ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'paused', updated_at_ns = ? WHERE id = ? AND status = 'awaiting_approval'`, at.UnixNano(), taskID); err != nil {
+		return "", ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE shell_runs SET status = 'approved', updated_at_ns = ? WHERE plan_id = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID); err != nil {
+		return "", ErrConflict
+	}
+	for _, value := range paths {
+		if err := appendShellAudit(ctx, tx, taskID, planID, parentID, "shell_change_approved", "approved", value, at); err != nil {
+			return "", err
+		}
+	}
+	outcome, message := "manual", "用户审核 Shell 计划；手动模式需确认 Shell 步骤后提交隔离差异"
+	if mode == "bypass" {
+		outcome, message = "bypass", "用户审核 Shell 计划；隔离执行变化将作为一个工具步骤自动提交"
+	}
+	if _, err := appendAuditRecord(ctx, tx, AuditRecord{
+		TaskID: taskID, PlanID: planID, OperationID: parentID,
+		EventType: "plan_reviewed", Actor: "user", Outcome: outcome, Message: message, CreatedAt: at,
+	}); err != nil {
+		return "", err
+	}
+	if err := appendShellAudit(ctx, tx, taskID, planID, parentID, "shell_plan_approved", "approved", "", at); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit Shell plan review: %w", err)
+	}
+	return mode, nil
 }
 
 // StartShellExecution 原子启动已批准的 Shell 父操作与暂存运行。
@@ -840,13 +962,15 @@ func scanShellChange(row shellRowScanner) (ShellChangeRecord, error) {
 func scanShellRun(row shellRowScanner) (ShellRunRecord, error) {
 	var run ShellRunRecord
 	var createdAt, updatedAt int64
-	err := row.Scan(&run.ID, &run.PlanID, &run.OperationID, &run.Command, &run.WorkingDirectory, &run.StageID, &run.Status, &createdAt, &updatedAt)
+	var outputDiscarded int
+	err := row.Scan(&run.ID, &run.PlanID, &run.OperationID, &run.Command, &run.WorkingDirectory, &outputDiscarded, &run.ExitCode, &run.StageID, &run.Status, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ShellRunRecord{}, ErrNotFound
 	}
 	if err != nil {
 		return ShellRunRecord{}, fmt.Errorf("read Shell run: %w", err)
 	}
+	run.OutputDiscarded = outputDiscarded == 1
 	run.CreatedAt = time.Unix(0, createdAt).UTC()
 	run.UpdatedAt = time.Unix(0, updatedAt).UTC()
 	return run, nil
@@ -856,8 +980,8 @@ func insertShellRun(ctx context.Context, tx *sql.Tx, run ShellRunRecord) error {
 	if !validShellRun(run) || run.Status != ShellRunAwaitingApproval && run.Status != ShellRunCompleted {
 		return errors.New("invalid initial Shell run")
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO shell_runs (id, plan_id, operation_id, command, working_directory, stage_id, status, created_at_ns, updated_at_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.PlanID, run.OperationID, run.Command, run.WorkingDirectory, run.StageID, run.Status, timestampOrNow(run.CreatedAt), timestampOrNow(run.UpdatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO shell_runs (id, plan_id, operation_id, command, working_directory, output_discarded, exit_code, stage_id, status, created_at_ns, updated_at_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.PlanID, run.OperationID, run.Command, run.WorkingDirectory, boolInt(run.OutputDiscarded), run.ExitCode, run.StageID, run.Status, timestampOrNow(run.CreatedAt), timestampOrNow(run.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("insert Shell run: %w", err)
 	}
@@ -977,7 +1101,7 @@ func validShellOriginalState(value, changeKind string) bool {
 func validShellRun(run ShellRunRecord) bool {
 	return validShellID(run.ID) && validShellID(run.PlanID) && validShellID(run.OperationID) && validShellID(run.StageID) &&
 		strings.TrimSpace(run.Command) != "" && len(run.Command) <= maxShellCommandBytes && utf8.ValidString(run.Command) &&
-		(run.WorkingDirectory == "." || validShellRelativePath(run.WorkingDirectory)) && validShellRunStatus(run.Status)
+		(run.WorkingDirectory == "." || validShellRelativePath(run.WorkingDirectory)) && run.ExitCode >= 0 && run.ExitCode <= 255 && validShellRunStatus(run.Status)
 }
 
 func validShellRunStatus(status ShellRunStatus) bool {
@@ -1002,7 +1126,7 @@ func validShellID(value string) bool {
 }
 
 func validShellReply(value string) bool {
-	return len(value) > 0 && len(value) <= maxShellChangeMessage && utf8.ValidString(value)
+	return value == "" || len(value) <= maxShellChangeMessage && utf8.ValidString(value)
 }
 
 func appendShellAudit(ctx context.Context, tx *sql.Tx, taskID, planID, parentID, event, outcome, pathValue string, at time.Time) error {

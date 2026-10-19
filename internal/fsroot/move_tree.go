@@ -36,6 +36,12 @@ func (r *Root) MoveTreeNoReplace(ctx context.Context, source, destination string
 	if source == "" || source == destination {
 		return TreeMoveResult{}, ErrInvalidPath
 	}
+	if err := r.checkVolumeAvailability(source); err != nil {
+		return TreeMoveResult{}, err
+	}
+	if err := r.checkVolumeAvailability(destination); err != nil {
+		return TreeMoveResult{}, err
+	}
 	return platformMoveTreeNoReplace(ctx, r, source, destination, expected)
 }
 

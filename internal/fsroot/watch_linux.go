@@ -196,6 +196,9 @@ func (r *Root) watchDirectoryTree(ctx context.Context, watchFD int, directory *o
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := r.verifyWalkVolume(directory, relativePath); err != nil {
+		return err
+	}
 	info, err := directory.Stat()
 	if err != nil {
 		return fmt.Errorf("inspect watched directory %q: %w", relativePath, err)
@@ -238,12 +241,23 @@ func (r *Root) watchDirectoryTree(ctx context.Context, watchFD int, directory *o
 }
 
 func (r *Root) watchDirectoryEntry(ctx context.Context, watchFD int, parent *os.File, name, relativePath string, seen map[int]struct{}) error {
+	if err := r.checkVolumeAvailability(relativePath); errors.Is(err, ErrVolumeUnavailable) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect watched volume %q: %w", relativePath, err)
+	}
 	identity, err := openWalkIdentity(parent, name)
 	if err != nil {
 		if isWatchPathRace(err) {
 			return nil
 		}
 		return fmt.Errorf("open watched entry %q: %w", relativePath, err)
+	}
+	if volume, isMountRoot := r.registeredMountAt(relativePath); isMountRoot {
+		currentID, err := platformMountIDForFD(identity.Fd())
+		if err != nil || currentID != volume.id {
+			return closeWatchFile(identity, relativePath)
+		}
 	}
 	info, err := identity.Stat()
 	if err != nil {

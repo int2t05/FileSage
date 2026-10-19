@@ -70,6 +70,7 @@ func prepareShellFixture(t *testing.T, count int, noChanges bool) shellFixture {
 	}
 	run := ShellRunRecord{
 		ID: "shell-run", PlanID: plan.ID, OperationID: operation.ID, Command: "find . -type f", WorkingDirectory: ".",
+		OutputDiscarded: true, ExitCode: 0,
 		StageID: "stage-payload", Status: runStatus, CreatedAt: now, UpdatedAt: now,
 	}
 	changes := make([]ShellChangeRecord, count)
@@ -124,6 +125,28 @@ func TestCreateConversationShellTaskPlanPersistsAndPagesChanges(t *testing.T) {
 	var proposalAudits int
 	if err := fixture.db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE plan_id = ? AND event_type = 'shell_change_proposed' AND operation_id = ?`, fixture.plan.ID, fixture.run.OperationID).Scan(&proposalAudits); err != nil || proposalAudits != 105 {
 		t.Fatalf("proposal audit count = (%d, %v)", proposalAudits, err)
+	}
+}
+
+func TestCreateConversationShellTaskPlanOmitsRedundantAssistantReply(t *testing.T) {
+	for _, noChanges := range []bool{false, true} {
+		t.Run(map[bool]string{false: "with changes", true: "without changes"}[noChanges], func(t *testing.T) {
+			count := 1
+			if noChanges {
+				count = 0
+			}
+			fixture := prepareShellFixture(t, count, noChanges)
+			if err := fixture.db.CreateConversationShellTaskPlan(context.Background(), fixture.conversation, fixture.task, fixture.plan, fixture.run, fixture.changes, fixture.audit, ""); err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := fixture.db.Conversation(context.Background(), fixture.conversation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(conversation.Messages) != 2 || conversation.PlanID != fixture.plan.ID {
+				t.Fatalf("conversation after Shell plan = (%#v), want only the existing exchange and linked plan", conversation)
+			}
+		})
 	}
 }
 
@@ -197,6 +220,49 @@ func TestShellApprovalsUseExpectedVersionAndRejectWholePlan(t *testing.T) {
 	if err := fixture.db.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN operation_id <> ? THEN 1 ELSE 0 END), 0)
 		FROM audit_events WHERE plan_id = ? AND event_type IN ('shell_change_proposed', 'shell_change_approved', 'shell_change_rejected', 'shell_change_cancelled') AND source_path <> ''`, fixture.run.OperationID, fixture.plan.ID).Scan(&pathAudits, &wrongOperation); err != nil || pathAudits != 7 || wrongOperation != 0 {
 		t.Fatalf("path audit = (%d paths, %d wrong parents, %v)", pathAudits, wrongOperation, err)
+	}
+}
+
+func TestReviewedShellPlanApprovesDiffAsOneToolStep(t *testing.T) {
+	fixture := createShellFixture(t, 2, false)
+	ctx := context.Background()
+	if err := fixture.db.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	mode, err := fixture.db.ReviewShellPlan(ctx, fixture.plan.ID, fixture.plan.Version, "manual", time.Now().UTC())
+	if err != nil || mode != "manual" {
+		t.Fatalf("review Shell plan: %v", err)
+	}
+	plan, err := fixture.db.Plan(ctx, fixture.plan.ID)
+	if err != nil || plan.Status != PlanApproved || plan.ExecutionMode != "manual" || plan.ReviewedAt == nil || plan.Operations[0].Approval != ApprovalApproved {
+		t.Fatalf("reviewed Shell plan = (%#v, %v)", plan, err)
+	}
+	for _, change := range fixture.changes {
+		if change.Approval != ApprovalPending || change.Status != OperationPending {
+			t.Fatalf("fixture unexpectedly mutated: %#v", change)
+		}
+	}
+	page, err := fixture.db.ListShellChanges(ctx, fixture.plan.ID, 10, 0)
+	if err != nil || len(page.Changes) != 2 {
+		t.Fatalf("reviewed Shell changes = (%#v, %v)", page, err)
+	}
+	for _, change := range page.Changes {
+		if change.Approval != ApprovalApproved || change.ApprovedBy != "user" {
+			t.Fatalf("Shell diff was not included in plan review: %#v", change)
+		}
+		if err := fixture.db.SetShellChangeApproval(ctx, plan.ID, change.ID, ApprovalApproved, plan.Version, time.Now()); !errors.Is(err, ErrConflict) {
+			t.Fatalf("per-file approval after plan review = %v, want conflict", err)
+		}
+	}
+	run, err := fixture.db.ShellRun(ctx, plan.ID)
+	if err != nil || run.Status != ShellRunApproved || run.ExitCode != 0 || run.OutputDiscarded != fixture.run.OutputDiscarded {
+		t.Fatalf("reviewed Shell run = (%#v, %v)", run, err)
+	}
+	if err := fixture.db.StartShellExecution(ctx, plan.ID, plan.Version, time.Now().UTC()); err != nil {
+		t.Fatalf("start reviewed Shell tool step: %v", err)
+	}
+	if _, err := fixture.db.AuditForTask(ctx, plan.TaskID); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -577,6 +577,8 @@ type PlanRecord struct {
 	Version       int
 	Status        PlanStatus
 	StopRequested bool
+	ExecutionMode string
+	ReviewedAt    *time.Time
 	ScopePath     string
 	ModelProvider string
 	ModelName     string
@@ -789,12 +791,15 @@ func validProposedTextMetadata(operation OperationRecord) bool {
 func (s *Store) Plan(ctx context.Context, id string) (PlanRecord, error) {
 	var plan PlanRecord
 	var createdAt, updatedAt int64
+	var reviewedAt sql.NullInt64
 	err := s.db.QueryRowContext(ctx, `
 		SELECT id, task_id, version, status, scope_path, model_provider,
-			model_name, data_scope_json, created_at_ns, updated_at_ns, stop_requested
+			model_name, data_scope_json, created_at_ns, updated_at_ns, stop_requested,
+			execution_mode, reviewed_at_ns
 		FROM plans WHERE id = ?`, id).Scan(
 		&plan.ID, &plan.TaskID, &plan.Version, &plan.Status, &plan.ScopePath,
 		&plan.ModelProvider, &plan.ModelName, &plan.DataScopeJSON, &createdAt, &updatedAt, &plan.StopRequested,
+		&plan.ExecutionMode, &reviewedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return PlanRecord{}, ErrNotFound
@@ -804,6 +809,10 @@ func (s *Store) Plan(ctx context.Context, id string) (PlanRecord, error) {
 	}
 	plan.CreatedAt = time.Unix(0, createdAt).UTC()
 	plan.UpdatedAt = time.Unix(0, updatedAt).UTC()
+	if reviewedAt.Valid {
+		value := time.Unix(0, reviewedAt.Int64).UTC()
+		plan.ReviewedAt = &value
+	}
 
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, plan_id, ordinal, action, source_path, target_path, reason,

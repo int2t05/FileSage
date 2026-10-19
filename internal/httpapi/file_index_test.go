@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +24,41 @@ type testFileIndexer struct {
 	data     *store.Store
 	state    store.FileIndexScanState
 	queryErr error
+}
+
+type unavailableVolumeFileSystem struct {
+	root *fsroot.Root
+}
+
+func (files unavailableVolumeFileSystem) List(relativePath string) ([]fsroot.Entry, error) {
+	return files.root.List(relativePath)
+}
+
+func (files unavailableVolumeFileSystem) LstatEntry(relativePath string) (fsroot.Entry, error) {
+	switch relativePath {
+	case "volume":
+		return fsroot.Entry{Name: "volume", Path: "volume", Kind: fsroot.KindDirectory, MountUnavailable: true, ReadOnly: true}, nil
+	case "volume/old.txt":
+		return fsroot.Entry{}, fsroot.ErrVolumeUnavailable
+	default:
+		return files.root.LstatEntry(relativePath)
+	}
+}
+
+func (files unavailableVolumeFileSystem) OpenRead(relativePath string) (io.ReadCloser, fsroot.Entry, error) {
+	return files.root.OpenRead(relativePath)
+}
+
+func (files unavailableVolumeFileSystem) Mkdir(relativePath string, perm fs.FileMode) error {
+	return files.root.Mkdir(relativePath, perm)
+}
+
+func (files unavailableVolumeFileSystem) RenameNoReplace(oldPath, newPath string) error {
+	return files.root.RenameNoReplace(oldPath, newPath)
+}
+
+func (files unavailableVolumeFileSystem) Remove(relativePath string) error {
+	return files.root.Remove(relativePath)
 }
 
 func (index *testFileIndexer) Status(ctx context.Context) (store.FileIndexStatus, error) {
@@ -136,6 +173,68 @@ func TestListFilePageUsesStableRecursiveCursor(t *testing.T) {
 	invalid := requestFilePage(t, handler, changedQuery.Encode())
 	if invalid.Code != http.StatusBadRequest {
 		t.Fatalf("changed query status = %d, want %d", invalid.Code, http.StatusBadRequest)
+	}
+}
+
+func TestRecursiveFilePageKeepsAvailableFilesWhenVolumeIsUnavailable(t *testing.T) {
+	ctx := context.Background()
+	managedRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(managedRoot, "volume"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for relativePath, contents := range map[string]string{
+		"volume/old.txt": "old",
+		"available.txt":  "available",
+	} {
+		if err := os.WriteFile(filepath.Join(managedRoot, filepath.FromSlash(relativePath)), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := fsroot.Open(managedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	metadata, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	generation, err := metadata.BeginFileIndexScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.UpsertFileIndexBatch(ctx, generation, []store.FileIndexRecord{
+		fileIndexRecordForTest(t, root, "volume"),
+		fileIndexRecordForTest(t, root, "volume/old.txt"),
+		fileIndexRecordForTest(t, root, "available.txt"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.CompleteFileIndexScan(ctx, generation); err != nil {
+		t.Fatal(err)
+	}
+
+	index := &testFileIndexer{data: metadata}
+	handler := NewWithAgentAndIndex(unavailableVolumeFileSystem{root: root}, nil, nil, nil, index, nil, coordination.New())
+	response := requestFilePage(t, handler, "scope=recursive")
+	if response.Code != http.StatusOK {
+		t.Fatalf("recursive page status = %d, body = %s", response.Code, response.Body.String())
+	}
+	page := decodeListing(t, response)
+	foundUnavailable, foundAvailable := false, false
+	for _, entry := range page.Entries {
+		switch entry.Path {
+		case "volume":
+			foundUnavailable = entry.MountUnavailable && entry.ReadOnly
+		case "available.txt":
+			foundAvailable = true
+		case "volume/old.txt":
+			t.Fatal("recursive listing exposed a stale child inside the unavailable volume")
+		}
+	}
+	if !foundUnavailable || !foundAvailable || page.IndexState != string(store.FileIndexStale) {
+		t.Fatalf("recursive page = %+v; want unavailable volume, available sibling, and stale index state", page)
 	}
 }
 

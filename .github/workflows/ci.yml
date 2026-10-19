@@ -29,6 +29,7 @@ jobs:
           fi
       - run: go test -count=1 ./...
       - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go build ./...
 
   frontend:
@@ -47,6 +48,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npm audit --registry=https://registry.npmjs.org/ --audit-level=high
       - run: npm test
       - run: npm run typecheck
       - run: npm run build

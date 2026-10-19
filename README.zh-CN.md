@@ -6,7 +6,8 @@
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 面向 Linux 的本地优先文件工作台。FileSage 直接管理挂载磁盘上的真实目录；
-Agent 提出的文件变更须经你审阅、审批和确认后才执行。
+Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。默认开启
+`bypasspermission`，按顺序执行；在设置中关闭后，每一步由你手动执行。
 
 [English](README.md)
 
@@ -22,8 +23,9 @@ MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验�
 - 支持续传、原件下载，以及常见压缩包的浏览、预览、创建和解压。
 - 在浏览器阅读常见图片、音视频、PDF、文本、Markdown、Office、表格、EPUB
   和压缩包；不支持或过于复杂的文件仍可下载。
-- 使用 OpenAI-compatible 模型分析你明确确认的范围；逐项查看操作建议、审批、
-  再次确认执行，并查阅审计记录。
+- 与 OpenAI-compatible 模型对话以澄清范围，审阅整份计划后执行。默认开启
+  `bypasspermission` 并按序运行；在设置中关闭后逐步启动。可展开步骤查看命令、
+  退出码和文件差异；Shell 原始输出不会保存或返回。
 - 使用 SQLite 保存任务和搜索元数据，数据目录与管理文件分开；文件系统始终是事实来源。
 
 ## 快速开始

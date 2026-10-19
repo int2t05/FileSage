@@ -284,7 +284,7 @@ export function TrashPage() {
         <div>
           <p className="trash-eyebrow"><span />普通删除项目</p>
           <h1 id="trash-page-title">回收站</h1>
-          <p>普通删除可在这里恢复；永久删除后无法恢复。</p>
+          <p>可恢复已移入的项目；永久删除后无法找回。</p>
         </div>
         <button className="trash-refresh-button" type="button" onClick={refresh} disabled={loading || Boolean(busyAction)}>
           <RefreshCw size={16} aria-hidden="true" />刷新

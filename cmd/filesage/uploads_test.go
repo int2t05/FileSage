@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -328,6 +329,17 @@ func TestUploadPublicationFailureRetainsStageAndCanRetry(t *testing.T) {
 	result := fixture.waitStatus(t, id, publicationSucceeded)
 	if result.PublishedPath != "missing/retry.txt" {
 		t.Fatalf("retry published path = %q", result.PublishedPath)
+	}
+}
+
+func TestUploadPublicationExplainsInsufficientStorage(t *testing.T) {
+	manager := &publicationManager{}
+	want := "服务器存储空间或配额不足，文件未发布；完整暂存文件保留，清理空间或调整配额后可重试。"
+	for _, cause := range []error{syscall.ENOSPC, syscall.EDQUOT} {
+		got := manager.safePublicationError(fmt.Errorf("write candidate: %w", cause))
+		if got != want {
+			t.Errorf("safePublicationError(%v) = %q, want %q", cause, got, want)
+		}
 	}
 }
 

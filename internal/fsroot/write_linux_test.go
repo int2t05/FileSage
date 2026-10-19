@@ -8,10 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -195,6 +197,9 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	}
 	root, err := Open("/")
 	if err != nil {
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			t.Skipf("host denies inspection of an unrelated system mount: %v", err)
+		}
 		t.Fatal(err)
 	}
 	defer root.Close()
@@ -336,4 +341,62 @@ func TestWriteAtomicFromRejectsStaleVersionAndWrongSize(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Name() != "note.txt" {
 		t.Fatalf("failed replacement left temporary files: (%v, %v)", entries, err)
 	}
+}
+
+func TestWriteAtomicFromRejectsExternalChangeDuringStreaming(t *testing.T) {
+	rootPath := t.TempDir()
+	target := filepath.Join(rootPath, "note.txt")
+	if err := os.WriteFile(target, []byte("before"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	entry, err := root.LstatEntry("note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &externalChangeReader{
+		reader: strings.NewReader("approved candidate"),
+		change: func() error {
+			if err := os.WriteFile(target, []byte("update"), 0o640); err != nil {
+				return err
+			}
+			if entry.Fingerprint().ChangeTimeAvailable {
+				return os.Chtimes(target, entry.ModifiedAt, entry.ModifiedAt)
+			}
+			return nil
+		},
+	}
+	if _, err := root.WriteAtomicFrom("note.txt", entry.Fingerprint(), reader, int64(len("approved candidate")), 0o600); !errors.Is(err, ErrConflict) {
+		t.Fatalf("write during external change error = %v, want conflict", err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "update" {
+		t.Fatalf("external content changed to (%q, %v)", data, err)
+	}
+	entries, err := os.ReadDir(rootPath)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "note.txt" {
+		t.Fatalf("external conflict left temporary files: (%v, %v)", entries, err)
+	}
+}
+
+// 外部进程在候选写入期间修改原文件，模拟进程内锁无法协调的变化。
+type externalChangeReader struct {
+	reader io.Reader
+	change func() error
+	done   bool
+}
+
+func (r *externalChangeReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	if !r.done {
+		r.done = true
+		if changeErr := r.change(); changeErr != nil {
+			return n, changeErr
+		}
+	}
+	return n, err
 }

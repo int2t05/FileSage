@@ -266,6 +266,7 @@ func TestWriteFileErrorMapsConflictAndUnsupportedOperations(t *testing.T) {
 		{name: "hard link", err: fsroot.ErrHardLinked, want: http.StatusConflict},
 		{name: "symlink write", err: fsroot.ErrSymlinkPath, want: http.StatusBadRequest},
 		{name: "unsupported atomic write", err: fsroot.ErrAtomicWriteUnsupported, want: http.StatusNotImplemented},
+		{name: "unavailable mounted volume", err: fsroot.ErrVolumeUnavailable, want: http.StatusServiceUnavailable},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -275,5 +276,23 @@ func TestWriteFileErrorMapsConflictAndUnsupportedOperations(t *testing.T) {
 				t.Fatalf("status = %d, want %d", response.Code, test.want)
 			}
 		})
+	}
+}
+
+func TestFileEntryExposesUnavailableVolumeAsReadOnly(t *testing.T) {
+	response := toFileEntry(fsroot.Entry{
+		Name: "archive", Path: "archive", Kind: fsroot.KindDirectory,
+		MountUnavailable: true, ReadOnly: true,
+	}, nil)
+	data, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["mountUnavailable"] != true || fields["readOnly"] != true {
+		t.Fatalf("unavailable volume fields = %#v, want mountUnavailable and readOnly true", fields)
 	}
 }

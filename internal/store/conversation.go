@@ -265,7 +265,7 @@ func AnalysisDataTypes(action string) []string {
 	case "set_owner":
 		return []string{"任务描述、文件路径与目标属主"}
 	case "run_shell":
-		return []string{"经确认的命令与工作目录；命令在隔离暂存区执行，仅提交逐项审批后的文件变化"}
+		return []string{"经确认的命令与工作目录；隔离结果作为一个 Shell 步骤展示并提交"}
 	case "find_duplicates":
 		return []string{"任务描述与扫描范围会发送给模型；文件内容仅在服务端本机读取并计算 SHA-256，不发送给模型"}
 	case "archive_photos":
@@ -590,7 +590,10 @@ func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]Con
 		return nil, false, errors.New("invalid conversation list range")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.state, COALESCE(NULLIF(substr(c.goal, 1, 48), ''), CASE c.state
+		SELECT c.id, c.state, COALESCE(NULLIF(substr(c.goal, 1, 48), ''), NULLIF((
+			SELECT substr(m.content, 1, 48) FROM agent_conversation_messages m
+			WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.sequence LIMIT 1
+		), ''), CASE c.state
 			WHEN 'awaiting_confirmation' THEN '待确认分析'
 			WHEN 'awaiting_approval' THEN '待审批方案'
 			WHEN 'unsupported' THEN '暂不支持的任务'

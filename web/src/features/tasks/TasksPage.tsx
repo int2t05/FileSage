@@ -21,6 +21,9 @@ import {
   type AuditEvent,
 } from '../../api/audit';
 import { getAgentTask, type AgentOperation, type AgentPlan } from '../../api/agent';
+import { ShellChangeReview } from '../agent/ShellChangeReview';
+import { ShellToolCall } from '../agent/ShellToolCall';
+import { isSameDirectoryPath } from '../agent/pathSemantics';
 import { getDuplicateScan, type DuplicateScan } from '../../api/duplicateScans';
 import {
   getTaskAudit,
@@ -349,9 +352,7 @@ export function TasksPage() {
     <section className="tasks-page" aria-labelledby="tasks-page-title">
       <header className="tasks-heading">
         <div>
-          <p className="tasks-eyebrow">文件工作记录</p>
           <h1 id="tasks-page-title">任务</h1>
-          <p className="tasks-intro">查看任务进度和文件操作记录。</p>
         </div>
         <button className="tasks-refresh" type="button" onClick={refresh} disabled={view === 'tasks' && loading}>
           <RefreshCw size={15} aria-hidden="true" />
@@ -392,11 +393,6 @@ export function TasksPage() {
         tabIndex={0}
       >
       {view === 'tasks' ? <>
-      <aside className="tasks-data-note" role="note">
-        <Info size={17} aria-hidden="true" />
-        <p>展开任务可查看操作清单、重复扫描进度、上传发布状态和审计记录。</p>
-      </aside>
-
       <div className="tasks-filters" aria-label="筛选任务">
         <label>
           <span>任务类型</span>
@@ -455,10 +451,6 @@ export function TasksPage() {
                           {taskStatusLabels[task.status] ?? task.status}
                         </span>
                       </div>
-                      <div className="tasks-meta-row">
-                        <span>任务 ID</span>
-                        <code>{task.id}</code>
-                      </div>
                       {task.scopePath && (
                         <div className="tasks-path-row">
                           <span className="tasks-field-label">范围</span>
@@ -482,13 +474,6 @@ export function TasksPage() {
 
                   {isExpanded && (
                     <div className="tasks-details" id={detailId}>
-                      <dl className="tasks-detail-grid">
-                        <div className="tasks-detail-row"><dt>任务类型</dt><dd>{taskKindLabel(task.kind)}</dd></div>
-                        <div className="tasks-detail-row"><dt>已记录状态</dt><dd>{taskStatusLabels[task.status] ?? task.status}</dd></div>
-                        <div className="tasks-detail-row"><dt>创建时间</dt><dd>{formatDate(task.createdAt)}</dd></div>
-                        {task.scopePath && <div className="tasks-detail-row"><dt>作用范围</dt><dd>{task.scopePath}</dd></div>}
-                      </dl>
-
                       {task.kind === 'upload' ? (
                         <UploadDetails status={taskDetails?.uploadStatus} error={taskDetails?.uploadError ?? ''} loading={taskDetails?.loading ?? true} />
                       ) : task.kind === 'agent' ? (
@@ -499,8 +484,21 @@ export function TasksPage() {
                         <p className="tasks-unavailable-note">此类任务暂无详细进度。</p>
                       )}
 
-                      <section className="tasks-audit" aria-label="历史审计">
-                        <h3>历史审计</h3>
+                      <details className="tasks-technical-info">
+                        <summary>任务信息</summary>
+                        <dl className="tasks-detail-grid">
+                          <div className="tasks-detail-row"><dt>任务 ID</dt><dd><code>{task.id}</code></dd></div>
+                          <div className="tasks-detail-row"><dt>创建时间</dt><dd>{formatDate(task.createdAt)}</dd></div>
+                        </dl>
+                      </details>
+
+                      <details className="tasks-audit" aria-label="历史审计">
+                        <summary>
+                          <span>历史审计</span>
+                          <span className="tasks-audit-count">
+                            {taskDetails?.loading ? '读取中' : taskDetails?.auditError ? '读取失败' : `${taskDetails?.auditEvents.length ?? 0} 条`}
+                          </span>
+                        </summary>
                         {taskDetails?.loading && <p className="tasks-detail-loading">正在读取审计记录…</p>}
                         {taskDetails?.auditError && <p className="tasks-detail-error" role="alert">{taskDetails.auditError}</p>}
                         {!taskDetails?.loading && !taskDetails?.auditError && taskDetails?.auditEvents.length === 0 && (
@@ -531,7 +529,7 @@ export function TasksPage() {
                             {taskDetails.auditLoadingMore ? '正在读取…' : '查看更多审计'}
                           </button>
                         )}
-                      </section>
+                      </details>
                     </div>
                   )}
                 </li>
@@ -734,24 +732,41 @@ const agentActionLabels: Readonly<Record<string, string>> = {
   overwrite_file: '覆盖文件',
   permanent_delete: '永久删除',
   rename: '重命名',
-  run_shell: '运行 Shell',
+  run_shell: 'Bash',
   set_owner: '修改属主',
   set_permissions: '修改权限',
   trash: '移入回收站',
   trash_duplicate: '清理重复文件',
 };
 
+function agentActionLabel(operation: AgentOperation): string {
+  if (operation.action === 'move_file' && isSameDirectoryPath(operation.sourcePath, operation.targetPath)) {
+    return '重命名';
+  }
+  return agentActionLabels[operation.action] ?? '文件操作';
+}
+
 // 渲染 Agent 逐项审批与执行结果。
 function AgentExecutionDetails({ plan, error, loading }: { plan?: AgentPlan; error: string; loading: boolean }) {
+  const shellOnly = plan !== undefined && plan.operations.length === 1 && plan.operations[0]?.action === 'run_shell';
+
   return (
-    <section className="tasks-agent-panel" aria-label="Agent 操作结果">
-      <h3>操作清单</h3>
+    <section className={`tasks-agent-panel${shellOnly ? ' is-shell-only' : ''}`} aria-label="Agent 操作结果">
+      {!shellOnly && <h3>操作清单</h3>}
       {loading && <p className="tasks-detail-loading">正在读取操作结果…</p>}
       {error && <p className="tasks-detail-error" role="alert">{error}</p>}
       {plan && plan.operations.length === 0 && <p className="tasks-unavailable-note">此任务没有文件操作项。</p>}
       {plan && plan.operations.length > 0 && (
         <ol className="tasks-agent-list">
-          {plan.operations.map((operation) => <AgentOperationDetails key={operation.id} operation={operation} />)}
+          {plan.operations.map((operation) => (
+            <AgentOperationDetails
+              key={operation.id}
+              operation={operation}
+              planId={plan.planId}
+              planVersion={plan.planVersion}
+              showShellStatus={plan.operations.length > 1}
+            />
+          ))}
         </ol>
       )}
     </section>
@@ -759,25 +774,46 @@ function AgentExecutionDetails({ plan, error, loading }: { plan?: AgentPlan; err
 }
 
 // 渲染单项 Agent 操作结果，不提供写入入口。
-function AgentOperationDetails({ operation }: { operation: AgentOperation }) {
+function AgentOperationDetails({ operation, planId, planVersion, showShellStatus }: { operation: AgentOperation; planId: string; planVersion: number; showShellStatus: boolean }) {
+  const isShell = operation.action === 'run_shell';
+  const shellScope = [operation.sourcePath, operation.workingDir && operation.workingDir !== '.' ? operation.workingDir : '']
+    .filter(Boolean)
+    .join('/') || '管理根目录';
+
   return (
     <li className="tasks-agent-item">
-      <div className="tasks-agent-heading">
-        <strong>{agentActionLabels[operation.action] ?? '文件操作'}</strong>
+      {!isShell && <div className="tasks-agent-heading">
+        <strong>{agentActionLabel(operation)}</strong>
         <span className={`tasks-status tasks-status--${auditOutcomeTone(operation.executionStatus)}`}>{auditOutcomeLabel(operation.executionStatus)}</span>
-      </div>
-      {(operation.sourcePath || operation.targetPath) && (
+      </div>}
+      {!isShell && (operation.sourcePath || operation.targetPath) && (
         <p className="tasks-agent-paths">
           {operation.sourcePath && <code>{operation.sourcePath}</code>}
           {operation.sourcePath && operation.targetPath && operation.sourcePath !== operation.targetPath && <span aria-hidden="true">→</span>}
           {operation.targetPath && operation.targetPath !== operation.sourcePath && <code>{operation.targetPath}</code>}
         </p>
       )}
-      <p className="tasks-agent-approval">审批：{auditOutcomeLabel(operation.approval)}</p>
-      {operation.reason && <p className="tasks-agent-reason">{operation.reason}</p>}
-      {operation.resultMessage && <p className="tasks-agent-result">{operation.resultMessage}</p>}
-      {operation.action === 'run_shell' && operation.command && (
-        <pre className="tasks-agent-command"><code>{operation.command}</code></pre>
+      {!isShell && <p className="tasks-agent-approval">审批：{auditOutcomeLabel(operation.approval)}</p>}
+      {!isShell && operation.reason && <p className="tasks-agent-reason">{operation.reason}</p>}
+      {operation.resultMessage && (!isShell || operation.executionStatus !== 'succeeded') && (
+        <p className="tasks-agent-result" role={operation.executionStatus === 'failed' || operation.executionStatus === 'partial' ? 'alert' : 'status'}>{operation.resultMessage}</p>
+      )}
+      {isShell && (
+        <ShellToolCall
+          command={operation.command ?? ''}
+          resultMessage={operation.resultMessage ?? ''}
+          outputDiscarded={operation.outputDiscarded ?? false}
+          exitCode={operation.exitCode}
+          executionStatus={operation.executionStatus}
+          scope={shellScope}
+          showStatus={showShellStatus}
+        >
+          <ShellChangeReview
+            planId={planId}
+            planVersion={planVersion}
+            executionStatus={operation.executionStatus}
+          />
+        </ShellToolCall>
       )}
     </li>
   );

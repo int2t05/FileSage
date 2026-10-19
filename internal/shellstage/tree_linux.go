@@ -339,7 +339,7 @@ func buildChanges(beforeRoot, afterRoot *os.File, before, after fileTree, maxDif
 			if err != nil {
 				return nil, err
 			}
-			change.TextDiff, change.DiffTruncated = formatTextDiff(oldData, newData, maxDiff, oldTruncated, newTruncated)
+			change.TextDiff, change.DiffTruncated = formatTextDiff(oldData, newData, name, maxDiff, oldTruncated, newTruncated)
 		}
 		changes = append(changes, change)
 	}

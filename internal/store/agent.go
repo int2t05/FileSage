@@ -109,6 +109,116 @@ func (s *Store) LatestPlanForTask(ctx context.Context, taskID string) (PlanRecor
 	return s.Plan(ctx, id)
 }
 
+// ReviewAgentPlan 记录人工计划审核，并按审核时固定的模式准备执行。
+func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string, at time.Time) (string, error) {
+	if planID == "" || expectedVersion < 1 || expectedMode != "bypass" && expectedMode != "manual" {
+		return "", ErrConflict
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	at = at.UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", fmt.Errorf("begin Agent plan review: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var taskID string
+	var version int
+	var status PlanStatus
+	if err := tx.QueryRowContext(ctx, `SELECT task_id, version, status FROM plans WHERE id = ?`, planID).Scan(&taskID, &version, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNotFound
+		}
+		return "", fmt.Errorf("read Agent plan for review: %w", err)
+	}
+	if version != expectedVersion || status != PlanAwaitingApproval {
+		return "", ErrConflict
+	}
+	var bypass int
+	if err := tx.QueryRowContext(ctx, `SELECT bypass_permission FROM agent_settings WHERE id = 1`).Scan(&bypass); err != nil {
+		return "", fmt.Errorf("read Agent permission setting for review: %w", err)
+	}
+	mode := "manual"
+	if bypass == 1 {
+		mode = "bypass"
+	}
+	if mode != expectedMode {
+		return "", ErrConflict
+	}
+	var total, pending int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN approval_state = 'pending' AND execution_status = 'pending' THEN 1 ELSE 0 END), 0)
+		FROM operations WHERE plan_id = ? AND action <> 'run_shell'`, planID).Scan(&total, &pending); err != nil {
+		return "", err
+	}
+	if total < 1 || total != pending {
+		return "", ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'approved', execution_mode = ?, reviewed_at_ns = ?, updated_at_ns = ?
+		WHERE id = ? AND version = ? AND status = 'awaiting_approval' AND reviewed_at_ns IS NULL`,
+		mode, at.UnixNano(), at.UnixNano(), planID, expectedVersion); err != nil {
+		return "", ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'paused', updated_at_ns = ? WHERE id = ? AND status = 'awaiting_approval'`, at.UnixNano(), taskID); err != nil {
+		return "", ErrConflict
+	}
+	if mode == "bypass" {
+		rows, err := tx.QueryContext(ctx, `SELECT id, source_path, target_path FROM operations WHERE plan_id = ? AND execution_status = 'pending' ORDER BY ordinal`, planID)
+		if err != nil {
+			return "", err
+		}
+		type operationAudit struct{ id, source, target string }
+		operations := make([]operationAudit, 0, total)
+		for rows.Next() {
+			var operation operationAudit
+			if err := rows.Scan(&operation.id, &operation.source, &operation.target); err != nil {
+				_ = rows.Close()
+				return "", err
+			}
+			operations = append(operations, operation)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return "", err
+		}
+		if err := rows.Close(); err != nil {
+			return "", err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE operations SET approval_state = 'approved', approved_by = 'user', approved_at_ns = ?, updated_at_ns = ?
+			WHERE plan_id = ? AND approval_state = 'pending' AND execution_status = 'pending'`, at.UnixNano(), at.UnixNano(), planID)
+		if err != nil {
+			return "", fmt.Errorf("approve reviewed Agent steps: %w", err)
+		}
+		if count, countErr := result.RowsAffected(); countErr != nil || count != int64(total) {
+			return "", ErrConflict
+		}
+		for _, operation := range operations {
+			if _, err := appendAuditRecord(ctx, tx, AuditRecord{
+				TaskID: taskID, PlanID: planID, OperationID: operation.id,
+				EventType: "operation_approved", Actor: "user", Outcome: "approved",
+				Message: "用户审核整份方案并允许自动执行", SourcePath: operation.source, TargetPath: operation.target, CreatedAt: at,
+			}); err != nil {
+				return "", err
+			}
+		}
+	}
+	outcome, message := "manual", "用户审核计划；后续每一步需单独确认"
+	if mode == "bypass" {
+		outcome, message = "bypass", "用户审核计划；后续步骤按 bypass 模式顺序运行"
+	}
+	if _, err := appendAuditRecord(ctx, tx, AuditRecord{
+		TaskID: taskID, PlanID: planID, EventType: "plan_reviewed", Actor: "user", Outcome: outcome,
+		Message: message, CreatedAt: at,
+	}); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", fmt.Errorf("commit Agent plan review: %w", err)
+	}
+	return mode, nil
+}
+
 // ReviseAgentPlan 保留旧方案并原子创建一份全新待审批版本。
 func (s *Store) ReviseAgentPlan(ctx context.Context, previousID string, expectedVersion int, plan PlanRecord, at time.Time) error {
 	if expectedVersion < 1 || previousID == "" || plan.ID == "" || plan.ID == previousID ||
@@ -435,6 +545,97 @@ func (s *Store) StartAgentOperation(ctx context.Context, planID, operationID str
 	})
 }
 
+// StartReviewedAgentOperation 原子批准并占用已审核方案的下一步。
+func (s *Store) StartReviewedAgentOperation(ctx context.Context, planID, operationID string, expectedVersion int, at time.Time) error {
+	if planID == "" || operationID == "" || expectedVersion < 1 {
+		return ErrConflict
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	at = at.UTC()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin reviewed Agent step: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var taskID string
+	var version int
+	var status PlanStatus
+	var mode string
+	var reviewedAt sql.NullInt64
+	var stopRequested int
+	if err := tx.QueryRowContext(ctx, `SELECT task_id, version, status, execution_mode, reviewed_at_ns, stop_requested
+		FROM plans WHERE id = ?`, planID).
+		Scan(&taskID, &version, &status, &mode, &reviewedAt, &stopRequested); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if version != expectedVersion || status != PlanApproved || mode != "manual" || !reviewedAt.Valid || stopRequested != 0 {
+		return ErrConflict
+	}
+	var ordinal int
+	var approval ApprovalState
+	var operationStatus OperationStatus
+	if err := tx.QueryRowContext(ctx, `SELECT ordinal, approval_state, execution_status FROM operations WHERE plan_id = ? AND id = ?`, planID, operationID).
+		Scan(&ordinal, &approval, &operationStatus); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		return err
+	}
+	if operationStatus != OperationPending || approval != ApprovalPending && approval != ApprovalApproved {
+		return ErrConflict
+	}
+	var unfinishedBefore int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE plan_id = ? AND ordinal < ? AND execution_status <> 'succeeded'`, planID, ordinal).Scan(&unfinishedBefore); err != nil {
+		return err
+	}
+	var running int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE plan_id = ? AND execution_status = 'running'`, planID).Scan(&running); err != nil {
+		return err
+	}
+	if unfinishedBefore != 0 || running != 0 {
+		return ErrConflict
+	}
+	if approval == ApprovalPending {
+		if err := execAgentOne(ctx, tx, `UPDATE operations SET approval_state = 'approved', approved_by = 'user', approved_at_ns = ?, updated_at_ns = ?
+			WHERE id = ? AND plan_id = ? AND approval_state = 'pending' AND execution_status = 'pending'`, at.UnixNano(), at.UnixNano(), operationID, planID); err != nil {
+			return ErrConflict
+		}
+		var source, target string
+		if err := tx.QueryRowContext(ctx, `SELECT source_path, target_path FROM operations WHERE id = ? AND plan_id = ?`, operationID, planID).Scan(&source, &target); err != nil {
+			return err
+		}
+		if _, err := appendAuditRecord(ctx, tx, AuditRecord{
+			TaskID: taskID, PlanID: planID, OperationID: operationID,
+			EventType: "operation_approved", Actor: "user", Outcome: "approved",
+			Message: "用户确认执行当前步骤", SourcePath: source, TargetPath: target, CreatedAt: at,
+		}); err != nil {
+			return err
+		}
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE operations SET execution_status = 'running', updated_at_ns = ?
+		WHERE id = ? AND plan_id = ? AND approval_state = 'approved' AND execution_status = 'pending'`, at.UnixNano(), operationID, planID); err != nil {
+		return ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'executing', updated_at_ns = ? WHERE id = ? AND version = ? AND status = 'approved'`, at.UnixNano(), planID, expectedVersion); err != nil {
+		return ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'running', updated_at_ns = ? WHERE id = ? AND status = 'paused'`, at.UnixNano(), taskID); err != nil {
+		return ErrConflict
+	}
+	if err := appendAgentAudit(ctx, tx, taskID, planID, operationID, "operation_started", "started", "", at); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit reviewed Agent step: %w", err)
+	}
+	return nil
+}
+
 // ClaimAgentPlanExecution 记录用户对整份已审批方案的最终执行确认。
 func (s *Store) ClaimAgentPlanExecution(ctx context.Context, planID string, expectedVersion int, at time.Time) error {
 	if expectedVersion < 1 {
@@ -567,7 +768,9 @@ func (s *Store) FinishAgentOperation(ctx context.Context, planID, operationID st
 			return err
 		}
 		var unfinished int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE plan_id = ? AND execution_status IN ('pending', 'running')`, planID).Scan(&unfinished); err != nil {
+		var executionMode string
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), (SELECT execution_mode FROM plans WHERE id = ?)
+			FROM operations WHERE plan_id = ? AND execution_status IN ('pending', 'running')`, planID, planID).Scan(&unfinished, &executionMode); err != nil {
 			return err
 		}
 		if status == OperationFailed || status == OperationPartial {
@@ -584,6 +787,16 @@ func (s *Store) FinishAgentOperation(ctx context.Context, planID, operationID st
 			}
 			if stopRequested != 0 {
 				if err := finishAgentPlanStop(ctx, tx, taskID, planID, at); err != nil {
+					return err
+				}
+			} else if executionMode == "manual" {
+				if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'approved', updated_at_ns = ? WHERE id = ? AND status = 'executing'`, at.UTC().UnixNano(), planID); err != nil {
+					return err
+				}
+				if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'paused', updated_at_ns = ? WHERE id = ? AND status = 'running'`, at.UTC().UnixNano(), taskID); err != nil {
+					return err
+				}
+				if err := appendAgentAudit(ctx, tx, taskID, planID, operationID, "plan_step_paused", "awaiting_confirmation", "当前步骤完成，等待用户确认下一步", at); err != nil {
 					return err
 				}
 			} else if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'running', updated_at_ns = ? WHERE id = ? AND status = 'running'`, at.UTC().UnixNano(), taskID); err != nil {

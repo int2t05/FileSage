@@ -15,19 +15,18 @@ import (
 )
 
 type shellHTTPStub struct {
-	page          store.ShellChangePage
-	preview       agent.ShellChangePreview
-	plan          store.PlanRecord
-	err           error
-	listCalls     int
-	previewCalls  int
-	approvalCalls int
-	planID        string
-	changeID      string
-	decision      string
-	version       int
-	limit         int
-	offset        int
+	page         store.ShellChangePage
+	preview      agent.ShellChangePreview
+	plan         store.PlanRecord
+	run          store.ShellRunRecord
+	err          error
+	listCalls    int
+	previewCalls int
+	planID       string
+	changeID     string
+	version      int
+	limit        int
+	offset       int
 }
 
 func (stub *shellHTTPStub) Plan(context.Context, string) (store.PlanRecord, error) {
@@ -48,6 +47,9 @@ func (stub *shellHTTPStub) Execute(context.Context, string, ...int) (store.PlanR
 func (stub *shellHTTPStub) StopExecution(context.Context, string, int) (store.PlanRecord, error) {
 	return stub.plan, stub.err
 }
+func (stub *shellHTTPStub) ShellRun(context.Context, string) (store.ShellRunRecord, error) {
+	return stub.run, stub.err
+}
 func (stub *shellHTTPStub) ShellChanges(_ context.Context, planID string, limit, offset int) (store.ShellChangePage, error) {
 	stub.listCalls++
 	stub.planID, stub.limit, stub.offset = planID, limit, offset
@@ -58,12 +60,6 @@ func (stub *shellHTTPStub) PreviewShellChange(_ context.Context, planID, changeI
 	stub.planID, stub.changeID = planID, changeID
 	return stub.preview, stub.err
 }
-func (stub *shellHTTPStub) DecideShellChange(_ context.Context, planID, changeID, decision string, version int) (store.PlanRecord, error) {
-	stub.approvalCalls++
-	stub.planID, stub.changeID, stub.decision, stub.version = planID, changeID, decision, version
-	return stub.plan, stub.err
-}
-
 func TestListAgentShellChangesSerializesReviewContractAndDisablesCache(t *testing.T) {
 	mode := uint32(0o640)
 	stub := &shellHTTPStub{page: store.ShellChangePage{
@@ -164,57 +160,32 @@ func TestPreviewAgentShellChangeIsNoStoreAndReturnsTextOnlyOnDemand(t *testing.T
 	}
 }
 
-func TestAgentShellApprovalValidatesRequestAndReturnsStandardPlan(t *testing.T) {
-	stub := &shellHTTPStub{plan: store.PlanRecord{
-		ID: "plan-1", TaskID: "task-1", Version: 4, Status: store.PlanAwaitingApproval,
-		Operations: []store.OperationRecord{},
+func TestAgentPlanResponseOmitsShellOutput(t *testing.T) {
+	plan := store.PlanRecord{
+		ID: "plan-1", TaskID: "task-1", Version: 1,
+		Operations: []store.OperationRecord{{ID: "operation-1", Action: "run_shell"}},
+	}
+	stub := &shellHTTPStub{plan: plan, run: store.ShellRunRecord{
+		PlanID: plan.ID, OperationID: "operation-1", Command: "printf ok", WorkingDirectory: ".",
+		OutputDiscarded: true, ExitCode: 0,
 	}}
-	request := httptest.NewRequest(http.MethodPost, "http://filesage.local/api/v1/agent/plans/plan-1/shell-changes/change-1/approval", strings.NewReader(`{"decision":"approve","expectedPlanVersion":3}`))
-	request.Header.Set("Origin", "http://filesage.local")
-	request.SetPathValue("planId", "plan-1")
-	request.SetPathValue("changeId", "change-1")
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent/plans/plan-1", nil)
 	response := httptest.NewRecorder()
-	(&API{agent: stub}).decideAgentShellChange(response, request)
-	if response.Code != http.StatusOK || stub.approvalCalls != 1 || stub.decision != "approve" || stub.version != 3 {
-		t.Fatalf("response=%d calls=%d decision=%q version=%d body=%s", response.Code, stub.approvalCalls, stub.decision, stub.version, response.Body.String())
+	(&API{agent: stub}).writeAgentPlanResponse(response, request, plan)
+	if response.Code != http.StatusOK {
+		t.Fatalf("response=%d body=%s", response.Code, response.Body.String())
 	}
-	var plan map[string]json.RawMessage
-	if err := json.Unmarshal(response.Body.Bytes(), &plan); err != nil {
-		t.Fatal(err)
+	var body struct {
+		Operations []struct {
+			ExitCode        int  `json:"exitCode"`
+			OutputDiscarded bool `json:"outputDiscarded"`
+		} `json:"operations"`
 	}
-	for _, name := range []string{"taskId", "planId", "planVersion", "status", "stopRequested", "proposalSource", "operations"} {
-		if _, ok := plan[name]; !ok {
-			t.Fatalf("standard plan response missing %q: %s", name, response.Body.String())
-		}
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Operations) != 1 {
+		t.Fatalf("decode response = (%#v, %v)", body, err)
 	}
-}
-
-func TestAgentShellApprovalRejectsInvalidBodiesAndCrossOrigin(t *testing.T) {
-	for _, test := range []struct {
-		name   string
-		body   string
-		origin string
-		status int
-	}{
-		{name: "decision", body: `{"decision":"maybe","expectedPlanVersion":1}`, status: http.StatusBadRequest},
-		{name: "version", body: `{"decision":"approve","expectedPlanVersion":0}`, status: http.StatusBadRequest},
-		{name: "unknown-field", body: `{"decision":"approve","expectedPlanVersion":1,"actor":"admin"}`, status: http.StatusBadRequest},
-		{name: "cross-origin", body: `{"decision":"approve","expectedPlanVersion":1}`, origin: "https://elsewhere.example", status: http.StatusForbidden},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			stub := &shellHTTPStub{}
-			request := httptest.NewRequest(http.MethodPost, "http://filesage.local/api/v1/agent/plans/plan-1/shell-changes/change-1/approval", strings.NewReader(test.body))
-			if test.origin != "" {
-				request.Header.Set("Origin", test.origin)
-			}
-			request.SetPathValue("planId", "plan-1")
-			request.SetPathValue("changeId", "change-1")
-			response := httptest.NewRecorder()
-			(&API{agent: stub}).decideAgentShellChange(response, request)
-			if response.Code != test.status || stub.approvalCalls != 0 {
-				t.Fatalf("response=%d calls=%d body=%s", response.Code, stub.approvalCalls, response.Body.String())
-			}
-		})
+	if body.Operations[0].ExitCode != 0 || !body.Operations[0].OutputDiscarded || strings.Contains(response.Body.String(), "stdout") || strings.Contains(response.Body.String(), "stderr") {
+		t.Fatalf("Shell output was not omitted: %s", response.Body.String())
 	}
 }
 

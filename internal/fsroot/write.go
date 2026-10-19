@@ -43,6 +43,9 @@ func (r *Root) MkdirAllNoFollow(rel string, perm fs.FileMode) ([]string, error) 
 	if err := validatePermissionMode(perm); err != nil {
 		return nil, err
 	}
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return nil, err
+	}
 	return platformMkdirAllNoFollow(r, rel, perm)
 }
 
@@ -177,6 +180,9 @@ func (r *Root) WriteAtomicIfUnchanged(rel string, expected Fingerprint, data []b
 	if err := validatePermissionMode(perm); err != nil {
 		return err
 	}
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return err
+	}
 	if !atomicWriteSupported() {
 		return fmt.Errorf("write %q: %w", rel, ErrAtomicWriteUnsupported)
 	}
@@ -273,6 +279,9 @@ func validatePermissionMode(perm fs.FileMode) error {
 }
 
 func (r *Root) rejectSymlinkParents(rel string) error {
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return err
+	}
 	parent := path.Dir(rel)
 	if parent == "." {
 		return nil

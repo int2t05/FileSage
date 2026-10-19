@@ -23,11 +23,16 @@ func TestStoreMigratesAndPersistsMetadataAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
+	t.Cleanup(func() {
+		if db != nil {
+			_ = db.Close()
+		}
+	})
 	if err := db.Health(ctx); err != nil {
 		t.Fatalf("Health() error = %v", err)
 	}
-	if version, err := db.SchemaVersion(ctx); err != nil || version != 24 {
-		t.Fatalf("SchemaVersion() = (%d, %v), want (24, nil)", version, err)
+	if version, err := db.SchemaVersion(ctx); err != nil || version != 27 {
+		t.Fatalf("SchemaVersion() = (%d, %v), want (27, nil)", version, err)
 	}
 
 	if err := db.UpsertFileIndex(ctx, store.FileIndexRecord{
@@ -130,14 +135,14 @@ func TestStoreMigratesAndPersistsMetadataAcrossReopen(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
+	db = nil
 
 	db, err = store.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatalf("reopen Open() error = %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	if version, err := db.SchemaVersion(ctx); err != nil || version != 24 {
-		t.Fatalf("reopened SchemaVersion() = (%d, %v), want (24, nil)", version, err)
+	if version, err := db.SchemaVersion(ctx); err != nil || version != 27 {
+		t.Fatalf("reopened SchemaVersion() = (%d, %v), want (27, nil)", version, err)
 	}
 
 	fileRecord, err := db.FileIndex(ctx, "documents/contract.pdf")
@@ -293,6 +298,7 @@ func TestTrashStateSequenceMigrationUsesExistingAuditBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, statement := range []string{
+		"DROP TABLE agent_settings",
 		"DROP TABLE duplicate_scan_files",
 		"DROP TABLE duplicate_scan_groups",
 		"DROP TABLE duplicate_scan_runs",
@@ -304,6 +310,8 @@ func TestTrashStateSequenceMigrationUsesExistingAuditBoundary(t *testing.T) {
 		"DROP TABLE shell_changes",
 		"DROP TABLE shell_runs",
 		"ALTER TABLE plans DROP COLUMN stop_requested",
+		"ALTER TABLE plans DROP COLUMN reviewed_at_ns",
+		"ALTER TABLE plans DROP COLUMN execution_mode",
 		"DELETE FROM schema_migrations WHERE version >= 3",
 	} {
 		if _, err := rawDB.ExecContext(ctx, statement); err != nil {

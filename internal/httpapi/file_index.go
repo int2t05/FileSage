@@ -109,6 +109,10 @@ func (api *API) listFilePage(w http.ResponseWriter, r *http.Request) {
 			query.state = "stale"
 		}
 		if err != nil {
+			if errors.Is(err, fsroot.ErrVolumeUnavailable) {
+				writeFileError(w, err)
+				return
+			}
 			if errors.Is(err, store.ErrFileIndexCaptureMetadataUnavailable) {
 				writeError(w, http.StatusServiceUnavailable, "拍摄日期排序和筛选需要完成一次新的文件索引，请稍后重试。")
 				return
@@ -366,6 +370,9 @@ func (api *API) indexedPage(ctx context.Context, query filePageQuery) ([]filePag
 	}
 	if query.path != "" {
 		parent, err := filesystem.LstatEntry(query.path)
+		if err == nil && parent.MountUnavailable {
+			return nil, false, query.offset, false, fsroot.ErrVolumeUnavailable
+		}
 		if err != nil || parent.Symlink {
 			if query.needsCapturedDateIndex() {
 				return nil, false, query.offset, false, errCapturedDateIndexUnavailable
@@ -414,7 +421,7 @@ func (api *API) indexedPage(ctx context.Context, query filePageQuery) ([]filePag
 				return entries, true, nextOffset, indexChanged, nil
 			}
 			entry, err := filesystem.LstatEntry(record.RelativePath)
-			if errors.Is(err, fs.ErrNotExist) {
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fsroot.ErrVolumeUnavailable) {
 				indexChanged = true
 				if !refreshRequested {
 					api.index.Refresh(context.Background())
@@ -426,6 +433,12 @@ func (api *API) indexedPage(ctx context.Context, query filePageQuery) ([]filePag
 			}
 			if err != nil {
 				return nil, false, nextOffset, indexChanged, err
+			}
+			if entry.MountUnavailable {
+				entries = append(entries, filePageEntry{entry: entry, capturedAt: record.CapturedAt})
+				nextOffset++
+				scanned++
+				continue
 			}
 			if !matchesIndexedEntry(record, entry) {
 				indexChanged = true
@@ -572,7 +585,8 @@ func toFileEntry(entry fsroot.Entry, capturedAt *time.Time) fileEntry {
 		ModifiedAt: entry.ModifiedAt.UTC().Format(time.RFC3339Nano),
 		Mode:       uint32(entry.Mode.Perm()), OwnerUID: entry.OwnerUID, GroupGID: entry.GroupGID,
 		OwnershipAvailable: entry.OwnershipAvailable, Symlink: entry.Symlink,
-		LinkStatus: entry.LinkStatus, Version: versionForEntry(entry),
+		LinkStatus: entry.LinkStatus, MountUnavailable: entry.MountUnavailable,
+		ReadOnly: entry.ReadOnly, Version: versionForEntry(entry),
 	}
 	if capturedAt != nil {
 		value := capturedAt.UTC().Format(time.RFC3339Nano)

@@ -2,7 +2,19 @@
 
 FileSage 直接读写服务器原生文件系统。首次部署先使用独立测试目录验证路径、挂载和账户权限，再指向个人数据。
 
-## 构建
+## 安装 Release 包
+
+Release 包适用于 Linux amd64，不需要在服务器安装 Go 或 Node.js。从 [GitHub Releases](https://github.com/int2t05/FileSage/releases) 下载 tar 包和校验文件，放在同一目录后先校验再解压：
+
+```sh
+sha256sum -c filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
+tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
+cd filesage_vX.Y.Z_linux_amd64
+```
+
+包内含 `filesage`、预构建页面 `web/`、systemd 模板、环境示例、部署说明和许可证文件。推送已审阅的 `vMAJOR.MINOR.PATCH` 标签会触发构建和发布；当前仓库尚无稳定版 Release。
+
+## 从源码构建
 
 需要 Go 1.27.2 或更新版本、Node.js 24 和 npm：
 
@@ -22,7 +34,7 @@ go build -o ./filesage ./cmd/filesage
 | --- | --- | --- |
 | `FILESAGE_ROOT` | 是 | 已存在的绝对路径；服务只能管理此目录树内文件。独立磁盘可挂载到该树下。 |
 | `FILESAGE_DATA_DIR` | 是 | SQLite 和上传暂存目录；必须位于管理根目录之外。 |
-| `FILESAGE_WEB_DIR` | 否 | React 构建目录，通常为 `web/dist`；设置后由 Go 同源托管页面和 API。 |
+| `FILESAGE_WEB_DIR` | 否 | 页面目录；源码构建时通常为 `web/dist`，systemd 示例使用 `/usr/local/lib/filesage/web`。设置后由 Go 同源托管页面和 API。 |
 | `FILESAGE_LISTEN_ADDR` | 否 | 监听地址，默认 `127.0.0.1:8080`。只允许回环、私有或链路本地 IP。 |
 | `FILESAGE_ALLOWED_HOSTS` | 否 | 逗号分隔的额外主机名／IP，不带端口。 |
 | `FILESAGE_AGENT_BASE_URL` | 否 | OpenAI-compatible Chat Completions 根地址；远程地址须用 HTTPS。 |
@@ -55,11 +67,13 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
 sudo useradd --system --user-group --home-dir /var/lib/filesage --no-create-home --shell /usr/sbin/nologin filesage
 sudo install -d -o root -g root -m 0755 /usr/local/lib/filesage/web
 sudo install -o root -g root -m 0755 ./filesage /usr/local/lib/filesage/filesage
-sudo cp -R web/dist/. /usr/local/lib/filesage/web/
+sudo cp -R web/. /usr/local/lib/filesage/web/
 sudo install -d -o root -g root -m 0755 /etc/filesage
 sudo install -o root -g root -m 0600 deploy/filesage.env.example /etc/filesage/filesage.env
 sudoedit /etc/filesage/filesage.env
 ```
+
+从源码目录部署时，将复制命令中的 `web/` 改为 `web/dist/`。
 
 只对专为 FileSage 新建的目录授予所有权：
 
@@ -82,6 +96,23 @@ sudo systemctl status filesage.service
 ```
 
 更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。检查日志：`sudo journalctl -u filesage.service`。
+
+## 更新版本
+
+保持现有环境文件、管理根目录和数据目录不变。更新前停止服务，再替换二进制和 Web 文件；随后启动并检查健康接口与服务日志：
+
+```sh
+sudo systemctl stop filesage.service
+sudo install -o root -g root -m 0755 ./filesage /usr/local/lib/filesage/filesage
+sudo cp -R web/. /usr/local/lib/filesage/web/
+sudo systemctl start filesage.service
+curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
+sudo journalctl -u filesage.service -n 100 --no-pager
+```
+
+若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。迁移后的旧二进制可能不兼容新 schema；若启动失败，应保留日志并修复前向版本，不要直接回退旧二进制。v27 会清除历史 Shell 输出，并从 SQLite WAL 中截断旧页。
+
+从源码目录更新时，将复制命令中的 `web/` 改为 `web/dist/`。
 
 ## 可选工具
 
