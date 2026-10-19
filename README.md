@@ -70,9 +70,12 @@ npm ci
 npm test
 npm run typecheck
 npm run build
+npx playwright install chromium
+npm run e2e
 ```
 
-The same checks run in [GitHub Actions](.github/workflows/ci.yml).
+The browser test uses a local mock model and temporary files/database. The same
+checks run in [GitHub Actions](.github/workflows/ci.yml).
 
 ## Project docs
 
