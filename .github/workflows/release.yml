@@ -47,6 +47,8 @@ jobs:
           npm test
           npm run typecheck
           npm run build
+          npx playwright install --with-deps chromium
+          npm run e2e
       - name: Package release
         id: package
         run: |
