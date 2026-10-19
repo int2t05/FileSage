@@ -3,6 +3,7 @@ package fsroot
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -254,14 +255,69 @@ func (r *Root) WriteAtomicIfUnchanged(rel string, expected Fingerprint, data []b
 		if err := platformRenameNoReplace(r, tempRel, rel); err != nil {
 			return fmt.Errorf("publish new file %q: %w", rel, err)
 		}
-	} else if err := r.root.Rename(tempRel, rel); err != nil {
-		if errors.Is(err, fs.ErrExist) {
-			return conflictError("replace", rel, err)
+	} else {
+		expectedDigest, err := r.digestIfUnchanged(rel, expected)
+		if err != nil {
+			return err
 		}
-		return fmt.Errorf("replace %q: %w", rel, err)
+		candidateDigest := sha256.Sum256(data)
+		if err := platformReplaceAtomicIfUnchanged(r, rel, tempRel, expected, expectedDigest, candidateDigest, int64(len(data)), perm.Perm()); err != nil {
+			var recovery *WriteRecoveryError
+			if errors.As(err, &recovery) {
+				removeTemp = false
+			}
+			return err
+		}
 	}
 	removeTemp = false
 	return nil
+}
+
+// WriteRecoveryError 表示冲突文件已保留在管理根目录内的临时路径。
+type WriteRecoveryError struct {
+	Path  string
+	Cause error
+}
+
+func (e *WriteRecoveryError) Error() string {
+	return fmt.Sprintf("write needs manual recovery at %q: %v", e.Path, e.Cause)
+}
+
+func (e *WriteRecoveryError) Unwrap() error { return e.Cause }
+
+// digestIfUnchanged 在内容摘要前后复核文件身份与路径状态。
+func (r *Root) digestIfUnchanged(rel string, expected Fingerprint) ([32]byte, error) {
+	if err := r.checkFingerprint(rel, expected); err != nil {
+		return [32]byte{}, err
+	}
+	file, err := r.root.Open(rel)
+	if err != nil {
+		return [32]byte{}, fmt.Errorf("open write source %q: %w", rel, err)
+	}
+	defer file.Close()
+	before, err := file.Stat()
+	if err != nil || !sameFingerprint(fingerprintFromInfo(before), expected) {
+		return [32]byte{}, conflictError("read write source", rel, err)
+	}
+	digest := sha256.New()
+	if _, err := io.CopyN(digest, file, expected.Size); err != nil {
+		return [32]byte{}, conflictError("read write source", rel, err)
+	}
+	after, err := file.Stat()
+	if err != nil || !sameFingerprint(fingerprintFromInfo(after), expected) {
+		return [32]byte{}, conflictError("read write source", rel, err)
+	}
+	if err := r.checkFingerprint(rel, expected); err != nil {
+		return [32]byte{}, err
+	}
+	var result [32]byte
+	copy(result[:], digest.Sum(nil))
+	return result, nil
+}
+
+func sameFingerprintAfterRename(current, expected Fingerprint) bool {
+	current.ChangeTime = expected.ChangeTime
+	return sameFingerprint(current, expected)
 }
 
 func validateMutationPath(rel string) error {

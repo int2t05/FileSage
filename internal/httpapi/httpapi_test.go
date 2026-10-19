@@ -37,6 +37,20 @@ func newTestHandler(t *testing.T) http.Handler {
 	return New(root, nil)
 }
 
+func TestWriteFileErrorReportsPreservedRecoveryPath(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeFileError(response, &fsroot.WriteRecoveryError{
+		Path:  "notes/.filesage-write-0123456789abcdef",
+		Cause: errors.Join(fsroot.ErrConflict, errors.New("rollback failed")),
+	})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+	}
+	if !strings.Contains(response.Body.String(), "notes/.filesage-write-0123456789abcdef") {
+		t.Fatalf("recovery path missing from response: %s", response.Body.String())
+	}
+}
+
 func TestListFilesReturnsRealDirectoryEntries(t *testing.T) {
 	handler := newTestHandler(t)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/files", nil)

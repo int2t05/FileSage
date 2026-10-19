@@ -15,6 +15,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -272,6 +273,105 @@ func TestWriteAtomicIfUnchangedDetectsRestoredModTime(t *testing.T) {
 	}
 	if string(content) != "second" {
 		t.Fatalf("external content changed to %q", content)
+	}
+}
+
+func TestReplaceAtomicIfUnchangedPreservesReplacementAtPublishBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mutate     func(string, string, time.Time) error
+		wantDigest []byte
+	}{
+		{
+			name: "path replacement",
+			mutate: func(rootPath, target string, _ time.Time) error {
+				replacement := filepath.Join(rootPath, "replacement.txt")
+				if err := os.WriteFile(replacement, []byte("external update"), 0o640); err != nil {
+					return err
+				}
+				return os.Rename(replacement, target)
+			},
+			wantDigest: []byte("external update"),
+		},
+		{
+			name: "same-size in-place update with restored mtime",
+			mutate: func(_, target string, modified time.Time) error {
+				if err := os.WriteFile(target, []byte("edited!"), 0o640); err != nil {
+					return err
+				}
+				return os.Chtimes(target, modified, modified)
+			},
+			wantDigest: []byte("edited!"),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootPath := t.TempDir()
+			target := filepath.Join(rootPath, "note.txt")
+			const original = "initial"
+			const candidate = "approved"
+			if err := os.WriteFile(target, []byte(original), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			root, err := Open(rootPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			entry, err := root.LstatEntry("note.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			modified := entry.ModifiedAt
+			tempRel := ".filesage-write-test"
+			if err := os.WriteFile(filepath.Join(rootPath, tempRel), []byte(candidate), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.mutate(rootPath, target, modified); err != nil {
+				t.Fatal(err)
+			}
+
+			err = platformReplaceAtomicIfUnchanged(root, "note.txt", tempRel, entry.Fingerprint(), sha256.Sum256([]byte(original)), sha256.Sum256([]byte(candidate)), int64(len(candidate)), 0o600)
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("publish error = %v, want ErrConflict", err)
+			}
+			if got, err := os.ReadFile(target); err != nil || string(got) != string(test.wantDigest) {
+				t.Fatalf("external file = (%q, %v), want %q", got, err, test.wantDigest)
+			}
+			if got, err := os.ReadFile(filepath.Join(rootPath, tempRel)); err != nil || string(got) != candidate {
+				t.Fatalf("candidate after rollback = (%q, %v), want %q", got, err, candidate)
+			}
+		})
+	}
+}
+
+func TestReplaceAtomicIfUnchangedPublishesExpectedVersion(t *testing.T) {
+	rootPath := t.TempDir()
+	target := filepath.Join(rootPath, "note.txt")
+	const original = "initial"
+	const candidate = "approved"
+	if err := os.WriteFile(target, []byte(original), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPath, ".filesage-write-test"), []byte(candidate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	entry, err := root.LstatEntry("note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platformReplaceAtomicIfUnchanged(root, "note.txt", ".filesage-write-test", entry.Fingerprint(), sha256.Sum256([]byte(original)), sha256.Sum256([]byte(candidate)), int64(len(candidate)), 0o600); err != nil {
+		t.Fatalf("publish expected version: %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != candidate {
+		t.Fatalf("published file = (%q, %v), want %q", got, err, candidate)
+	}
+	if _, err := os.Lstat(filepath.Join(rootPath, ".filesage-write-test")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaced source remains at staging path: %v", err)
 	}
 }
 

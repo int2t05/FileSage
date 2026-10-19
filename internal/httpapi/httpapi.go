@@ -1913,6 +1913,11 @@ func versionForEntry(entry fsroot.Entry) string {
 }
 
 func writeFileError(w http.ResponseWriter, err error) {
+	var recovery *fsroot.WriteRecoveryError
+	if errors.As(err, &recovery) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("文件状态冲突；待核查文件保留在管理目录内的 %q。", recovery.Path))
+		return
+	}
 	switch {
 	case errors.Is(err, fsroot.ErrVolumeUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "管理卷暂不可用，请确认磁盘已挂载后重试")
