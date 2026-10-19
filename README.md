@@ -26,8 +26,10 @@ remaining checks.
   EPUB and archive formats in the browser. Unsupported or complex files remain
   available for download.
 - Ask an OpenAI-compatible model to analyze an explicitly confirmed scope.
-  Review each proposed operation, approve it, confirm execution and inspect the
-  audit history.
+  Review the complete plan once. `bypasspermission` is on by default and runs
+  steps in order; turn it off in Agent settings to run one step at a time.
+  Expand a step to inspect its command, exit code and file diff, then check the
+  audit history. Raw Shell output is discarded rather than stored or returned.
 - Keep SQLite task and search metadata outside the managed files. The filesystem remains the source of truth.
 
 ## Quick start

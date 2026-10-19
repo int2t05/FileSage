@@ -58,6 +58,8 @@ var (
 	ErrNestedMount = errors.New("directory contains a nested mount")
 	// ErrMountRoot 表示不能移动或清理挂载根目录本身。
 	ErrMountRoot = errors.New("mount root cannot be moved or purged")
+	// ErrVolumeUnavailable 表示启动时登记的子卷当前不可用。
+	ErrVolumeUnavailable = errors.New("registered volume is unavailable")
 	// ErrWatchUnsupported 表示当前平台没有安全目录监听实现。
 	ErrWatchUnsupported = errors.New("safe filesystem watch unsupported")
 )
@@ -96,6 +98,10 @@ type Entry struct {
 	Symlink    bool        `json:"symlink"`
 	LinkStatus LinkStatus  `json:"linkStatus,omitempty"`
 	LinkTarget string      `json:"linkTarget,omitempty"`
+	// MountUnavailable 标记已登记但当前缺失的卷入口。
+	MountUnavailable bool `json:"mountUnavailable,omitempty"`
+	// ReadOnly 禁止在当前条目上执行文件变更。
+	ReadOnly bool `json:"readOnly,omitempty"`
 
 	Device             uint64 `json:"device,omitempty"`
 	Inode              uint64 `json:"inode,omitempty"`
@@ -155,8 +161,14 @@ func (e Entry) Fingerprint() Fingerprint {
 
 // Root 持有根目录句柄，并将文件操作限制在其目录树内。
 type Root struct {
-	root     *os.Root
-	rootPath string
+	root             *os.Root
+	rootPath         string
+	registeredMounts []registeredMount
+}
+
+type registeredMount struct {
+	path string
+	id   uint64
 }
 
 const maxSymlinkHops = 128
@@ -193,7 +205,13 @@ func Open(rootPath string) (*Root, error) {
 		_ = root.Close()
 		return nil, fmt.Errorf("resolve filesystem root path: %w", err)
 	}
-	return &Root{root: root, rootPath: filepath.Clean(resolved)}, nil
+	canonicalRoot := filepath.Clean(resolved)
+	registeredMounts, err := platformRegisterMounts(canonicalRoot)
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("inspect mounted volumes: %w", err)
+	}
+	return &Root{root: root, rootPath: canonicalRoot, registeredMounts: registeredMounts}, nil
 }
 
 // Close 释放根目录句柄。
@@ -249,6 +267,9 @@ func (r *Root) list(rel string, limit int) ([]Entry, error) {
 	if !os.SameFile(resolved.info, openedInfo) {
 		return nil, fmt.Errorf("list %q: %w", rel, ErrPathChanged)
 	}
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return nil, err
+	}
 
 	readLimit := -1
 	if limit > 0 {
@@ -264,18 +285,42 @@ func (r *Root) list(rel string, limit int) ([]Entry, error) {
 	sort.Slice(children, func(i, j int) bool { return children[i].Name() < children[j].Name() })
 
 	entries := make([]Entry, 0, len(children))
+	seen := make(map[string]struct{}, len(children))
 	for _, child := range children {
 		name := child.Name()
 		if name == TrashDirectoryName || isArchiveStageComponent(name) {
 			continue
 		}
 		childPath := path.Join(rel, name)
+		seen[childPath] = struct{}{}
 		info, err := r.root.Lstat(childPath)
 		if err != nil {
 			return nil, fmt.Errorf("inspect entry %q: %w", childPath, err)
 		}
-		entries = append(entries, r.entry(name, childPath, info))
+		entry := r.entry(name, childPath, info)
+		if mount, exists := r.registeredMountAt(childPath); exists {
+			if err := r.checkRegisteredMount(mount); errors.Is(err, ErrVolumeUnavailable) {
+				markUnavailableVolume(&entry)
+			} else if err != nil {
+				return nil, fmt.Errorf("inspect mounted volume %q: %w", childPath, err)
+			}
+		}
+		entries = append(entries, entry)
 	}
+	for _, mount := range r.registeredMounts {
+		if relativeParent(mount.path) != rel {
+			continue
+		}
+		if _, exists := seen[mount.path]; exists {
+			continue
+		}
+		if err := r.checkRegisteredMount(mount); errors.Is(err, ErrVolumeUnavailable) {
+			entries = append(entries, unavailableVolumeEntry(mount.path))
+		} else if err != nil {
+			return nil, fmt.Errorf("inspect mounted volume %q: %w", mount.path, err)
+		}
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	return entries, nil
 }
 
@@ -286,6 +331,19 @@ func (r *Root) LstatEntry(rel string) (Entry, error) {
 	}
 	if hasTrashComponent(rel) {
 		return Entry{}, ErrInvalidPath
+	}
+	if mount, exact := r.registeredMountAt(rel); exact {
+		if err := r.checkRegisteredMount(mount); errors.Is(err, ErrVolumeUnavailable) {
+			info, statErr := r.root.Lstat(rel)
+			if statErr != nil {
+				return unavailableVolumeEntry(rel), nil
+			}
+			entry := r.entry(path.Base(rel), rel, info)
+			markUnavailableVolume(&entry)
+			return entry, nil
+		} else if err != nil {
+			return Entry{}, err
+		}
 	}
 	if err := r.rejectSymlinkParents(rel); err != nil {
 		return Entry{}, err
@@ -319,6 +377,9 @@ func (r *Root) OpenRead(rel string) (io.ReadCloser, Entry, error) {
 	}
 	if hasTrashComponent(rel) {
 		return nil, Entry{}, ErrInvalidPath
+	}
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return nil, Entry{}, err
 	}
 	if rel == "" {
 		return nil, Entry{}, fmt.Errorf("open read %q: %w", rel, ErrNotRegularFile)
@@ -378,6 +439,9 @@ type pathResolution struct {
 
 // resolvePath 逐段解析软链接，仅用于分类和读取元数据。
 func (r *Root) resolvePath(rel string) (pathResolution, error) {
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return pathResolution{}, err
+	}
 	candidate := rel
 	seenLinks := make(map[string]struct{})
 	hadLink := false
@@ -386,6 +450,9 @@ func (r *Root) resolvePath(rel string) (pathResolution, error) {
 	requiredTargetComponents := 0
 
 	for range maxSymlinkHops {
+		if err := r.checkVolumeAvailability(candidate); err != nil {
+			return pathResolution{}, err
+		}
 		components := splitRelativeComponents(candidate)
 		if len(components) == 0 {
 			info, err := r.root.Stat(".")
@@ -448,6 +515,67 @@ func (r *Root) resolvePath(rel string) (pathResolution, error) {
 		}
 	}
 	return pathResolution{}, fmt.Errorf("%w: too many symbolic links in %q", ErrLinkCycle, rel)
+}
+
+// registeredMountForPath 返回覆盖路径的最深登记卷。
+func registeredMountForPath(mounts []registeredMount, rel string) (registeredMount, bool) {
+	var matched registeredMount
+	found := false
+	for _, mount := range mounts {
+		if rel == mount.path || strings.HasPrefix(rel, mount.path+"/") {
+			if !found || len(mount.path) > len(matched.path) {
+				matched = mount
+				found = true
+			}
+		}
+	}
+	return matched, found
+}
+
+// registeredMountAt 匹配恰好位于已登记卷根的路径。
+func (r *Root) registeredMountAt(rel string) (registeredMount, bool) {
+	for _, mount := range r.registeredMounts {
+		if rel == mount.path {
+			return mount, true
+		}
+	}
+	return registeredMount{}, false
+}
+
+// checkVolumeAvailability 对登记卷按挂载实例 ID 复核，避免访问到底层空目录。
+func (r *Root) checkVolumeAvailability(rel string) error {
+	mount, ok := registeredMountForPath(r.registeredMounts, rel)
+	if !ok {
+		return nil
+	}
+	return r.checkRegisteredMount(mount)
+}
+
+func (r *Root) checkRegisteredMount(mount registeredMount) error {
+	currentID, err := platformMountIDAt(r.rootPath, mount.path)
+	if err != nil || currentID != mount.id {
+		return fmt.Errorf("volume %q: %w", mount.path, ErrVolumeUnavailable)
+	}
+	return nil
+}
+
+func markUnavailableVolume(entry *Entry) {
+	entry.MountUnavailable = true
+	entry.ReadOnly = true
+}
+
+func unavailableVolumeEntry(rel string) Entry {
+	entry := Entry{Name: path.Base(rel), Path: rel, Kind: KindDirectory}
+	markUnavailableVolume(&entry)
+	return entry
+}
+
+func relativeParent(rel string) string {
+	parent := path.Dir(rel)
+	if parent == "." {
+		return ""
+	}
+	return parent
 }
 
 func (r *Root) entry(name, rel string, info fs.FileInfo) Entry {

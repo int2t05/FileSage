@@ -72,6 +72,9 @@ func (r *Root) walkFrom(ctx context.Context, scopePath, excludedPath string, vis
 	if err := r.verifyRootPath(); err != nil {
 		return fmt.Errorf("verify walk root: %w", err)
 	}
+	if err := r.checkVolumeAvailability(scopePath); err != nil {
+		return err
+	}
 
 	directory, err := openWalkPath(r.root, scopePath)
 	if err != nil {
@@ -128,6 +131,9 @@ func (r *Root) walkDirectory(ctx context.Context, directory *os.File, relativePa
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if err := r.verifyWalkVolume(directory, relativePath); err != nil {
+		return err
+	}
 	initial, err := directory.Stat()
 	if err != nil {
 		return fmt.Errorf("inspect directory %q: %w", relativePath, err)
@@ -136,6 +142,7 @@ func (r *Root) walkDirectory(ctx context.Context, directory *os.File, relativePa
 		return fmt.Errorf("inspect directory %q: %w", relativePath, ErrNotDirectory)
 	}
 
+	seen := make(map[string]struct{})
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -153,12 +160,28 @@ func (r *Root) walkDirectory(ctx context.Context, directory *os.File, relativePa
 				continue
 			}
 			childPath := path.Join(relativePath, name)
+			seen[childPath] = struct{}{}
 			if err := r.walkEntry(ctx, directory, name, childPath, excludedPath, visit); err != nil {
 				return err
 			}
 		}
 		if errors.Is(readErr, io.EOF) || len(children) == 0 {
 			break
+		}
+	}
+	for _, mount := range r.registeredMounts {
+		if relativeParent(mount.path) != relativePath || mount.path == excludedPath {
+			continue
+		}
+		if _, exists := seen[mount.path]; exists {
+			continue
+		}
+		if err := r.checkRegisteredMount(mount); errors.Is(err, ErrVolumeUnavailable) {
+			if err := visitWalkEntry(ctx, visit, unavailableVolumeEntry(mount.path)); err != nil {
+				return err
+			}
+		} else if err != nil {
+			return fmt.Errorf("inspect mounted volume %q: %w", mount.path, err)
 		}
 	}
 
@@ -175,13 +198,44 @@ func (r *Root) walkDirectory(ctx context.Context, directory *os.File, relativePa
 	return nil
 }
 
+// verifyWalkVolume 在遍历目录前同时核验路径与已打开句柄的挂载实例。
+func (r *Root) verifyWalkVolume(directory *os.File, relativePath string) error {
+	volume, isMountRoot := r.registeredMountAt(relativePath)
+	if !isMountRoot {
+		return r.checkVolumeAvailability(relativePath)
+	}
+	if err := r.checkRegisteredMount(volume); err != nil {
+		return err
+	}
+	currentID, err := platformMountIDForFD(directory.Fd())
+	if err != nil || currentID != volume.id {
+		return fmt.Errorf("volume %q: %w", relativePath, ErrVolumeUnavailable)
+	}
+	return nil
+}
+
 func (r *Root) walkEntry(ctx context.Context, parent *os.File, name, relativePath, excludedPath string, visit func(Entry) error) error {
 	if relativePath == excludedPath {
 		return nil
 	}
+	volume, isMountRoot := r.registeredMountAt(relativePath)
+	if isMountRoot {
+		if err := r.checkRegisteredMount(volume); errors.Is(err, ErrVolumeUnavailable) {
+			return visitWalkEntry(ctx, visit, unavailableVolumeEntry(relativePath))
+		} else if err != nil {
+			return fmt.Errorf("inspect mounted volume %q: %w", relativePath, err)
+		}
+	}
 	identityFile, err := openWalkIdentity(parent, name)
 	if err != nil {
 		return fmt.Errorf("open entry %q: %w", relativePath, err)
+	}
+	if isMountRoot {
+		currentID, err := platformMountIDForFD(identityFile.Fd())
+		if err != nil || currentID != volume.id {
+			_ = identityFile.Close()
+			return visitWalkEntry(ctx, visit, unavailableVolumeEntry(relativePath))
+		}
 	}
 	info, err := identityFile.Stat()
 	if err != nil {
@@ -294,6 +348,9 @@ func (r *Root) OpenReadNoFollow(relativePath string) (io.ReadCloser, Entry, erro
 		return nil, Entry{}, ErrInvalidPath
 	}
 	if err := r.verifyRootPath(); err != nil {
+		return nil, Entry{}, err
+	}
+	if err := r.checkVolumeAvailability(relativePath); err != nil {
 		return nil, Entry{}, err
 	}
 	components := strings.Split(relativePath, "/")

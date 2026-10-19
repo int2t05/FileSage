@@ -33,6 +33,6 @@ describe('文件页软链接状态', () => {
     assert.match(linkStatusDescription('dangling'), /目标不存在，无法访问/);
     assert.match(linkStatusDescription(undefined), /状态未知，已禁止跟随/);
     assert.match(source, /linkStatusLabel\(entry\.linkStatus\)/);
-    assert.match(source, /linkStatusDescription\(activeEntry\.linkStatus\)/);
+    assert.match(source, /linkStatusDescription\(entry\.linkStatus\)/);
   });
 });

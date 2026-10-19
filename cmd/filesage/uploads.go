@@ -16,6 +16,7 @@ import (
 	"path"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"filesage/internal/coordination"
@@ -908,6 +909,8 @@ func (manager *publicationManager) safePublicationError(err error) string {
 		return "目标状态发生变化，发布未完成。"
 	case errors.Is(err, fsroot.ErrNotDirectory):
 		return "目标路径中的目录不存在或不是文件夹。"
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		return "服务器存储空间或配额不足，文件未发布；完整暂存文件保留，清理空间或调整配额后可重试。"
 	default:
 		return "发布失败：" + strings.TrimSpace(manager.uploads.SafeErrorMessage(err))
 	}

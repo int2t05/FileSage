@@ -1160,7 +1160,8 @@ func prepareSevenZipInput(ctx context.Context, opened archiveOpened, limits Arch
 
 func sevenZipTypeFlag(format archiveFormat) string {
 	if format == archiveRAR {
-		return "-trar"
+		// RAR 的旧版与新版格式由文件签名区分。
+		return "-t*"
 	}
 	return "-t7z"
 }
@@ -1231,14 +1232,14 @@ func listSevenZip(ctx context.Context, archivePath string, extraFiles []*os.File
 	}
 	stdout := &boundedBuffer{limit: sevenZipOutputLimit}
 	stderr := &boundedBuffer{limit: 64 << 10}
-	command := exec.CommandContext(ctx, binary, "l", "-slt", "-ba", sevenZipTypeFlag(format), archivePath)
+	command := exec.CommandContext(ctx, binary, "l", "-slt", sevenZipTypeFlag(format), archivePath)
 	command.ExtraFiles = extraFiles
 	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Run(); err != nil {
 		if stdout.exceeded {
 			return nil, ErrArchiveLimitExceeded
 		}
-		return nil, classifySevenZipError(ctx, stderr.String(), err)
+		return nil, classifySevenZipListingError(ctx, stdout.String(), stderr.String(), err)
 	}
 	records := make([]ArchiveEntry, 0)
 	outputText := strings.ReplaceAll(stdout.String(), "\r\n", "\n")
@@ -1251,20 +1252,20 @@ func listSevenZip(ctx context.Context, archivePath string, extraFiles []*os.File
 			}
 			fields[key] = value
 		}
-		name, hasName := fields["Path"]
-		if !hasName || name == "" {
+		if _, isHeader := fields["Type"]; isHeader {
+			if fields["Multivolume"] == "+" {
+				return nil, ErrArchiveUnsupportedFile
+			}
 			continue
 		}
-		if _, isHeader := fields["Type"]; isHeader {
+		name, hasName := fields["Path"]
+		if !hasName || name == "" {
 			continue
 		}
 		if fields["Encrypted"] == "+" {
 			return nil, ErrArchiveEncrypted
 		}
-		_, hasSymbolicLink := fields["Symbolic Link"]
-		_, hasHardLink := fields["Hard Link"]
-		_, hasLink := fields["Link"]
-		if hasSymbolicLink || hasHardLink || hasLink {
+		if fields["Symbolic Link"] != "" || fields["Hard Link"] != "" || fields["Link"] != "" || fields["Copy Link"] != "" {
 			return nil, ErrArchiveUnsafeEntry
 		}
 		attributes := strings.TrimSpace(fields["Attributes"])
@@ -1439,10 +1440,29 @@ func classifySevenZipError(ctx context.Context, stderr string, cause error) erro
 	if strings.Contains(lower, "wrong password") || strings.Contains(lower, "password is incorrect") || strings.Contains(lower, "encrypted") {
 		return ErrArchiveEncrypted
 	}
+	if strings.Contains(lower, "unsupported method") || strings.Contains(lower, "method is not supported") {
+		return ErrArchiveUnsupportedFile
+	}
 	if strings.Contains(lower, "can not open the file as archive") || strings.Contains(lower, "is not archive") || strings.Contains(lower, "headers error") || strings.Contains(lower, "data error") || strings.Contains(lower, "unexpected end") {
 		return ErrArchiveCorrupt
 	}
 	return fmt.Errorf("7-Zip command failed: %w", ErrArchiveCorrupt)
+}
+
+func classifySevenZipListingError(ctx context.Context, stdout, stderr string, cause error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if strings.Contains(strings.ToLower(stdout), "multivolume = +") {
+		return ErrArchiveUnsupportedFile
+	}
+	for _, line := range strings.Split(stdout, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(strings.ToLower(trimmed), "error:") {
+			stderr += "\n" + trimmed
+		}
+	}
+	return classifySevenZipError(ctx, stderr, cause)
 }
 
 func classifyArchiveReadError(err error) error {

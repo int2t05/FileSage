@@ -13,16 +13,9 @@
 }
 
 .photos-header h1 {
-  margin: 4px 0 6px;
+  margin: 0;
   font-size: 26px;
   line-height: 1.25;
-}
-
-.photos-header p:last-child {
-  margin: 0;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.55;
 }
 
 .photos-refresh,
@@ -274,7 +267,6 @@
   .photos-page { gap: 16px; }
   .photos-header { align-items: flex-start; }
   .photos-header h1 { font-size: 23px; }
-  .photos-header p:last-child { max-width: 250px; font-size: 12px; }
   .photos-refresh { flex: none; min-width: 44px; padding: 0 10px; font-size: 12px; }
   .photos-filters { gap: 8px; padding: 10px; }
   .photos-filters label { flex: 1 1 130px; }

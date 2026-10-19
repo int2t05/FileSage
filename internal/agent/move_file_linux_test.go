@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -36,6 +37,9 @@ func TestMoveFileRequiresApprovalAndMovesWithinOneMount(t *testing.T) {
 	defer metadata.Close()
 
 	plan := proposeFileMove(t, ctx, service, "source/report.txt", "destination/report.txt")
+	if plan.Operations[0].Reason != "按用户确认的目标路径移动文件" {
+		t.Fatalf("move reason = %q", plan.Operations[0].Reason)
+	}
 	var parentSnapshot fsroot.Fingerprint
 	if err := json.Unmarshal([]byte(plan.Operations[0].TargetStateJSON), &parentSnapshot); err != nil || parentSnapshot.Kind != fsroot.KindDirectory {
 		t.Fatalf("target parent snapshot = (%#v, %v)", parentSnapshot, err)
@@ -53,12 +57,58 @@ func TestMoveFileRequiresApprovalAndMovesWithinOneMount(t *testing.T) {
 	if err != nil || completed.Status != store.PlanCompleted || completed.Operations[0].Status != store.OperationSucceeded {
 		t.Fatalf("Execute() = (%#v, %v)", completed, err)
 	}
+	if completed.Operations[0].ResultMessage != "文件已移动" {
+		t.Fatalf("move result message = %q, want cross-directory move wording", completed.Operations[0].ResultMessage)
+	}
 	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("move kept source: %v", err)
 	}
 	if content, err := os.ReadFile(targetPath); err != nil || string(content) != "approved move" {
 		t.Fatalf("moved content = (%q, %v)", content, err)
 	}
+}
+
+func TestMoveFileWithinDirectoryRecordsRenameWording(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	parent := filepath.Join(rootPath, "documents")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(parent, "draft.txt"), []byte("approved rename"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+
+	plan := proposeFileMove(t, ctx, service, "documents/draft.txt", "documents/final.txt")
+	if plan.Operations[0].Reason != "按用户确认的目标路径重命名文件" {
+		t.Fatalf("rename reason = %q", plan.Operations[0].Reason)
+	}
+	if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := service.Execute(ctx, plan.ID)
+	if err != nil || completed.Status != store.PlanCompleted || completed.Operations[0].Status != store.OperationSucceeded {
+		t.Fatalf("Execute() = (%#v, %v)", completed, err)
+	}
+	if completed.Operations[0].ResultMessage != "文件已重命名" {
+		t.Fatalf("rename result message = %q", completed.Operations[0].ResultMessage)
+	}
+	events, err := metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.EventType == "operation_finished" && event.OperationID == plan.Operations[0].ID {
+			if event.Message != "文件已重命名" {
+				t.Fatalf("rename audit message = %q", event.Message)
+			}
+			return
+		}
+	}
+	t.Fatal("rename operation completion audit not found")
 }
 
 func TestMoveFileAcrossMounts(t *testing.T) {
@@ -77,6 +127,14 @@ func TestMoveFileAcrossMounts(t *testing.T) {
 	if err := os.WriteFile(sourcePath, []byte(strings.Repeat("cross-mount payload ", 2048)), 0o640); err != nil {
 		t.Fatal(err)
 	}
+	inspectionRoot, err := fsroot.Open("/")
+	if err != nil {
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			t.Skipf("host denies inspection of an unrelated system mount: %v", err)
+		}
+		t.Fatal(err)
+	}
+	_ = inspectionRoot.Close()
 	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), "/")
 	defer root.Close()
 	defer metadata.Close()
@@ -396,29 +454,33 @@ func TestMoveFileRecoveryDoesNotReplayAndRequiresCertainPreconditions(t *testing
 	ctx := context.Background()
 	for _, test := range []struct {
 		name          string
+		sourcePath    string
+		targetPath    string
 		changeTarget  bool
 		wantOperation store.OperationStatus
+		wantMessage   string
 	}{
-		{name: "source unchanged and target empty", wantOperation: store.OperationPending},
-		{name: "target present is uncertain", changeTarget: true, wantOperation: store.OperationPartial},
+		{name: "source unchanged and target empty", sourcePath: "source/file.txt", targetPath: "destination/file.txt", wantOperation: store.OperationPending},
+		{name: "move target present is uncertain", sourcePath: "source/file.txt", targetPath: "destination/file.txt", changeTarget: true, wantOperation: store.OperationPartial, wantMessage: "重启后无法证明文件移动结果，源与目标需人工核查"},
+		{name: "rename target present is uncertain", sourcePath: "documents/draft.txt", targetPath: "documents/final.txt", changeTarget: true, wantOperation: store.OperationPartial, wantMessage: "重启后无法证明文件重命名结果，源与目标需人工核查"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rootPath := t.TempDir()
-			if err := os.MkdirAll(filepath.Join(rootPath, "source"), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(rootPath, test.sourcePath)), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.MkdirAll(filepath.Join(rootPath, "destination"), 0o755); err != nil {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(rootPath, test.targetPath)), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			source := filepath.Join(rootPath, "source", "file.txt")
-			target := filepath.Join(rootPath, "destination", "file.txt")
+			source := filepath.Join(rootPath, filepath.FromSlash(test.sourcePath))
+			target := filepath.Join(rootPath, filepath.FromSlash(test.targetPath))
 			if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
 			defer root.Close()
 			defer metadata.Close()
-			plan := proposeFileMove(t, ctx, service, "source/file.txt", "destination/file.txt")
+			plan := proposeFileMove(t, ctx, service, test.sourcePath, test.targetPath)
 			if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve"); err != nil {
 				t.Fatal(err)
 			}
@@ -436,6 +498,9 @@ func TestMoveFileRecoveryDoesNotReplayAndRequiresCertainPreconditions(t *testing
 			recovered, err := service.Plan(ctx, plan.ID)
 			if err != nil || recovered.Operations[0].Status != test.wantOperation {
 				t.Fatalf("recovered plan = (%#v, %v), want operation %q", recovered, err, test.wantOperation)
+			}
+			if test.wantMessage != "" && recovered.Operations[0].ResultMessage != test.wantMessage {
+				t.Fatalf("recovery message = %q, want %q", recovered.Operations[0].ResultMessage, test.wantMessage)
 			}
 			if _, err := os.Stat(source); err != nil {
 				t.Fatalf("recovery moved or removed source: %v", err)
@@ -463,6 +528,6 @@ func proposeFileMove(t *testing.T, ctx context.Context, service *Service, source
 func moveFileProposal(source, target string) Proposal {
 	return Proposal{
 		RequestText: "将文件移动到目标文件夹", ScopePath: "", Action: "move_file",
-		SourcePath: source, TargetPath: target, Reason: "按用户确认的目标路径移动文件",
+		SourcePath: source, TargetPath: target, Reason: fileMoveReason(source, target),
 	}
 }

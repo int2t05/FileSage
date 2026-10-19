@@ -1128,6 +1128,18 @@ func TestConversationAcceptsLineBreaksInModelClarification(t *testing.T) {
 	}
 }
 
+func TestConversationPromptKeepsUserFacingRepliesBrief(t *testing.T) {
+	if !strings.Contains(conversationSystemPrompt, "简洁自然") || !strings.Contains(conversationSystemPrompt, "不要复述卡片已显示") {
+		t.Fatal("conversation prompt must keep user-facing replies concise")
+	}
+	if !strings.Contains(conversationSystemPrompt, "goal 不超过 60 字") || !strings.Contains(conversationSystemPrompt, "reply 不超过 120 字") {
+		t.Fatal("conversation prompt must constrain goal and reply length")
+	}
+	if !strings.Contains(shellIntentPrompt, "不复述卡片中的命令、范围或审批流程") {
+		t.Fatal("Shell replies must not repeat details already shown in the confirmation card")
+	}
+}
+
 func uint32Pointer(value uint32) *uint32 {
 	return &value
 }

@@ -2,9 +2,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -509,5 +511,101 @@ func TestV22ArchiveActionsMigrationPreservesHistory(t *testing.T) {
 	defer rows.Close()
 	if rows.Next() {
 		t.Fatal("v22 archive action migration left a foreign-key violation")
+	}
+}
+
+func TestV27ShellMigrationDropsPersistedCommandOutput(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "legacy-shell-output.db")
+	rawDB, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rawDB.Close()
+	if _, err := rawDB.ExecContext(ctx, `CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY CHECK (version > 0), applied_at_ns INTEGER NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	for _, migration := range migrations[:26] {
+		if _, err := rawDB.ExecContext(ctx, migration.sql); err != nil {
+			t.Fatalf("apply migration %d: %v", migration.version, err)
+		}
+		if _, err := rawDB.ExecContext(ctx, "INSERT INTO schema_migrations (version, applied_at_ns) VALUES (?, ?)", migration.version, int64(migration.version)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := rawDB.ExecContext(ctx, `PRAGMA journal_mode = WAL`); err != nil {
+		t.Fatalf("enable WAL for v26 database: %v", err)
+	}
+	stdoutMarker := "filesage-shell-output-migration-sentinel"
+	stderrMarker := "filesage-shell-error-migration-sentinel"
+	if _, err := rawDB.ExecContext(ctx, `
+		INSERT INTO tasks (id, kind, status, created_at_ns, updated_at_ns)
+		VALUES ('shell-task', 'agent', 'succeeded', 1, 2);
+		INSERT INTO plans (id, task_id, version, status, data_scope_json, created_at_ns, updated_at_ns)
+		VALUES ('shell-plan', 'shell-task', 1, 'completed', '{}', 1, 2);
+		INSERT INTO operations (
+			id, plan_id, ordinal, action, source_state_json, target_conflict_policy,
+			approval_state, execution_status, created_at_ns, updated_at_ns
+		) VALUES ('shell-operation', 'shell-plan', 0, 'run_shell', '{}', 'fail', 'pending', 'succeeded', 1, 2);
+		INSERT INTO shell_runs (
+			id, plan_id, operation_id, command, working_directory, stage_id, status,
+			created_at_ns, updated_at_ns, exit_code, stdout, stderr, output_available
+		) VALUES (
+			'shell-run', 'shell-plan', 'shell-operation', 'cat private.txt', '.', 'stage', 'completed',
+			1, 2, 0, CAST(? AS TEXT), ?, 1
+		);
+	`, "\x00"+stdoutMarker, stderrMarker); err != nil {
+		t.Fatalf("seed v26 Shell output: %v", err)
+	}
+
+	db, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("upgrade v26 database: %v", err)
+	}
+	defer db.Close()
+	var outputDiscarded, exitCode int
+	var command string
+	if err := db.db.QueryRowContext(ctx, `SELECT output_discarded, exit_code, command FROM shell_runs WHERE id = 'shell-run'`).Scan(&outputDiscarded, &exitCode, &command); err != nil {
+		t.Fatal(err)
+	}
+	if outputDiscarded != 1 || exitCode != 0 || command != "cat private.txt" {
+		t.Fatalf("migrated Shell run = (discarded=%d, exit=%d, command=%q)", outputDiscarded, exitCode, command)
+	}
+	columns, err := db.db.QueryContext(ctx, "PRAGMA table_info(shell_runs)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer columns.Close()
+	for columns.Next() {
+		var index, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := columns.Scan(&index, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		if name == "stdout" || name == "stderr" || name == "output_available" {
+			t.Fatalf("legacy Shell output column %q remains", name)
+		}
+	}
+	if err := columns.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close migrated database: %v", err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatalf("close legacy database connection: %v", err)
+	}
+	for _, path := range []string{databasePath, databasePath + "-wal", databasePath + "-shm"} {
+		data, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			t.Fatalf("read migrated SQLite file %s: %v", filepath.Base(path), err)
+		}
+		if bytes.Contains(data, []byte(stdoutMarker)) || bytes.Contains(data, []byte(stderrMarker)) {
+			t.Fatalf("legacy Shell output remains in SQLite file %s", filepath.Base(path))
+		}
 	}
 }

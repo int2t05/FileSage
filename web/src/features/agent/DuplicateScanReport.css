@@ -56,6 +56,17 @@
   font-weight: 600;
 }
 
+.agent-duplicate-model-details {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.agent-duplicate-model-details > small {
+  display: block;
+  padding: 4px 2px;
+  overflow-wrap: anywhere;
+}
+
 .agent-duplicate-confirmation > button {
   justify-self: start;
 }

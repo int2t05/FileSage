@@ -115,6 +115,25 @@ func TestConversationSummaryIncludesCurrentTaskStatus(t *testing.T) {
 	}
 }
 
+// TestConversationSummaryUsesFirstMessageUntilGoalIsKnown 验证任务目标生成前使用首条消息标识会话。
+func TestConversationSummaryUsesFirstMessageUntilGoalIsKnown(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	message := "按拍摄日期归档本周照片"
+	if err := db.CreateConversation(ctx, "conversation-title", message, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	summaries, _, err := db.ListConversations(ctx, 20, 0)
+	if err != nil || len(summaries) != 1 || summaries[0].Title != message {
+		t.Fatalf("ListConversations() = (%#v, %v)", summaries, err)
+	}
+}
+
 func TestClarifyingConversationCanFinishWithoutAnalysisCard(t *testing.T) {
 	ctx := context.Background()
 	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))

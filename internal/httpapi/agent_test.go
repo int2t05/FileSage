@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"filesage/internal/agent"
 	"filesage/internal/fsroot"
@@ -18,6 +19,7 @@ type agentServiceStub struct {
 	plan              store.PlanRecord
 	err               error
 	decisions         int
+	rejections        int
 	executions        int
 	stopExecutions    int
 	revisions         int
@@ -27,6 +29,29 @@ type agentServiceStub struct {
 	previewCalls      int
 	textRevisionCalls int
 	textCandidate     []byte
+}
+
+type agentExecutionServiceStub struct {
+	*agentServiceStub
+	starts  int
+	steps   int
+	stepID  string
+	version int
+	mode    string
+}
+
+func (stub *agentExecutionServiceStub) StartPlan(_ context.Context, _ string, version int, mode string) (store.PlanRecord, error) {
+	stub.starts++
+	stub.version = version
+	stub.mode = mode
+	return stub.plan, stub.err
+}
+
+func (stub *agentExecutionServiceStub) ExecuteStep(_ context.Context, _, operationID string, version int) (store.PlanRecord, error) {
+	stub.steps++
+	stub.stepID = operationID
+	stub.version = version
+	return stub.plan, stub.err
 }
 
 func (stub *agentServiceStub) Plan(context.Context, string) (store.PlanRecord, error) {
@@ -46,6 +71,11 @@ func (stub *agentServiceStub) Decide(_ context.Context, _, _, _ string, version 
 	if len(version) == 1 {
 		stub.version = version[0]
 	}
+	return stub.plan, stub.err
+}
+func (stub *agentServiceStub) RejectPlan(_ context.Context, _ string, version int) (store.PlanRecord, error) {
+	stub.rejections++
+	stub.version = version
 	return stub.plan, stub.err
 }
 func (stub *agentServiceStub) Execute(_ context.Context, _ string, version ...int) (store.PlanRecord, error) {
@@ -117,7 +147,7 @@ func TestAgentEveryWriteRouteChecksOrigin(t *testing.T) {
 		path   string
 		body   string
 	}{
-		{http.MethodPost, "/api/v1/agent/plans/plan-1/operations/op-1/approval", `{"decision":"approve","expectedPlanVersion":1}`},
+		{http.MethodPost, "/api/v1/agent/plans/plan-1/reject", `{"expectedPlanVersion":1}`},
 		{http.MethodPost, "/api/v1/agent/plans/plan-1/execute", `{"expectedPlanVersion":1}`},
 		{http.MethodPost, "/api/v1/agent/plans/plan-1/stop", `{"expectedPlanVersion":1}`},
 		{http.MethodPut, "/api/v1/agent/plans/plan-1/revision", `{"expectedPlanVersion":1,"operations":[{"action":"move_file","sourcePath":"a","targetPath":"b","reason":"r","evidence":""}]}`},
@@ -131,8 +161,19 @@ func TestAgentEveryWriteRouteChecksOrigin(t *testing.T) {
 			t.Errorf("%s %s status = %d, want 403", endpoint.method, endpoint.path, response.Code)
 		}
 	}
-	if stub.decisions != 0 || stub.executions != 0 || stub.stopExecutions != 0 || stub.revisions != 0 || stub.textRevisionCalls != 0 {
-		t.Fatalf("cross-origin request reached Agent service: decide=%d execute=%d stop=%d revise=%d text-revise=%d", stub.decisions, stub.executions, stub.stopExecutions, stub.revisions, stub.textRevisionCalls)
+	if stub.decisions != 0 || stub.rejections != 0 || stub.executions != 0 || stub.stopExecutions != 0 || stub.revisions != 0 || stub.textRevisionCalls != 0 {
+		t.Fatalf("cross-origin request reached Agent service: decide=%d reject=%d execute=%d stop=%d revise=%d text-revise=%d", stub.decisions, stub.rejections, stub.executions, stub.stopExecutions, stub.revisions, stub.textRevisionCalls)
+	}
+}
+
+func TestAgentPerOperationApprovalRouteIsRemoved(t *testing.T) {
+	stub := &agentServiceStub{}
+	handler := NewWithAgent(nil, nil, nil, stub, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent/plans/plan-1/operations/op-1/approval", strings.NewReader(`{"decision":"approve","expectedPlanVersion":1}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || stub.decisions != 0 {
+		t.Fatalf("legacy approval route status=%d decisions=%d body=%s", response.Code, stub.decisions, response.Body.String())
 	}
 }
 
@@ -279,34 +320,80 @@ func TestAgentPlanRevisionReportsUnsupportedAndOutOfStateErrors(t *testing.T) {
 	}
 }
 
-func TestAgentWritesRequireAndForwardExpectedPlanVersion(t *testing.T) {
+func TestAgentPlanRejectionRequiresAndForwardsExpectedPlanVersion(t *testing.T) {
 	stub := &agentServiceStub{plan: store.PlanRecord{
-		ID: "plan-1", TaskID: "task-1", Version: 3, Status: store.PlanApproved,
-		Operations: []store.OperationRecord{{ID: "op-1", Ordinal: 0, Action: "rename", Approval: store.ApprovalApproved, Status: store.OperationPending}},
+		ID: "plan-1", TaskID: "task-1", Version: 3, Status: store.PlanRejected,
+		Operations: []store.OperationRecord{{ID: "op-1", Ordinal: 0, Action: "rename", Approval: store.ApprovalRejected, Status: store.OperationPending}},
 	}}
 	handler := NewWithAgent(nil, nil, nil, stub, nil, nil)
 
-	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent/plans/plan-1/operations/op-1/approval", strings.NewReader(`{"decision":"approve","expectedPlanVersion":3}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/agent/plans/plan-1/reject", strings.NewReader(`{}`))
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || stub.decisions != 1 || stub.version != 3 {
-		t.Fatalf("approval status=%d decisions=%d version=%d body=%s", response.Code, stub.decisions, stub.version, response.Body.String())
+	if response.Code != http.StatusBadRequest || stub.rejections != 0 {
+		t.Fatalf("missing version status=%d rejections=%d body=%s", response.Code, stub.rejections, response.Body.String())
 	}
+	request = httptest.NewRequest(http.MethodPost, "/api/v1/agent/plans/plan-1/reject", strings.NewReader(`{"expectedPlanVersion":3}`))
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
 	var approvalBody struct {
 		PlanVersion int `json:"planVersion"`
 		Operations  []struct {
 			Ordinal int `json:"ordinal"`
 		} `json:"operations"`
 	}
+	if response.Code != http.StatusOK || stub.rejections != 1 || stub.version != 3 {
+		t.Fatalf("reject status=%d rejections=%d version=%d body=%s", response.Code, stub.rejections, stub.version, response.Body.String())
+	}
 	if err := json.Unmarshal(response.Body.Bytes(), &approvalBody); err != nil || approvalBody.PlanVersion != 3 || len(approvalBody.Operations) != 1 || approvalBody.Operations[0].Ordinal != 0 {
-		t.Fatalf("approval response=%s err=%v", response.Body.String(), err)
+		t.Fatalf("reject response=%s err=%v", response.Body.String(), err)
 	}
 
+	reviewedAt := time.Now().UTC()
+	stub.plan.Status = store.PlanApproved
+	stub.plan.ExecutionMode = "bypass"
+	stub.plan.ReviewedAt = &reviewedAt
 	request = httptest.NewRequest(http.MethodPost, "/api/v1/agent/plans/plan-1/execute", strings.NewReader(`{"expectedPlanVersion":3}`))
 	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || stub.executions != 1 || stub.version != 3 {
 		t.Fatalf("execute status=%d executions=%d version=%d body=%s", response.Code, stub.executions, stub.version, response.Body.String())
+	}
+}
+
+func TestAgentPlanStartAndStepRoutesForwardVersionAndReturnReviewMode(t *testing.T) {
+	reviewedAt := "2026-10-18T12:00:00Z"
+	stub := &agentExecutionServiceStub{agentServiceStub: &agentServiceStub{plan: store.PlanRecord{
+		ID: "plan-1", TaskID: "task-1", Version: 3, Status: store.PlanApproved,
+		ExecutionMode: "manual", ReviewedAt: func() *time.Time { value, _ := time.Parse(time.RFC3339, reviewedAt); return &value }(),
+		Operations: []store.OperationRecord{{ID: "op-1", Ordinal: 0, Action: "create_directory", TargetPath: "archive", Approval: store.ApprovalPending, Status: store.OperationPending}},
+	}}}
+	handler := NewWithAgent(nil, nil, nil, stub, nil, nil)
+
+	for _, test := range []struct {
+		path string
+		body string
+	}{
+		{path: "/api/v1/agent/plans/plan-1/start", body: `{"expectedPlanVersion":3,"expectedExecutionMode":"manual"}`},
+		{path: "/api/v1/agent/plans/plan-1/steps/op-1/execute", body: `{"expectedPlanVersion":3}`},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://filesage.local"+test.path, strings.NewReader(test.body))
+		request.Header.Set("Origin", "http://filesage.local")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("route %s status=%d body=%s", test.path, response.Code, response.Body.String())
+		}
+		var body struct {
+			ExecutionMode string  `json:"executionMode"`
+			ReviewedAt    *string `json:"reviewedAt"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || body.ExecutionMode != "manual" || body.ReviewedAt == nil || *body.ReviewedAt != reviewedAt {
+			t.Fatalf("route %s response=%s err=%v", test.path, response.Body.String(), err)
+		}
+	}
+	if stub.starts != 1 || stub.steps != 1 || stub.version != 3 || stub.stepID != "op-1" || stub.mode != "manual" {
+		t.Fatalf("execution calls=(%d,%d), step=%q version=%d mode=%q", stub.starts, stub.steps, stub.stepID, stub.version, stub.mode)
 	}
 }
 

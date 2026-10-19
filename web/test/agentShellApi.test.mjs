@@ -11,12 +11,11 @@ const declarations = sourceFile.statements.filter((statement) => {
       'isRecord', 'optionalInteger', 'isSafeRootRelativePath', 'isShellCommand', 'isShellWorkingDirectory', 'parsePlannedPaths', 'parseOperation', 'parsePlan',
       'parseShellChangeState', 'parseShellChange', 'parseAgentShellChangesPage', 'parseAgentShellChangePreview',
       'readResponseError', 'request', 'readPlanResponse', 'getAgentShellChanges', 'getAgentShellChangePreview',
-      'setAgentShellChangeApproval',
     ].includes(statement.name?.text ?? '');
   }
   return ts.isClassDeclaration(statement) && statement.name?.text === 'AgentApiError';
 });
-const helperSource = `${declarations.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { AgentApiError, parseAgentShellChangesPage, getAgentShellChanges, getAgentShellChangePreview, setAgentShellChangeApproval };`;
+const helperSource = `${declarations.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { AgentApiError, parseAgentShellChangesPage, getAgentShellChanges, getAgentShellChangePreview };`;
 const { outputText } = ts.transpileModule(helperSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
@@ -90,17 +89,7 @@ describe('Agent Shell 变更清单 API', () => {
     await assert.rejects(api.getAgentShellChangePreview('plan-1', 'change-1', 'docs/readme.md'), api.AgentApiError);
   });
 
-  it('逐项批准绑定方案版本并解析标准 Agent plan', async () => {
-    let request;
-    globalThis.fetch = async (url, init) => {
-      request = { url: String(url), init };
-      return new Response(JSON.stringify(plan({ status: 'approved' })), { status: 200 });
-    };
-    const result = await api.setAgentShellChangeApproval('plan/1', 'change/1', 'approve', 4);
-    assert.equal(request.url, '/api/v1/agent/plans/plan%2F1/shell-changes/change%2F1/approval');
-    assert.equal(request.init.method, 'POST');
-    assert.deepEqual(JSON.parse(request.init.body), { decision: 'approve', expectedPlanVersion: 4 });
-    assert.equal(result.status, 'approved');
-    assert.equal(result.operations[0].command, 'printf done > result.txt');
+  it('前端不提供逐文件审批 API', () => {
+    assert.doesNotMatch(source, /setAgentShellChangeApproval/);
   });
 });

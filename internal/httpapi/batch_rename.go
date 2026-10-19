@@ -347,7 +347,7 @@ func (api *API) preflightBatchRename(targets []batchRenameTarget) error {
 }
 
 func writeBatchRenamePreflightError(w http.ResponseWriter, err error) {
-	if errors.Is(err, fs.ErrPermission) || errors.Is(err, fsroot.ErrSymlinkPath) || errors.Is(err, fsroot.ErrNotDirectory) || errors.Is(err, fsroot.ErrInvalidPath) || errors.Is(err, fsroot.ErrOutsideRoot) {
+	if errors.Is(err, fs.ErrPermission) || errors.Is(err, fsroot.ErrSymlinkPath) || errors.Is(err, fsroot.ErrNotDirectory) || errors.Is(err, fsroot.ErrInvalidPath) || errors.Is(err, fsroot.ErrOutsideRoot) || errors.Is(err, fsroot.ErrVolumeUnavailable) {
 		writeFileError(w, err)
 		return
 	}
@@ -356,6 +356,8 @@ func writeBatchRenamePreflightError(w http.ResponseWriter, err error) {
 
 func batchRenameFailureMessage(err error) string {
 	switch {
+	case errors.Is(err, fsroot.ErrVolumeUnavailable):
+		return "管理卷暂不可用，请确认磁盘已挂载后重试。"
 	case errors.Is(err, fs.ErrPermission):
 		return "没有权限完成此项重命名。"
 	case errors.Is(err, fs.ErrExist), errors.Is(err, fsroot.ErrConflict):

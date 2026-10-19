@@ -80,6 +80,20 @@ type agentWorkflow interface {
 	StopExecution(context.Context, string, int) (store.PlanRecord, error)
 }
 
+type agentExecutionWorkflow interface {
+	StartPlan(context.Context, string, int, string) (store.PlanRecord, error)
+	ExecuteStep(context.Context, string, string, int) (store.PlanRecord, error)
+}
+
+type agentPlanRejectWorkflow interface {
+	RejectPlan(context.Context, string, int) (store.PlanRecord, error)
+}
+
+type agentSettingsRepository interface {
+	AgentSettings(context.Context) (store.AgentSettings, error)
+	SetAgentBypassPermission(context.Context, bool, time.Time) error
+}
+
 type agentTextWorkflow interface {
 	PreviewTextEdit(context.Context, string, string, int) (agent.TextEditPreview, error)
 	ReviseTextCandidate(context.Context, string, string, int, []byte) (store.PlanRecord, error)
@@ -118,6 +132,7 @@ type API struct {
 	trash            trashService
 	agent            agentWorkflow
 	conversations    agentConversationWorkflow
+	agentSettings    agentSettingsRepository
 	index            fileIndexer
 	locks            *coordination.Locker
 	readiness        func(context.Context) error
@@ -157,6 +172,8 @@ type fileEntry struct {
 	OwnershipAvailable bool              `json:"ownershipAvailable"`
 	Symlink            bool              `json:"symlink"`
 	LinkStatus         fsroot.LinkStatus `json:"linkStatus,omitempty"`
+	MountUnavailable   bool              `json:"mountUnavailable,omitempty"`
+	ReadOnly           bool              `json:"readOnly,omitempty"`
 	Version            string            `json:"version"`
 }
 
@@ -268,6 +285,7 @@ func NewWithAgentAndIndexAndConversation(files fileSystem, tasks taskReader, tra
 		index: index, locks: locks, readiness: readiness, archiveSlots: make(chan struct{}, 1),
 		archiveReadSlots: make(chan struct{}, maxConcurrentArchiveReads),
 	}
+	api.agentSettings, _ = tasks.(agentSettingsRepository)
 	api.audits, _ = tasks.(auditRepository)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/health", api.health)
@@ -287,6 +305,8 @@ func NewWithAgentAndIndexAndConversation(files fileSystem, tasks taskReader, tra
 	mux.HandleFunc("GET /api/v1/tasks/{id}/audit", api.taskAudit)
 	mux.HandleFunc("GET /api/v1/audit", api.auditHistory)
 	mux.HandleFunc("GET /api/v1/agent/status", api.agentStatus)
+	mux.HandleFunc("GET /api/v1/settings/agent", api.getAgentSettings)
+	mux.HandleFunc("PUT /api/v1/settings/agent", api.updateAgentSettings)
 	mux.HandleFunc("GET /api/v1/agent/conversations", api.listAgentConversations)
 	mux.HandleFunc("POST /api/v1/agent/conversations", api.createAgentConversation)
 	mux.HandleFunc("GET /api/v1/agent/conversations/{id}", api.getAgentConversation)
@@ -301,11 +321,12 @@ func NewWithAgentAndIndexAndConversation(files fileSystem, tasks taskReader, tra
 	mux.HandleFunc("GET /api/v1/agent/plans/{planId}", api.getAgentPlan)
 	mux.HandleFunc("GET /api/v1/agent/plans/{planId}/shell-changes", api.listAgentShellChanges)
 	mux.HandleFunc("GET /api/v1/agent/plans/{planId}/shell-changes/{changeId}/preview", api.previewAgentShellChange)
-	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/shell-changes/{changeId}/approval", api.decideAgentShellChange)
 	mux.HandleFunc("GET /api/v1/agent/plans/{planId}/operations/{operationId}/preview", api.previewAgentTextEdit)
 	mux.HandleFunc("PUT /api/v1/agent/plans/{planId}/operations/{operationId}/content", api.reviseAgentTextCandidate)
 	mux.HandleFunc("PUT /api/v1/agent/plans/{planId}/revision", api.reviseAgentPlan)
-	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/operations/{operationId}/approval", api.decideAgentOperation)
+	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/reject", api.rejectAgentPlan)
+	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/start", api.startAgentPlan)
+	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/steps/{operationId}/execute", api.executeAgentStep)
 	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/execute", api.executeAgentPlan)
 	mux.HandleFunc("POST /api/v1/agent/plans/{planId}/stop", api.stopAgentPlanExecution)
 	mux.HandleFunc("POST /api/v1/files/directories", api.createDirectory)
@@ -332,6 +353,8 @@ type agentPlanResponse struct {
 	PlanID         string                   `json:"planId"`
 	PlanVersion    int                      `json:"planVersion"`
 	Status         store.PlanStatus         `json:"status"`
+	ExecutionMode  string                   `json:"executionMode,omitempty"`
+	ReviewedAt     *string                  `json:"reviewedAt,omitempty"`
 	StopRequested  bool                     `json:"stopRequested"`
 	ProposalSource string                   `json:"proposalSource"`
 	Operations     []agentOperationResponse `json:"operations"`
@@ -360,11 +383,8 @@ type agentOperationResponse struct {
 	ResultMessage     string                `json:"resultMessage,omitempty"`
 	Command           string                `json:"command,omitempty"`
 	WorkingDir        string                `json:"workingDir,omitempty"`
-}
-
-type agentApprovalRequest struct {
-	Decision            string `json:"decision"`
-	ExpectedPlanVersion int    `json:"expectedPlanVersion"`
+	ExitCode          *int                  `json:"exitCode,omitempty"`
+	OutputDiscarded   bool                  `json:"outputDiscarded,omitempty"`
 }
 
 type agentPlanRevisionRequest struct {
@@ -543,35 +563,6 @@ func (api *API) reviseAgentPlan(w http.ResponseWriter, r *http.Request) {
 	api.writeAgentPlanResponse(w, r, plan)
 }
 
-func (api *API) decideAgentOperation(w http.ResponseWriter, r *http.Request) {
-	if !requireSameOrigin(w, r) {
-		return
-	}
-	if api.agent == nil {
-		writeError(w, http.StatusServiceUnavailable, "Agent service is not configured")
-		return
-	}
-	var request agentApprovalRequest
-	if !decodeRequestJSON(w, r, &request) {
-		return
-	}
-	planID, operationID := r.PathValue("planId"), r.PathValue("operationId")
-	if !validTaskID(planID) || !validTaskID(operationID) {
-		writeError(w, http.StatusBadRequest, "invalid plan or operation identifier")
-		return
-	}
-	if request.ExpectedPlanVersion < 1 || (request.Decision != "approve" && request.Decision != "reject") {
-		writeError(w, http.StatusBadRequest, "invalid decision or expected plan version")
-		return
-	}
-	plan, err := api.agent.Decide(r.Context(), planID, operationID, request.Decision, request.ExpectedPlanVersion)
-	if err != nil {
-		writeAgentError(w, err)
-		return
-	}
-	api.writeAgentPlanResponse(w, r, plan)
-}
-
 func (api *API) executeAgentPlan(w http.ResponseWriter, r *http.Request) {
 	if !requireSameOrigin(w, r) {
 		return
@@ -593,6 +584,16 @@ func (api *API) executeAgentPlan(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.ExpectedPlanVersion < 1 {
 		writeError(w, http.StatusBadRequest, "invalid expected plan version")
+		return
+	}
+	current, err := api.agent.Plan(r.Context(), planID)
+	if err != nil {
+		writeAgentError(w, err)
+		return
+	}
+	if current.Version != request.ExpectedPlanVersion || current.Status != store.PlanApproved ||
+		current.ReviewedAt == nil || current.ExecutionMode != "bypass" {
+		writeAgentError(w, agent.ErrConflict)
 		return
 	}
 	plan, err := api.agent.Execute(r.Context(), planID, request.ExpectedPlanVersion)
@@ -654,6 +655,8 @@ func (api *API) writeAgentPlanResponse(w http.ResponseWriter, r *http.Request, p
 			if response.Operations[index].ID == operation.ID {
 				response.Operations[index].Command = run.Command
 				response.Operations[index].WorkingDir = run.WorkingDirectory
+				response.Operations[index].ExitCode = &run.ExitCode
+				response.Operations[index].OutputDiscarded = run.OutputDiscarded
 				break
 			}
 		}
@@ -671,8 +674,12 @@ func toAgentPlanResponse(plan store.PlanRecord) agentPlanResponse {
 	}
 	response := agentPlanResponse{
 		TaskID: plan.TaskID, PlanID: plan.ID, PlanVersion: plan.Version,
-		Status: plan.Status, StopRequested: plan.StopRequested, ProposalSource: proposalSource,
+		Status: plan.Status, ExecutionMode: plan.ExecutionMode, StopRequested: plan.StopRequested, ProposalSource: proposalSource,
 		Operations: make([]agentOperationResponse, 0, len(plan.Operations)),
+	}
+	if plan.ReviewedAt != nil {
+		value := plan.ReviewedAt.UTC().Format(time.RFC3339Nano)
+		response.ReviewedAt = &value
 	}
 	for _, operation := range plan.Operations {
 		item := agentOperationResponse{
@@ -1852,6 +1859,8 @@ type versionFields struct {
 	Symlink               bool              `json:"symlink"`
 	LinkStatus            fsroot.LinkStatus `json:"linkStatus"`
 	LinkTarget            string            `json:"linkTarget"`
+	MountUnavailable      bool              `json:"mountUnavailable"`
+	ReadOnly              bool              `json:"readOnly"`
 	Device                uint64            `json:"device"`
 	Inode                 uint64            `json:"inode"`
 	Links                 uint64            `json:"links"`
@@ -1881,6 +1890,8 @@ func versionForEntry(entry fsroot.Entry) string {
 		Symlink:               entry.Symlink,
 		LinkStatus:            entry.LinkStatus,
 		LinkTarget:            entry.LinkTarget,
+		MountUnavailable:      entry.MountUnavailable,
+		ReadOnly:              entry.ReadOnly,
 		Device:                entry.Device,
 		Inode:                 entry.Inode,
 		Links:                 entry.Links,
@@ -1897,6 +1908,8 @@ func versionForEntry(entry fsroot.Entry) string {
 
 func writeFileError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, fsroot.ErrVolumeUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "管理卷暂不可用，请确认磁盘已挂载后重试")
 	case errors.Is(err, fs.ErrNotExist):
 		writeError(w, http.StatusNotFound, "file or directory not found")
 	case errors.Is(err, fs.ErrPermission):

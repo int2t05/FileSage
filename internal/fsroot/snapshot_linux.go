@@ -60,7 +60,7 @@ func platformSnapshotTree(ctx context.Context, root *Root, relativePath string, 
 		if err := budget.append(snapshotItem(entry, stat.Mnt_id)); err != nil {
 			return TreeSnapshot{}, err
 		}
-		if err := snapshotDirectory(ctx, directory, &rootNode, &budget); err != nil {
+		if err := snapshotDirectory(ctx, root, directory, &rootNode, &budget); err != nil {
 			return TreeSnapshot{}, err
 		}
 		finalStat, err := snapshotStatxFD(int(directory.Fd()))
@@ -96,7 +96,7 @@ func platformSnapshotTree(ctx context.Context, root *Root, relativePath string, 
 				_ = directory.Close()
 				return TreeSnapshot{}, ErrPathChanged
 			}
-			walkErr := snapshotDirectory(ctx, directory, &node, &budget)
+			walkErr := snapshotDirectory(ctx, root, directory, &node, &budget)
 			closeErr := directory.Close()
 			if walkErr != nil {
 				return TreeSnapshot{}, walkErr
@@ -181,8 +181,11 @@ func (b *snapshotBudget) remainingEntries() int {
 	return b.limits.MaxEntries - len(*b.entries)
 }
 
-func snapshotDirectory(ctx context.Context, directory *os.File, node *snapshotNode, budget *snapshotBudget) error {
+func snapshotDirectory(ctx context.Context, root *Root, directory *os.File, node *snapshotNode, budget *snapshotBudget) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := root.verifyWalkVolume(directory, node.entry.Path); err != nil {
 		return err
 	}
 	initial, err := snapshotStatxFD(int(directory.Fd()))
@@ -201,15 +204,31 @@ func snapshotDirectory(ctx context.Context, directory *os.File, node *snapshotNo
 			return err
 		}
 		childPath := path.Join(node.entry.Path, name)
+		volume, isMountRoot := root.registeredMountAt(childPath)
+		unavailable := false
+		if isMountRoot {
+			if err := root.checkRegisteredMount(volume); errors.Is(err, ErrVolumeUnavailable) {
+				unavailable = true
+			} else if err != nil {
+				return fmt.Errorf("inspect mounted volume %q: %w", childPath, err)
+			}
+		}
 		child, err := snapshotNodeAt(ctx, directory, name, childPath)
 		if err != nil {
+			if isMountRoot && unavailable && errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
 			return err
+		}
+		if isMountRoot && (unavailable || child.stat.Mnt_id != volume.id) {
+			markUnavailableVolume(&child.entry)
+			unavailable = true
 		}
 		if err := budget.append(snapshotItem(child.entry, child.stat.Mnt_id)); err != nil {
 			_ = child.identity.Close()
 			return err
 		}
-		if child.entry.Kind == KindDirectory {
+		if child.entry.Kind == KindDirectory && !unavailable {
 			childDirectory, err := openWalkDirectory(directory, name)
 			if err != nil {
 				_ = child.identity.Close()
@@ -221,7 +240,7 @@ func snapshotDirectory(ctx context.Context, directory *os.File, node *snapshotNo
 				_ = child.identity.Close()
 				return fmt.Errorf("directory %q: %w", childPath, ErrPathChanged)
 			}
-			walkErr := snapshotDirectory(ctx, childDirectory, &child, budget)
+			walkErr := snapshotDirectory(ctx, root, childDirectory, &child, budget)
 			closeErr := childDirectory.Close()
 			if walkErr != nil {
 				_ = child.identity.Close()

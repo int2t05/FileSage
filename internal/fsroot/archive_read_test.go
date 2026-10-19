@@ -19,6 +19,74 @@ import (
 	"time"
 )
 
+// 本测试区分不支持的压缩算法与损坏归档。
+func TestClassifySevenZipError(t *testing.T) {
+	tests := []struct {
+		name   string
+		stderr string
+		want   error
+	}{
+		{name: "unsupported method", stderr: "ERROR: Unsupported Method : test.txt", want: ErrArchiveUnsupportedFile},
+		{name: "corrupt data", stderr: "ERROR: Data Error : test.txt", want: ErrArchiveCorrupt},
+		{name: "encrypted", stderr: "ERROR: Wrong password", want: ErrArchiveEncrypted},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := classifySevenZipError(context.Background(), test.stderr, errors.New("exit status 2"))
+			if !errors.Is(err, test.want) {
+				t.Fatalf("error = %v, want %v", err, test.want)
+			}
+		})
+	}
+}
+
+// 本测试区分空链接元数据、实际链接与未支持的多卷归档。
+func TestListSevenZipClassifiesMetadataAndLinks(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires a Linux executable test fixture")
+	}
+	tests := []struct {
+		name          string
+		archiveHeader string
+		linkFields    string
+		exitCode      int
+		wantErr       error
+	}{
+		{name: "empty link fields", linkFields: "Symbolic Link = \nHard Link = \nCopy Link = \n"},
+		{name: "symbolic link", linkFields: "Symbolic Link = target.txt\n", wantErr: ErrArchiveUnsafeEntry},
+		{name: "hard link", linkFields: "Hard Link = target.txt\n", wantErr: ErrArchiveUnsafeEntry},
+		{name: "copy link", linkFields: "Copy Link = target.txt\n", wantErr: ErrArchiveUnsafeEntry},
+		{name: "archive header", archiveHeader: "Type = Rar5\nPhysical Size = 100\n"},
+		{name: "multivolume", archiveHeader: "Type = Rar5\nMultivolume = +\nVolumes = 2\n", wantErr: ErrArchiveUnsupportedFile},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			directory := t.TempDir()
+			binary := filepath.Join(directory, "7z")
+			output := test.archiveHeader
+			if output != "" {
+				output += "\n"
+			}
+			output += "Path = test.txt\nFolder = -\nSize = 5\nPacked Size = 5\nAttributes = -rw-r--r--\n" + test.linkFields
+			script := "#!/bin/sh\n/bin/cat <<'FILESAGE'\n" + output + "FILESAGE\n"
+			if test.exitCode == 2 {
+				script += "exit 2\n"
+			}
+			if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+			entries, err := listSevenZip(context.Background(), "input.archive", nil, archiveRAR, archiveReadTestLimits())
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantErr == nil && (len(entries) != 1 || entries[0].Path != "test.txt") {
+				t.Fatalf("entries = %#v", entries)
+			}
+		})
+	}
+}
+
 func TestListAndReadZIPArchive(t *testing.T) {
 	root := openArchiveReadTestRoot(t)
 	writeArchiveReadTestFile(t, root, "bundle.zip", makeZIPReadTest(t, map[string]string{
@@ -261,7 +329,7 @@ func TestSevenZipInputUsesInheritedDescriptorOnLinux(t *testing.T) {
 	} else if input == "" || len(extraFiles) != 0 {
 		t.Fatalf("fallback 7-Zip input = %q, extra files = %#v", input, extraFiles)
 	}
-	if sevenZipTypeFlag(archive7z) != "-t7z" || sevenZipTypeFlag(archiveRAR) != "-trar" {
+	if sevenZipTypeFlag(archive7z) != "-t7z" || sevenZipTypeFlag(archiveRAR) != "-t*" {
 		t.Fatalf("archive type flags = %q, %q", sevenZipTypeFlag(archive7z), sevenZipTypeFlag(archiveRAR))
 	}
 }
