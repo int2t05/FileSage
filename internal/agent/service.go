@@ -1352,22 +1352,26 @@ func (s *Service) executeTextEdit(ctx context.Context, planID string, op store.O
 	}
 	writeErr := s.root.WriteAtomicIfUnchanged(targetPath, expected, content, mode)
 	status, message, resultErr := store.OperationSucceeded, textWriteSuccessMessage(op.Action), writeErr
-	if s.verifyTextEditResult(op) == nil {
+	verifyErr := s.verifyTextEditResult(op)
+	var recovery *fsroot.WriteRecoveryError
+	switch {
+	case writeErr == nil && verifyErr == nil:
 		resultErr = nil
-	} else {
-		current, statErr := s.root.LstatEntry(targetPath)
-		unchanged := op.Action == "create_file" && errors.Is(statErr, fs.ErrNotExist)
-		if op.Action != "create_file" && statErr == nil && !current.Symlink {
-			unchanged = matchesFingerprint(current.Fingerprint(), op.SourceStateJSON)
-		}
-		if unchanged {
-			status, message = store.OperationFailed, "文件未发生变化，写入未完成"
-		} else {
-			status, message = store.OperationPartial, "写入结果无法确认，需人工核查"
-		}
-		if resultErr == nil {
-			resultErr = ErrConflict
-		}
+	case errors.As(writeErr, &recovery):
+		status, message = store.OperationPartial, fmt.Sprintf("待核查文件保留在 %q", recovery.Path)
+	case errors.Is(writeErr, fsroot.ErrPublishedNotDurable):
+		status, message = store.OperationPartial, "文件已写入，但目录状态未能持久确认；需人工核查"
+	case writeErr == nil:
+		status, message, resultErr = store.OperationPartial, "写入后文件状态发生变化；需人工核查", verifyErr
+	default:
+		status, message = store.OperationFailed, "文件状态已变化，未完成写入；请刷新后重新审阅"
+		resultErr = writeErr
+	}
+	if status != store.OperationSucceeded && verifyErr != nil && resultErr == nil {
+		resultErr = verifyErr
+	}
+	if status == store.OperationSucceeded {
+		resultErr = nil
 	}
 	if err := s.store.FinishAgentOperation(ctx, planID, op.ID, status, message, time.Now().UTC()); err != nil {
 		return store.PlanRecord{}, fmt.Errorf("record text edit result: %w", err)
