@@ -116,12 +116,64 @@ sudo journalctl -u filesage.service -n 100 --no-pager
 
 从源码目录更新时，将复制命令中的 `web/` 改为 `web/dist/`。
 
+## 备份与恢复
+
+`FILESAGE_ROOT` 保存原始文件和 `.filesage-trash`；`FILESAGE_DATA_DIR` 保存 SQLite、上传暂存及 Agent 暂存。可恢复备份必须在同一停服窗口包含两者，并遍历管理根目录下的所有已挂载卷。备份目标应是与数据源物理独立或异地的加密存储；暂停其他写入进程，并核对 `findmnt` 挂载及 `lsblk` 设备归属。备份包含个人文件和任务记录，应限制访问；模型密钥与挂载配置另行安全保存，不要放入公开仓库。
+
+以下示例使用 GNU tar。按实际路径修改变量，并确认根目录、每个预期子卷和备份盘都已挂载；缺少任一卷时不要备份。
+
+```sh
+set -eu
+root=/srv/filesage-files
+data=/var/lib/filesage
+backup_mount=/mnt/backup
+backup="$backup_mount/filesage/$(date -u +%Y%m%dT%H%M%SZ)"
+
+sudo mountpoint -q "$backup_mount" || { echo "backup volume is not mounted" >&2; exit 1; }
+sudo systemctl is-active --quiet filesage.service || { echo "filesage.service is not active" >&2; exit 1; }
+sudo findmnt -T "$root"
+sudo findmnt -T "$root/home" # 替换为每个配置的子卷挂载点
+sudo findmnt -T "$backup_mount"
+sudo install -d -o root -g root -m 0700 "$backup_mount/filesage"
+sudo mkdir -m 0700 "$backup"
+
+trap 'sudo systemctl start filesage.service' 0
+sudo systemctl stop filesage.service
+sudo tar --acls --xattrs --numeric-owner -cpf "$backup/managed-root.tar" -C "$root" .
+sudo tar --acls --xattrs --numeric-owner -cpf "$backup/service-data.tar" -C "$data" .
+sudo bash -c 'cd "$1" && sha256sum managed-root.tar service-data.tar > SHA256SUMS' _ "$backup"
+sudo bash -c 'cd "$1" && sha256sum -c SHA256SUMS' _ "$backup"
+sudo systemctl start filesage.service
+trap - 0
+```
+
+恢复前先校验校验和，确认所有目标卷在线，并将目标准备为空目录；tar 解包不会删除备份中不存在的旧文件。服务停止期间分别解包两份归档，检查数据库后启动服务并验证健康接口和代表性文件。隔离恢复演练可用 `sqlite3 -readonly "$data/filesage.sqlite" 'PRAGMA integrity_check; PRAGMA foreign_key_check;'` 检查数据库；需看到 `ok` 且外键检查无输出。真实恢复前先在隔离路径演练，并保留当前状态副本；不要把归档直接合并到非空生产目录。
+
+```sh
+root=/srv/filesage-files
+data=/var/lib/filesage
+backup=/mnt/backup/filesage/20261019T000000Z # 替换为实际目录名
+
+sudo bash -c 'cd "$1" && sha256sum -c SHA256SUMS' _ "$backup"
+sudo systemctl stop filesage.service
+# 先确认所有挂载在线，且 root、data 与每个子卷目标均为空。
+sudo tar --acls --xattrs --numeric-owner -xpf "$backup/managed-root.tar" -C "$root"
+sudo tar --acls --xattrs --numeric-owner -xpf "$backup/service-data.tar" -C "$data"
+sudo sqlite3 -readonly "$data/filesage.sqlite" 'PRAGMA integrity_check; PRAGMA foreign_key_check;'
+# 仅在完整性检查通过后启动服务。
+sudo systemctl start filesage.service
+curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health # 按 FILESAGE_LISTEN_ADDR 替换
+```
+
+`sqlite3` 命令行仅用于恢复验收，不是运行依赖；未安装时先按系统发行版提供的受信来源安装。
+
 ## 可选工具
 
 能力缺失时对应功能会明确不可用。发行版安装包名称可能不同。
 
 | 工具 | 功能 |
 | --- | --- |
+| `sqlite3` | 离线备份恢复完整性检查；不是运行依赖。 |
 | `ffmpeg` | 视频海报 |
 | `heif-dec` 或 `heif-convert`、`dcraw_emu`、`prlimit` | HEIF／HEIC 与 RAW 图片预览 |
 | `7z`、`7zz` 或 `7za` | 7z／RAR 浏览，7z 归档创建 |
