@@ -1732,6 +1732,12 @@ func requireEmptyRequestBody(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
+	// 浏览器来源元数据可在 Origin 缺失时拦截跨站写请求。
+	fetchSite := r.Header.Get("Sec-Fetch-Site")
+	if fetchSite != "" && fetchSite != "same-origin" && fetchSite != "none" {
+		writeError(w, http.StatusForbidden, "cross-origin file changes are not allowed")
+		return false
+	}
 	origins := r.Header.Values("Origin")
 	if len(origins) == 0 {
 		return true

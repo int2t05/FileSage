@@ -78,6 +78,25 @@ func newUploadIntegration(t *testing.T) *uploadIntegration {
 	return fixture
 }
 
+func TestTusUploadDoesNotAllowCrossOriginPreflight(t *testing.T) {
+	fixture := newUploadIntegration(t)
+	request, err := http.NewRequest(http.MethodOptions, fixture.server.URL+"/api/v1/uploads/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Origin", "http://attacker.test")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "tus-resumable,upload-length,upload-metadata")
+	response, err := fixture.server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("send tus preflight: %v", err)
+	}
+	defer response.Body.Close()
+	if origin := response.Header.Get("Access-Control-Allow-Origin"); origin != "" {
+		t.Fatalf("cross-origin tus preflight received Access-Control-Allow-Origin %q", origin)
+	}
+}
+
 func (fixture *uploadIntegration) close() {
 	fixture.server.Close()
 	fixture.cancel()
