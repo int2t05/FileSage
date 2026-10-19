@@ -1,22 +1,19 @@
-# Dependencies and generated frontend output
+# 前端依赖与构建产物
 **/node_modules/
 /web/dist/
 /docs/design/prototype/dist/
 *.tsbuildinfo
 
-# 本地调研快照含第三方原文，仅同步自写索引和总结
+# 本地调研原文不进入公开仓库
 /reference/projects/
 /reference/official/*.html
 /reference/official/*.txt
 /reference/context7/
 
-# 私有维护记录，不随公开仓库发布
+# 私有维护记录
 /docs/USER_ACTIONS.md
 
-# 本地运行测试残留
-/undefined/
-
-# Local service data
+# 本地数据库与服务数据
 /data/
 *.db
 *.db-shm
@@ -25,13 +22,13 @@
 *.sqlite-shm
 *.sqlite-wal
 
-# Build artifacts
+# 编译产物
 /filesage
 *.exe
 *.test
 *.out
 
-# Local configuration and operating-system files
+# 本地配置与系统文件
 .env
 .env.*
 !.env.example
