@@ -112,6 +112,8 @@ sudo journalctl -u filesage.service -n 100 --no-pager
 
 若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。迁移后的旧二进制可能不兼容新 schema；若启动失败，应保留日志并修复前向版本，不要直接回退旧二进制。v27 会清除历史 Shell 输出，并从 SQLite WAL 中截断旧页。
 
+更新前可将当前二进制和 `web/` 暂存为 `rollback-before-<新提交>`，只保留一份上一版本。新服务通过健康检查后清理更早的程序备份；数据库迁移后只有确认 schema 兼容才能回退二进制。
+
 从源码目录更新时，将复制命令中的 `web/` 改为 `web/dist/`。
 
 ## 可选工具
