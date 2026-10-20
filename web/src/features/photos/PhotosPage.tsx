@@ -52,6 +52,18 @@ function formatCaptureTime(value?: string): string {
   return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(date);
 }
 
+export function photoIndexNotice(indexState: string): string {
+  if (indexState === 'ready') return '按拍摄时间排序；无拍摄时间的照片列在最后。';
+  if (indexState === 'building' || indexState === 'stale' || indexState === 'not_started') return '照片索引尚未完成，结果可能不完整。';
+  return '';
+}
+
+export function photoEmptyMessage(indexState: string): string {
+  return indexState === 'ready'
+    ? '当前筛选范围内没有照片。'
+    : '照片索引完成后，支持格式的图片会显示在这里。';
+}
+
 // 按索引保存的 UTC 日期载体展示原始拍摄日历字段。
 // 只在当前已加载的照片列表内切换。
 function adjacentPhoto(entries: FileEntry[], currentPath: string, direction: -1 | 1): FileEntry | null {
@@ -229,11 +241,7 @@ export function PhotosPage() {
 
   const readerIndex = readerTarget ? entries.findIndex((entry) => entry.path === readerTarget.path) : -1;
 
-  const indexNotice = indexState === 'ready'
-    ? '按可读取的拍摄时间排序；缺少拍摄时间的照片列在最后。'
-    : indexState === 'building' || indexState === 'stale' || indexState === 'not_started'
-      ? '首次完整扫描后即可按拍摄时间浏览；当前索引可能尚未包含全部照片。'
-      : '';
+  const indexNotice = entries.length > 0 ? photoIndexNotice(indexState) : '';
 
   return (
     <section
@@ -244,9 +252,7 @@ export function PhotosPage() {
     >
       <header className="photos-header">
         <div>
-          <p className="eyebrow">真实目录视图</p>
           <h1 id="photos-page-title">照片</h1>
-          <p>按拍摄日期浏览服务器中的图片，不复制或移动原件。</p>
         </div>
         <button className="photos-refresh" type="button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading}>
           <RefreshCw size={16} aria-hidden="true" />刷新
@@ -277,7 +283,7 @@ export function PhotosPage() {
         <div className="photos-state">
           <ImageIcon size={24} aria-hidden="true" />
           <strong>暂无照片</strong>
-          <span>完成文件索引后，支持格式的图片会按拍摄日期显示在这里。</span>
+          <span>{photoEmptyMessage(indexState)}</span>
         </div>
       )}
 

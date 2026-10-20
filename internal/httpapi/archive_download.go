@@ -337,6 +337,8 @@ func archiveSelectionCovered(relativePath string, kept map[string]struct{}) bool
 
 func archiveErrorResponse(err error) (int, string) {
 	switch {
+	case errors.Is(err, fsroot.ErrVolumeUnavailable):
+		return http.StatusServiceUnavailable, "管理卷暂不可用，请确认磁盘已挂载后重试。"
 	case errors.Is(err, fsroot.ErrArchiveUnsafeEntry):
 		return http.StatusUnprocessableEntity, "所选内容包含软链接、特殊文件或不安全文件名，未生成压缩包。"
 	case errors.Is(err, fsroot.ErrArchiveLimitExceeded):

@@ -37,6 +37,7 @@ type archiveParent struct {
 }
 
 type archiveWriter struct {
+	root       *Root
 	ctx        context.Context
 	zip        *zip.Writer
 	tar        *tar.Writer
@@ -76,6 +77,11 @@ func (r *Root) WriteArchiveFormat(ctx context.Context, selectedPaths []string, d
 	if err != nil {
 		return err
 	}
+	for _, relativePath := range paths {
+		if err := r.checkVolumeAvailability(relativePath); err != nil {
+			return err
+		}
+	}
 	if format == ArchiveFormat7Z {
 		return writeSevenZipArchive(ctx, r, paths, dst, limits)
 	}
@@ -85,7 +91,7 @@ func (r *Root) WriteArchiveFormat(ctx context.Context, selectedPaths []string, d
 	}
 	defer root.Close()
 
-	writer, finish, err := newArchiveWriter(ctx, dst, limits, format)
+	writer, finish, err := newArchiveWriter(r, ctx, dst, limits, format)
 	if err != nil {
 		return err
 	}
@@ -130,8 +136,8 @@ func ValidateArchiveFormat(format ArchiveFormat) error {
 	return nil
 }
 
-func newArchiveWriter(ctx context.Context, dst io.Writer, limits ArchiveLimits, format ArchiveFormat) (*archiveWriter, func() error, error) {
-	writer := &archiveWriter{ctx: ctx, limits: limits}
+func newArchiveWriter(root *Root, ctx context.Context, dst io.Writer, limits ArchiveLimits, format ArchiveFormat) (*archiveWriter, func() error, error) {
+	writer := &archiveWriter{root: root, ctx: ctx, limits: limits}
 	switch format {
 	case ArchiveFormatZIP:
 		writer.zip = zip.NewWriter(dst)
@@ -195,6 +201,9 @@ func archivePathCovered(relativePath string, kept map[string]struct{}) bool {
 }
 
 func (w *archiveWriter) addSelected(root *os.File, relativePath string) error {
+	if err := w.root.checkVolumeAvailability(relativePath); err != nil {
+		return err
+	}
 	parent, name, err := openArchiveParent(root, relativePath)
 	if err != nil {
 		return fmt.Errorf("open selected path %q: %w", relativePath, err)
@@ -269,6 +278,9 @@ func (w *archiveWriter) addDirectory(parent *os.File, name, relativePath, zipPat
 }
 
 func (w *archiveWriter) walkDirectory(directory *os.File, relativePath, zipPath string, depth int) error {
+	if err := w.root.verifyWalkVolume(directory, relativePath); err != nil {
+		return err
+	}
 	initial, err := directory.Stat()
 	if err != nil {
 		return fmt.Errorf("inspect directory %q: %w", relativePath, err)
@@ -290,6 +302,9 @@ func (w *archiveWriter) walkDirectory(directory *os.File, relativePath, zipPath 
 				continue
 			}
 			childPath := path.Join(relativePath, name)
+			if err := w.root.checkVolumeAvailability(childPath); err != nil {
+				return err
+			}
 			childZipPath := path.Join(zipPath, name)
 			if !validArchiveComponent(name) {
 				return archiveUnsafePath(childPath)

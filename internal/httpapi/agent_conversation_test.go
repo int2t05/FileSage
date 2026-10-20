@@ -89,7 +89,7 @@ func TestAgentConversationListAndStatusDoNotExposeMessagesOrCredentials(t *testi
 		status: agent.ModelStatus{Available: true, Provider: "ollama", Model: "qwen-local", Destination: "local"},
 		summaries: []store.ConversationSummary{{
 			ID: "conversation-1", State: store.ConversationAwaitingApproval,
-			Title: "根据正文标题整理名称", TaskID: "task-1", PlanID: "plan-1", UpdatedAt: time.Date(2026, 10, 15, 8, 30, 0, 0, time.UTC),
+			Title: "根据正文标题整理名称", TaskID: "task-1", PlanID: "plan-1", TaskStatus: store.TaskSucceeded, UpdatedAt: time.Date(2026, 10, 15, 8, 30, 0, 0, time.UTC),
 		}},
 	}
 	handler := NewWithAgentAndIndexAndConversation(nil, nil, nil, nil, nil, stub, nil, nil)
@@ -104,7 +104,7 @@ func TestAgentConversationListAndStatusDoNotExposeMessagesOrCredentials(t *testi
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(list)
-	if strings.Contains(string(encoded), "messages") || strings.Contains(string(encoded), "文件正文") || !strings.Contains(string(encoded), "taskId") || !strings.Contains(string(encoded), "planId") {
+	if strings.Contains(string(encoded), "messages") || strings.Contains(string(encoded), "文件正文") || !strings.Contains(string(encoded), "taskId") || !strings.Contains(string(encoded), "planId") || !strings.Contains(string(encoded), `"taskStatus":"succeeded"`) {
 		t.Fatalf("conversation summary has wrong shape: %s", encoded)
 	}
 	request = httptest.NewRequest(http.MethodGet, "/api/v1/agent/status", nil)
@@ -135,6 +135,21 @@ func TestPersistedConversationFailuresRemainSuccessfulResponses(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || stub.addCalls != 1 || !strings.Contains(response.Body.String(), `"state":"failed"`) {
 		t.Fatalf("message response = %d calls=%d %s", response.Code, stub.addCalls, response.Body.String())
+	}
+}
+
+func TestAgentConversationResponseKeepsContextSummaryPrivate(t *testing.T) {
+	stub := &conversationServiceStub{conversation: store.AgentConversation{
+		ID: "0123456789abcdef0123456789abcdef", State: store.ConversationClarifying,
+		ContextSummary: "private-context-summary-sentinel",
+		Messages:       []store.ConversationMessage{{Role: "assistant", Content: "请补充整理范围。"}},
+	}}
+	handler := NewWithAgentAndIndexAndConversation(nil, nil, nil, nil, nil, stub, nil, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent/conversations/0123456789abcdef0123456789abcdef", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "private-context-summary-sentinel") || strings.Contains(response.Body.String(), "contextSummary") {
+		t.Fatalf("conversation response exposed internal summary: %d %s", response.Code, response.Body.String())
 	}
 }
 

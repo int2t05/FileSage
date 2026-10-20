@@ -532,7 +532,8 @@
   }
 
   .pdf-reader-tool-controls {
-    flex: 1 0 100%;
+    flex: 1 1 100%;
+    min-width: 0;
     justify-content: space-between;
     border-top: 1px solid var(--color-line);
     padding-top: 3px;
@@ -585,6 +586,18 @@
   .pdf-reader-page-frame {
     margin-right: auto;
     margin-left: auto;
+  }
+}
+
+@media (max-width: 360px) {
+  .pdf-reader-tool-controls { gap: 2px; }
+
+  /* 极窄屏保留下载图标，完整名称由无障碍标签提供。 */
+  .pdf-reader-download {
+    gap: 0;
+    min-width: 40px;
+    padding: 0;
+    font-size: 0;
   }
 }
 

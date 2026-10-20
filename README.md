@@ -5,25 +5,40 @@
 [![CI](https://github.com/int2t05/FileSage/actions/workflows/ci.yml/badge.svg)](https://github.com/int2t05/FileSage/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A local-first file workspace for Linux. FileSage manages real directories across mounted disks and lets you review AI-proposed file changes before they run.
+A local-first file workspace for Linux. FileSage manages real directories across
+mounted disks and lets you review AI-proposed file changes before they run.
 
 [简体中文](README.zh-CN.md)
 
 ## Status
 
-Early MVP development. There is no stable release or prebuilt package yet. See the [acceptance ledger](docs/ACCEPTANCE.md) for verified capabilities and remaining checks.
+Early MVP development. There is no stable release or prebuilt package yet. See
+the [acceptance ledger](docs/ACCEPTANCE.md) for verified capabilities and
+remaining checks.
 
 ## What it does
 
-- Browse, search, filter, upload and organize files in their native directory structure. Mount additional disks beneath the configured root; folders remain the only categories.
+- Browse, search, filter, upload and organize files in their native directory
+  structure. Mount additional disks beneath the configured root; folders remain
+  the only categories.
 - Resume interrupted uploads, download original files, and create or inspect supported archives.
-- Read common image, audio, video, PDF, text, Markdown, Office, spreadsheet, EPUB and archive formats in the browser. Unsupported or complex files remain available for download.
-- Ask an OpenAI-compatible model to analyze an explicitly confirmed scope. Review each proposed operation, approve it, confirm execution and inspect the audit history.
+- Read common image, audio, video, PDF, text, Markdown, Office, spreadsheet,
+  EPUB and archive formats in the browser. Unsupported or complex files remain
+  available for download.
+- Ask an OpenAI-compatible model to clarify a task, then review the complete
+  plan before it runs. Continue with follow-up tasks in the same saved
+  conversation, including after a refresh. `bypasspermission` is on by default
+  and runs steps in order; turn it off in Agent settings to run one step at a
+  time. Expand a step to inspect its command, exit code and file diff, then
+  check the audit history. Raw Shell output is discarded rather than stored or
+  returned.
 - Keep SQLite task and search metadata outside the managed files. The filesystem remains the source of truth.
 
 ## Quick start
 
-Requirements: Linux, Go 1.27.2 or newer, Node.js 24 and npm. Optional system tools enable formats and operations such as Office conversion, OCR, video posters and 7-Zip archives; see [deployment](docs/DEPLOYMENT.md).
+Requirements: Linux, Go 1.27.2 or newer, Node.js 24 and npm. Optional system
+tools enable formats and operations such as Office conversion, OCR, video
+posters and 7-Zip archives; see [deployment](docs/DEPLOYMENT.md).
 
 ```sh
 cd web
@@ -40,7 +55,10 @@ export FILESAGE_LISTEN_ADDR="127.0.0.1:8080"
 ./filesage
 ```
 
-Open `http://127.0.0.1:8080`. `FILESAGE_ROOT` must already exist; `FILESAGE_DATA_DIR` must be outside it. The default listener is loopback. For LAN access, bind only to a trusted private interface and configure the host firewall. FileSage has no login or password.
+Open `http://127.0.0.1:8080`. `FILESAGE_ROOT` must already exist and
+`FILESAGE_DATA_DIR` must be outside it. The default listener is loopback. For
+LAN access, bind only to a trusted private interface and configure the host
+firewall. FileSage has no login or password.
 
 ## Verify a change
 
@@ -54,9 +72,12 @@ npm ci
 npm test
 npm run typecheck
 npm run build
+npx playwright install chromium
+npm run e2e
 ```
 
-The same checks run in [GitHub Actions](.github/workflows/ci.yml).
+The browser test uses a local mock model and temporary files/database. The same
+checks run in [GitHub Actions](.github/workflows/ci.yml).
 
 ## Project docs
 
@@ -67,10 +88,26 @@ The same checks run in [GitHub Actions](.github/workflows/ci.yml).
 - [Competitor and implementation research](reference/README.md)
 - [Contributing](CONTRIBUTING.md) · [security reporting](SECURITY.md)
 
+## Support and feedback
+
+Report a reproducible bug or suggest an improvement through
+[GitHub Issues](https://github.com/int2t05/FileSage/issues/new/choose). Do not
+post secrets, private file contents or exploitable security details there; see
+the [security reporting guide](SECURITY.md) for private reports.
+
 ## Security boundary
 
-FileSage is intended for a trusted personal network. It does not authenticate users, provide HTTPS termination or protect an internet-facing deployment. Keep it on loopback or a trusted LAN behind a firewall. Agent prompts and file contents are sent to the configured model only after the user confirms the relevant task and data scope; the exact boundary is documented in the [Agent API notes](docs/agent-conversation-api.md).
+FileSage is intended for a trusted personal network. It does not authenticate
+users, provide HTTPS termination or protect an internet-facing deployment. Keep
+it on loopback or a trusted LAN behind a firewall. Agent chat messages are sent
+to the configured model as you converse. File contents are read and sent only
+after you confirm an analysis card; review its listed data types first. See the
+[Agent API notes](docs/agent-conversation-api.md).
 
 ## License
 
-FileSage-authored code and documentation are licensed under the [MIT License](LICENSE). Third-party assets and dependencies retain their own terms; see [third-party notices](THIRD_PARTY_NOTICES.md). The public repository contains research summaries, source links and collection tools; locally collected upstream documents are excluded.
+FileSage-authored code and documentation are licensed under the
+[MIT License](LICENSE). Third-party assets and dependencies retain their own
+terms; see [third-party notices](THIRD_PARTY_NOTICES.md). The public repository
+contains research summaries, source links and collection tools; locally
+collected upstream documents are excluded.

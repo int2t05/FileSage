@@ -1,5 +1,5 @@
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
+body { margin: 0; min-height: 100vh; }
 button, input, textarea, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 3px solid rgb(73 120 93 / 35%); outline-offset: 2px; }
@@ -27,24 +27,17 @@ button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visib
 .status-dot.is-offline { background: var(--color-danger); }
 .settings-link { margin-top: auto; color: #6f766e; }
 .settings-link:disabled { cursor: not-allowed; opacity: .62; }
-.sidebar-foot { margin: 16px 10px 0; color: #747b72; font-size: 11px; line-height: 1.7; }
-.sidebar-foot span { color: #9ba198; }
 .main-panel { min-width: 0; }
-.topbar { position: sticky; z-index: 5; top: 0; display: flex; align-items: center; justify-content: space-between; height: 62px; padding: 0 32px; border-bottom: 1px solid var(--color-line); background: rgb(255 255 255 / 93%); backdrop-filter: blur(12px); }
-.top-crumb { display: flex; align-items: center; gap: 10px; color: #858b83; font-size: 12px; }
-.top-crumb strong { color: #3d443c; font-weight: 600; }
-.crumb-divider { color: #c4c9c2; }
+.topbar { display: none; }
 .service-indicator { display: inline-flex; align-items: center; gap: 7px; color: #838b82; font-size: 11px; }
 .mobile-brand, .mobile-nav { display: none; }
 .page-content { width: min(100%, 1440px); margin: 0 auto; padding: 32px; }
-.eyebrow { color: var(--color-accent); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
 @media (max-width: 760px) {
   .app-shell { display: block; }
   .sidebar { display: none; }
-  .topbar { height: 56px; padding: 0 16px; }
+  .topbar { position: sticky; z-index: 5; top: 0; display: flex; height: 56px; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid var(--color-line); background: rgb(255 255 255 / 93%); backdrop-filter: blur(12px); }
   .mobile-brand { display: inline-flex; align-items: center; gap: 8px; font-size: 14px; }
   .mobile-brand .brand-mark { width: 29px; height: 29px; border-radius: 8px; }
-  .top-crumb { display: none; }
   .service-indicator { font-size: 10px; }
   .page-content { padding: 24px 16px 92px; }
   .mobile-nav { position: fixed; z-index: 10; right: 0; bottom: 0; left: 0; display: grid; grid-template-columns: repeat(4, 1fr); padding: 6px 8px calc(6px + env(safe-area-inset-bottom)); border-top: 1px solid var(--color-line); background: rgb(255 255 255 / 96%); backdrop-filter: blur(14px); }

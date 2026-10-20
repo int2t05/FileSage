@@ -368,6 +368,9 @@ func TestConversationPermanentDeleteRequiresApprovalAndNoFollowPurge(t *testing.
 		t.Fatal(err)
 	}
 	plans.trash = trash
+	if err := metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
 	model := &scriptedConversationModel{
 		status: ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
 		replies: []string{`{"state":"ready","reply":"这些项目将被永久删除且无法恢复，请确认生成方案。","goal":"永久清理指定项目","operations":[
@@ -397,23 +400,40 @@ func TestConversationPermanentDeleteRequiresApprovalAndNoFollowPurge(t *testing.
 	if err != nil || len(plan.Operations) != len(paths) {
 		t.Fatalf("Plan() = (%#v, %v)", plan, err)
 	}
+	operationIDs := make([]string, 0, len(plan.Operations))
 	for _, operation := range plan.Operations {
 		if operation.Action != "permanent_delete" || operation.Approval != store.ApprovalPending {
 			t.Fatalf("unexpected permanent-delete operation: %#v", operation)
 		}
-		plan, err = plans.Decide(ctx, plan.ID, operation.ID, "approve", plan.Version)
-		if err != nil {
-			t.Fatalf("approve %s: %v", operation.SourcePath, err)
+		operationIDs = append(operationIDs, operation.ID)
+	}
+	if _, err := plans.StartPlan(ctx, plan.ID, plan.Version, "manual", false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("start permanent-delete plan without confirmation = %v, want conflict", err)
+	}
+	for _, relativePath := range paths {
+		if _, err := root.LstatEntry(relativePath); err != nil {
+			t.Fatalf("missing confirmation changed entry: %s: %v", relativePath, err)
 		}
+	}
+	plan, err = plans.StartPlan(ctx, plan.ID, plan.Version, "manual", true)
+	if err != nil || plan.Status != store.PlanApproved || plan.ExecutionMode != "manual" {
+		t.Fatalf("confirmed permanent-delete review = (%#v, %v)", plan, err)
 	}
 	for _, relativePath := range paths {
 		if _, err := root.LstatEntry(relativePath); err != nil {
 			t.Fatalf("approval removed entry before execution: %s: %v", relativePath, err)
 		}
 	}
-	completed, err := plans.Execute(ctx, plan.ID, plan.Version)
-	if err != nil || completed.Status != store.PlanCompleted {
-		t.Fatalf("Execute() = (%#v, %v)", completed, err)
+	var completed store.PlanRecord
+	for _, operationID := range operationIDs {
+		completed, err = plans.ExecuteStep(ctx, plan.ID, operationID, plan.Version)
+		if err != nil {
+			t.Fatalf("execute confirmed permanent-delete step %s: %v", operationID, err)
+		}
+		plan = completed
+	}
+	if completed.Status != store.PlanCompleted {
+		t.Fatalf("manual permanent-delete plan status = %q, want completed", completed.Status)
 	}
 	for _, operation := range completed.Operations {
 		if operation.Status != store.OperationSucceeded || !strings.Contains(operation.ResultMessage, "无法恢复") {
@@ -473,14 +493,14 @@ func TestConversationRequiresExplicitPermanentDeleteRequest(t *testing.T) {
 		t.Fatal(err)
 	}
 	plans.trash = trash
-	permanentResponse := `{"state":"ready","reply":"我会永久删除该文件，请确认。","goal":"删除旧文件","operations":[{"action":"permanent_delete","filePath":"old.txt"}]}`
+	permanentResponse := `{"state":"ready","reply":"我会永久删除该文件，请确认。","contextSummary":"用户已同意永久删除 old.txt。","goal":"删除旧文件","operations":[{"action":"permanent_delete","filePath":"old.txt"}]}`
 	model := &scriptedConversationModel{
 		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
 		replies: []string{permanentResponse, permanentResponse, permanentResponse, permanentResponse},
 	}
 	service := &ConversationService{store: metadata, root: root, plans: plans, model: model}
 	conversation, err := service.Create(ctx, "请删除 old.txt")
-	if err != nil || conversation.State != store.ConversationClarifying || conversation.Analysis != nil || len(conversation.Messages) == 0 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Content, "明确说明") {
+	if err != nil || conversation.State != store.ConversationClarifying || conversation.Analysis != nil || conversation.ContextSummary != "用户已同意永久删除 old.txt。" || len(conversation.Messages) == 0 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Content, "明确说明") {
 		t.Fatalf("ambiguous delete result = (%#v, %v), want explicit clarification", conversation, err)
 	}
 	if _, err := root.LstatEntry("old.txt"); err != nil {
@@ -1125,6 +1145,18 @@ func TestConversationAcceptsLineBreaksInModelClarification(t *testing.T) {
 	invalid := conversationTurnResult{State: "clarifying", Reply: "请补充范围\x00"}
 	if err := validateTurnResult(&invalid); !errors.Is(err, ErrModelResponse) {
 		t.Fatalf("validateTurnResult(control character) = %v, want invalid model response", err)
+	}
+}
+
+func TestConversationPromptKeepsUserFacingRepliesBrief(t *testing.T) {
+	if !strings.Contains(conversationSystemPrompt, "简洁自然") || !strings.Contains(conversationSystemPrompt, "不要复述卡片已显示") {
+		t.Fatal("conversation prompt must keep user-facing replies concise")
+	}
+	if !strings.Contains(conversationSystemPrompt, "goal 不超过 60 字") || !strings.Contains(conversationSystemPrompt, "reply 不超过 120 字") {
+		t.Fatal("conversation prompt must constrain goal and reply length")
+	}
+	if !strings.Contains(shellIntentPrompt, "不复述卡片中的命令、范围或审批流程") {
+		t.Fatal("Shell replies must not repeat details already shown in the confirmation card")
 	}
 }
 

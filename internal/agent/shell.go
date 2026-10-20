@@ -1,4 +1,4 @@
-// 本文件把对话确认后的 Shell 命令转换为逐项审批的文件方案。
+// 本文件把隔离 Shell 的变化保存为一个受控 Agent 步骤。
 package agent
 
 import (
@@ -27,14 +27,13 @@ import (
 const maxShellInputBytes = 480 << 20
 
 type ShellProposal struct {
-	RequestText       string
-	ScopePath         string
-	Command           string
-	WorkingDirectory  string
-	ConversationID    string
-	ConversationReply string
-	ModelProvider     string
-	ModelName         string
+	RequestText      string
+	ScopePath        string
+	Command          string
+	WorkingDirectory string
+	ConversationID   string
+	ModelProvider    string
+	ModelName        string
 }
 
 type shellOriginalState struct {
@@ -104,7 +103,7 @@ func (s *Service) ProposeShell(ctx context.Context, proposal ShellProposal) (sto
 	if err := s.root.VerifyTreeSnapshot(ctx, snapshot); err != nil {
 		return store.PlanRecord{}, fmt.Errorf("Shell 运行期间管理目录发生变化，请重新分析: %w", ErrConflict)
 	}
-	return s.saveShellPlan(ctx, proposal, result.Changes, items, workspaceDir, stageRoot)
+	return s.saveShellPlan(ctx, proposal, result, items, workspaceDir, stageRoot)
 }
 
 func validShellWorkingDirectory(value string) bool {
@@ -249,7 +248,8 @@ func pathDepth(value string) int {
 	return strings.Count(value, "/")
 }
 
-func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, changes []shellstage.Change, original map[string]fsroot.Entry, workspaceDir, stageRoot string) (store.PlanRecord, error) {
+func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, result shellstage.Result, original map[string]fsroot.Entry, workspaceDir, stageRoot string) (store.PlanRecord, error) {
+	changes := result.Changes
 	if len(changes) > 20_000 {
 		return store.PlanRecord{}, ErrUnsupported
 	}
@@ -274,20 +274,16 @@ func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, cha
 	taskStatus := store.TaskAwaitingApproval
 	operationStatus := store.OperationPending
 	runStatus := store.ShellRunAwaitingApproval
-	reply := proposal.ConversationReply
 	if len(changes) == 0 {
 		planStatus, taskStatus, operationStatus, runStatus = store.PlanCompleted, store.TaskSucceeded, store.OperationSucceeded, store.ShellRunCompleted
-		reply = "沙箱任务已完成，没有发现文件变化。"
-	} else if reply == "" {
-		reply = fmt.Sprintf("沙箱分析完成，发现 %d 项文件变化。请逐项审阅；命令不会因审批再次运行。", len(changes))
 	}
 	parent := store.OperationRecord{
 		ID: operationID, PlanID: planID, Ordinal: 0, Action: "run_shell", SourcePath: proposal.ScopePath,
-		Reason: "隔离运行后逐项审批变更", TargetConflictPolicy: "fail",
+		Reason: strings.TrimSpace(proposal.RequestText), TargetConflictPolicy: "fail",
 		Approval: store.ApprovalPending, Status: operationStatus, ResultMessage: "", CreatedAt: now, UpdatedAt: now,
 	}
 	if len(changes) == 0 {
-		parent.ResultMessage = "沙箱任务已完成，没有发现文件变化"
+		parent.ResultMessage = "隔离运行完成，无文件变化"
 	}
 	plan := store.PlanRecord{
 		ID: planID, TaskID: taskID, Version: 1, Status: planStatus, ScopePath: proposal.ScopePath,
@@ -300,9 +296,13 @@ func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, cha
 		ScopePath: proposal.ScopePath, ModelProvider: proposal.ModelProvider, ModelName: proposal.ModelName,
 		CreatedAt: now, UpdatedAt: now,
 	}
+	if len(result.Stdout)+len(result.Stderr) > 256<<10 {
+		return store.PlanRecord{}, ErrUnsupported
+	}
 	run := store.ShellRunRecord{
 		ID: runID, PlanID: planID, OperationID: operationID, Command: proposal.Command,
-		WorkingDirectory: proposal.WorkingDirectory, StageID: runID, Status: runStatus,
+		WorkingDirectory: proposal.WorkingDirectory, OutputDiscarded: len(result.Stdout)+len(result.Stderr) > 0, ExitCode: result.ExitCode,
+		StageID: runID, Status: runStatus,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	storedChanges := make([]store.ShellChangeRecord, 0, len(changes))
@@ -380,7 +380,7 @@ func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, cha
 		Actor: "agent", Outcome: auditOutcome, Message: fmt.Sprintf("隔离 Shell 分析完成，共发现 %d 项文件变化", len(changes)),
 		SourcePath: proposal.ScopePath, CreatedAt: now,
 	}
-	if err := s.store.CreateConversationShellTaskPlan(ctx, proposal.ConversationID, task, plan, run, storedChanges, audit, reply); err != nil {
+	if err := s.store.CreateConversationShellTaskPlan(ctx, proposal.ConversationID, task, plan, run, storedChanges, audit, ""); err != nil {
 		return store.PlanRecord{}, err
 	}
 	committed = true
@@ -404,7 +404,7 @@ func hashShellPath(root *fsroot.Root, relativePath string, expectedSize int64) (
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-// ShellRun 返回不含命令输出的 Shell 运行元数据。
+// ShellRun 返回命令元数据，不返回命令原始输出。
 func (s *Service) ShellRun(ctx context.Context, planID string) (store.ShellRunRecord, error) {
 	if s == nil || s.store == nil {
 		return store.ShellRunRecord{}, ErrUnsupported
@@ -429,15 +429,28 @@ func (s *Service) PreviewShellChange(ctx context.Context, planID, changeID strin
 	if err != nil {
 		return ShellChangePreview{}, err
 	}
-	if plan.Status != store.PlanAwaitingApproval && plan.Status != store.PlanApproved {
-		return ShellChangePreview{}, ErrConflict
-	}
 	change, err := s.shellChange(ctx, planID, changeID)
 	if err != nil {
 		return ShellChangePreview{}, err
 	}
-	if change.Status != store.OperationPending || change.Approval != store.ApprovalPending && change.Approval != store.ApprovalApproved || change.Binary {
+	if change.Binary {
 		return ShellChangePreview{}, ErrUnsupported
+	}
+	if change.Status == store.OperationSucceeded && change.Kind == "added" {
+		if err := s.verifyShellCandidate(plan.ScopePath, change); err != nil {
+			return ShellChangePreview{}, ErrConflict
+		}
+		after, err := s.readShellFile(ctx, shellRootPath(plan.ScopePath, change.Path), change.CandidateSize)
+		if err != nil {
+			return ShellChangePreview{}, ErrConflict
+		}
+		diff, truncated := shellstage.FormatTextDiff(nil, after, change.Path, 64<<10)
+		change.Truncated = change.Truncated || truncated
+		return ShellChangePreview{Change: change, Diff: diff}, nil
+	}
+	if (plan.Status != store.PlanAwaitingApproval && plan.Status != store.PlanApproved) || change.Status != store.OperationPending ||
+		change.Approval != store.ApprovalPending && change.Approval != store.ApprovalApproved {
+		return ShellChangePreview{}, ErrConflict
 	}
 	state, err := decodeShellOriginalState(change)
 	if err != nil {
@@ -478,7 +491,7 @@ func (s *Service) PreviewShellChange(ctx context.Context, planID, changeID strin
 			return ShellChangePreview{}, ErrConflict
 		}
 	}
-	diff, truncated := shellstage.FormatTextDiff(before, after, 64<<10)
+	diff, truncated := shellstage.FormatTextDiff(before, after, change.Path, 64<<10)
 	change.Truncated = change.Truncated || truncated
 	return ShellChangePreview{Change: change, Diff: diff}, nil
 }

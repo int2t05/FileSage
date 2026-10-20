@@ -128,22 +128,19 @@ func TestDuplicateCleanupHTTPFlowRequiresReviewAndCanRestore(t *testing.T) {
 		if operation.Action != "trash_duplicate" || operation.TargetPath != "docs/keep.md" || operation.Approval != string(store.ApprovalPending) {
 			t.Fatalf("unclear cleanup operation: %+v", operation)
 		}
-		var updated planResponse
-		requestJSON(t, server.Client(), http.MethodPost,
-			server.URL+"/api/v1/agent/plans/"+plan.PlanID+"/operations/"+operation.ID+"/approval", server.URL,
-			map[string]any{"decision": "approve", "expectedPlanVersion": plan.PlanVersion}, http.StatusOK, &updated)
-		plan = updated
-	}
-	if plan.Status != string(store.PlanApproved) {
-		t.Fatalf("all approvals left plan in %q", plan.Status)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "docs", "copy-a.md")); err != nil {
 		t.Fatalf("approval moved a file before execution: %v", err)
 	}
-	requestJSON(t, server.Client(), http.MethodPost, server.URL+"/api/v1/agent/plans/"+plan.PlanID+"/execute", server.URL,
-		map[string]int{"expectedPlanVersion": plan.PlanVersion}, http.StatusOK, &plan)
+	requestJSON(t, server.Client(), http.MethodPost, server.URL+"/api/v1/agent/plans/"+plan.PlanID+"/start", server.URL,
+		map[string]any{"expectedPlanVersion": plan.PlanVersion, "expectedExecutionMode": "bypass", "confirmPermanentDelete": false}, http.StatusOK, &plan)
 	if plan.Status != string(store.PlanCompleted) {
-		t.Fatalf("execution status = %q", plan.Status)
+		t.Fatalf("review and execution status = %q", plan.Status)
+	}
+	for _, operation := range plan.Operations {
+		if operation.Approval != string(store.ApprovalApproved) || operation.ExecStatus != string(store.OperationSucceeded) {
+			t.Fatalf("reviewed execution result = %+v", operation)
+		}
 	}
 	for _, name := range []string{"copy-a.md", "copy-b.md"} {
 		if _, err := os.Stat(filepath.Join(rootPath, "docs", name)); !os.IsNotExist(err) {

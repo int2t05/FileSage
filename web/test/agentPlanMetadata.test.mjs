@@ -50,13 +50,29 @@ describe('Agent 方案元数据解析', () => {
     assert.equal(parsed.operations[0].mode, undefined);
   });
 
-  it('Shell 方案保留完整命令与工作目录，并且只能包含一个父操作', async () => {
+  it('Shell 方案保留命令和工作目录，但不解析历史原始输出', async () => {
     const shell = await readPlan(plan({
       action: 'run_shell', sourcePath: '', targetPath: '',
       command: 'printf done > result.txt', workingDir: '', approval: 'approved',
     }));
     assert.equal(shell.operations[0].command, 'printf done > result.txt');
     assert.equal(shell.operations[0].workingDir, '');
+    const shellWithOutput = await readPlan(plan({
+      action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.',
+      exitCode: 0, stdout: 'done\n', stderr: '',
+    }));
+    assert.equal(shellWithOutput.operations[0].exitCode, 0);
+    assert.equal(shellWithOutput.operations[0].stdout, undefined);
+    assert.equal(shellWithOutput.operations[0].stderr, undefined);
+    const shellWithoutOutput = await readPlan(plan({
+      action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.',
+      exitCode: 0, outputDiscarded: true,
+    }));
+    assert.equal(shellWithoutOutput.operations[0].outputDiscarded, true);
+    assert.throws(() => readPlan(plan({
+      action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.', outputDiscarded: 'true',
+    })), /无效/);
+    assert.throws(() => readPlan(plan({ stdout: '不适用于文件操作' })), /无效/);
     const multi = { ...plan({ ...shell.operations[0] }), operations: [shell.operations[0], { ...shell.operations[0], id: 'shell-2' }] };
     assert.throws(() => readPlan(multi), /Shell 方案必须只包含一项父操作/);
     for (const invalid of [

@@ -45,6 +45,12 @@ func (r *Root) CopyTreeNoReplace(ctx context.Context, source, destination string
 	if err := validateTreeCopy(source, destination, expected); err != nil {
 		return TreeCopyResult{}, err
 	}
+	if err := r.checkVolumeAvailability(source); err != nil {
+		return TreeCopyResult{}, err
+	}
+	if err := r.checkVolumeAvailability(destination); err != nil {
+		return TreeCopyResult{}, err
+	}
 	return platformCopyTreeNoReplace(ctx, r, source, destination, expected)
 }
 
@@ -55,6 +61,9 @@ func (r *Root) CleanupTreeCopyStaging(relativeParent string) error {
 	}
 	if err := validateRelativePath(relativeParent); err != nil || hasTrashComponent(relativeParent) {
 		return ErrInvalidPath
+	}
+	if err := r.checkVolumeAvailability(relativeParent); err != nil {
+		return err
 	}
 	return platformCleanupTreeCopyStaging(r, relativeParent)
 }
@@ -90,6 +99,9 @@ func validateTreeCopy(source, destination string, snapshot TreeSnapshot) error {
 	entries := make(map[string]Entry, len(snapshot.Entries))
 	for index, item := range snapshot.Entries {
 		entry := item.Entry
+		if entry.MountUnavailable || entry.ReadOnly {
+			return ErrVolumeUnavailable
+		}
 		if entry.Symlink || entry.LinkIdentityAvailable || entry.LinkTarget != "" {
 			return fmt.Errorf("%q: %w", entry.Path, ErrTreeCopyUnsafeEntry)
 		}

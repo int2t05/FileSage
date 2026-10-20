@@ -11,7 +11,7 @@ permissions:
 jobs:
   backend:
     name: Go
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,11 +29,12 @@ jobs:
           fi
       - run: go test -count=1 ./...
       - run: go vet ./...
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go build ./...
 
   frontend:
     name: Web
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: web
@@ -41,12 +42,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+      - run: npm audit --registry=https://registry.npmjs.org/ --audit-level=high
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - run: npm run e2e

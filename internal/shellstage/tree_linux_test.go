@@ -209,7 +209,7 @@ func TestTreeBoundsDepthCountAndSize(t *testing.T) {
 func TestTextDiffIsBounded(t *testing.T) {
 	oldText := []byte(strings.Repeat("old line\n", 64))
 	newText := []byte(strings.Repeat("new line\n", 64))
-	diff, truncated := formatTextDiff(oldText, newText, 256, true, true)
+	diff, truncated := formatTextDiff(oldText, newText, "large.txt", 256, true, true)
 	if !truncated {
 		t.Fatal("expected truncated diff")
 	}

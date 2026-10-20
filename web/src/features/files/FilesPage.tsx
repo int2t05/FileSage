@@ -45,6 +45,7 @@ import { ArchiveReader } from '../reader/ArchiveReader';
 import { ReaderPanel, type ReaderMediaKind } from '../reader/ReaderPanel';
 import { isSupportedArchiveName } from '../reader/archiveReaderRules';
 import { UploadPanel } from '../uploads/UploadPanel';
+import type { AgentLaunchContext } from '../agent/AgentPage';
 import './FilesPage.css';
 
 type EntryKind = 'folder' | 'image' | 'audio' | 'pdf' | 'text' | 'office' | 'spreadsheet' | 'archive' | 'video' | 'other';
@@ -54,7 +55,7 @@ const mebibyte = 1024 * 1024;
 
 interface FilesPageProps {
   onOpenTrash: () => void;
-  onOpenAgent: () => void;
+  onOpenAgent: (context: AgentLaunchContext) => void;
 }
 
 interface FileFilterInputs {
@@ -203,6 +204,8 @@ function linkStatusDescription(status: ApiFileEntry['linkStatus']): string {
 }
 
 function kindLabel(entry: FileEntry): string {
+  if (entry.mountUnavailable) return '磁盘不可用';
+  if (entry.readOnly) return entry.kind === 'directory' ? '文件夹 · 只读' : '文件 · 只读';
   if (entry.symlink) {
     const kind = entry.displayKind === 'folder' ? '文件夹软链接' : '文件软链接';
     return `${kind} · ${linkStatusLabel(entry.linkStatus)}`;
@@ -516,30 +519,39 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
     ? showHidden ? entries : entries.filter((entry) => !isHiddenEntry(entry))
     : [];
   const hiddenEntriesAvailable = !showHidden && listingIsCurrent && entries.some(isHiddenEntry);
-  const allLoadedSelected = visibleEntries.length > 0 && visibleEntries.every((entry) => selectedIds.has(entry.id));
-  const visibleSelectedCount = visibleEntries.filter((entry) => selectedIds.has(entry.id)).length;
+  const selectableEntries = visibleEntries.filter((entry) => !entry.mountUnavailable);
+  const allLoadedSelected = selectableEntries.length > 0 && selectableEntries.every((entry) => selectedIds.has(entry.id));
+  const visibleSelectedCount = selectableEntries.filter((entry) => selectedIds.has(entry.id)).length;
   const selectedEntries = listingIsCurrent ? entries.filter((entry) => selectedIds.has(entry.id)) : [];
   const selectionHasMissingEntries = selectedEntries.length !== selectedIds.size;
+  const selectionHasUnavailableEntries = selectedEntries.some((entry) => entry.mountUnavailable);
   const selectionHasMissingVersion = !selectionHasMissingEntries && selectedEntries.some((entry) => !entry.version);
-  const canDownloadSelection = !displayLoading && selectedIds.size > 0 && !selectionHasMissingEntries && !selectionHasMissingVersion;
+  const canDownloadSelection = !displayLoading && selectedIds.size > 0 && !selectionHasMissingEntries
+    && !selectionHasUnavailableEntries && !selectionHasMissingVersion;
   const selectionIssue = displayLoading
     ? '目录加载中，暂不可下载。'
     : selectionHasMissingEntries
       ? '部分选择已不在当前已加载项目中，请清除选择后重新选取。'
-      : selectionHasMissingVersion
-        ? '部分项目缺少版本信息，请刷新目录后重新选择。'
-        : '';
+      : selectionHasUnavailableEntries
+        ? '磁盘不可用，无法执行文件操作；请清除选择。'
+        : selectionHasMissingVersion
+          ? '部分项目缺少版本信息，请刷新目录后重新选择。'
+          : '';
   const batchTrashIssue = displayLoading
     ? '目录加载中，暂不可操作。'
     : selectionHasMissingEntries
       ? '部分选择已不在当前已加载项目中，请清除选择后重新选取。'
-      : selectionHasMissingVersion
-        ? '部分项目缺少版本信息，请刷新目录后重新选择。'
-        : selectedEntries.some((entry) => !canMoveEntryToTrash(entry))
-          ? '选择中包含无法移入回收站的特殊文件。'
-          : selectedIds.size > 256
-            ? '一次最多移入 256 项，请减少选择数量。'
-            : '';
+      : selectionHasUnavailableEntries
+        ? selectionIssue
+        : selectedEntries.some((entry) => entry.readOnly)
+          ? '只读项目不能移入回收站。'
+          : selectionHasMissingVersion
+            ? '部分项目缺少版本信息，请刷新目录后重新选择。'
+            : selectedEntries.some((entry) => !canMoveEntryToTrash(entry))
+              ? '选择中包含无法移入回收站的特殊文件。'
+              : selectedIds.size > 256
+                ? '一次最多移入 256 项，请减少选择数量。'
+                : '';
   const canSubmitBatchTrash = selectedIds.size > 1 && !batchTrashIssue;
   const selectedPaths = new Set(selectedEntries.map((entry) => entry.path));
   const hasParentAndChildSelection = selectedEntries.some((entry) => {
@@ -555,37 +567,49 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
     ? '目录加载中，暂不可操作。'
     : selectionHasMissingEntries
       ? '部分选择已不在当前已加载项目中，请清除选择后重新选取。'
-      : selectionHasMissingVersion
-        ? '部分项目缺少版本信息，请刷新目录后重新选择。'
-        : selectedIds.size > 256
-          ? '一次最多重命名 256 项，请减少选择数量。'
-          : hasParentAndChildSelection
-            ? '不能同时重命名父目录和其中的项目，请分开操作。'
-            : '';
+      : selectionHasUnavailableEntries
+        ? selectionIssue
+        : selectedEntries.some((entry) => entry.readOnly)
+          ? '只读项目不能批量重命名。'
+          : selectionHasMissingVersion
+            ? '部分项目缺少版本信息，请刷新目录后重新选择。'
+            : selectedIds.size > 256
+              ? '一次最多重命名 256 项，请减少选择数量。'
+              : hasParentAndChildSelection
+                ? '不能同时重命名父目录和其中的项目，请分开操作。'
+                : '';
   const canSubmitBatchRename = selectedIds.size > 1 && !batchRenameIssue;
   const batchFileOperationIssue = displayLoading
     ? '目录加载中，暂不可操作。'
     : selectionHasMissingEntries
       ? '部分选择已不在当前已加载项目中，请清除选择后重新选取。'
-      : selectionHasMissingVersion
-        ? '部分项目缺少版本信息，请刷新目录后重新选择。'
-        : selectedEntries.some((entry) => entry.symlink || (entry.kind !== 'file' && entry.kind !== 'directory'))
-          ? '批量复制和移动仅支持真实文件与文件夹。'
-          : selectedIds.size > 256
-            ? '一次最多处理 256 项，请减少选择数量。'
-            : '';
+      : selectionHasUnavailableEntries
+        ? selectionIssue
+        : selectionHasMissingVersion
+          ? '部分项目缺少版本信息，请刷新目录后重新选择。'
+          : selectedEntries.some((entry) => entry.symlink || (entry.kind !== 'file' && entry.kind !== 'directory'))
+            ? '批量复制和移动仅支持真实文件与文件夹。'
+            : selectedIds.size > 256
+              ? '一次最多处理 256 项，请减少选择数量。'
+              : '';
   const canSubmitBatchFileOperation = selectedIds.size > 1 && !batchFileOperationIssue;
+  const batchMoveIssue = batchFileOperationIssue || (selectedEntries.some((entry) => entry.readOnly) ? '只读项目不能移动。' : '');
+  const canSubmitBatchMove = canSubmitBatchFileOperation && !selectedEntries.some((entry) => entry.readOnly);
   const createArchiveIssue = displayLoading
     ? '目录加载中，暂不可创建压缩包。'
     : selectionHasMissingEntries
       ? '部分选择已不在当前已加载项目中，请清除选择后重新选取。'
-      : selectionHasMissingVersion
-        ? '部分项目缺少版本信息，请刷新目录后重新选择。'
-        : selectedEntries.some((entry) => entry.symlink || (entry.kind !== 'file' && entry.kind !== 'directory'))
-          ? '创建压缩包仅支持真实文件和文件夹。'
-          : selectedIds.size > 256
-            ? '一次最多压缩 256 项，请减少选择数量。'
-            : '';
+      : selectionHasUnavailableEntries
+        ? selectionIssue
+        : selectedEntries.some((entry) => entry.readOnly)
+          ? '只读项目不能创建压缩包。'
+          : selectionHasMissingVersion
+            ? '部分项目缺少版本信息，请刷新目录后重新选择。'
+            : selectedEntries.some((entry) => entry.symlink || (entry.kind !== 'file' && entry.kind !== 'directory'))
+              ? '创建压缩包仅支持真实文件和文件夹。'
+              : selectedIds.size > 256
+                ? '一次最多压缩 256 项，请减少选择数量。'
+                : '';
   const canCreateArchive = selectedIds.size > 0 && !createArchiveIssue;
   const currentDirectoryLabel = path.at(-1) ?? '全部文件';
   const crumbEntries = path.map((name, index) => ({ name, path: path.slice(0, index + 1) }));
@@ -598,8 +622,9 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   const singleSelectedEntry = selectedIds.size === 1 ? entries.find((entry) => selectedIds.has(entry.id)) : undefined;
   const canCopySelected = !displayLoading && selectedIds.size === 1 && Boolean(singleSelectedEntry
     && (singleSelectedEntry.kind === 'file' || singleSelectedEntry.kind === 'directory')
-    && !singleSelectedEntry.symlink && singleSelectedEntry.version);
-  const canMoveSelected = canCopySelected && (singleSelectedEntry?.kind === 'file' || singleSelectedEntry?.kind === 'directory');
+    && !singleSelectedEntry.symlink && !singleSelectedEntry.mountUnavailable && singleSelectedEntry.version);
+  const canMoveSelected = canCopySelected && !singleSelectedEntry?.readOnly
+    && (singleSelectedEntry?.kind === 'file' || singleSelectedEntry?.kind === 'directory');
   const indexNotice = listingIsCurrent ? indexStateMessage(indexState) : '';
 
   useEffect(() => {
@@ -749,6 +774,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
 
   function activateEntry(entry: FileEntry) {
     setNotice('');
+    if (entry.mountUnavailable) return;
     if (entry.kind === 'directory') {
       navigate(entry.path ? entry.path.split('/').filter(Boolean) : []);
       return;
@@ -807,6 +833,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   }
 
   function toggleSelection(id: string) {
+    if (entries.find((entry) => entry.id === id)?.mountUnavailable) return;
     setSelectedIds((current) => {
       const next = new Set(current);
       if (next.has(id)) next.delete(id);
@@ -818,8 +845,9 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   function toggleAllVisible() {
     setSelectedIds((current) => {
       const next = new Set(current);
-      if (allLoadedSelected) visibleEntries.forEach((entry) => next.delete(entry.id));
-      else visibleEntries.forEach((entry) => next.add(entry.id));
+      visibleEntries.filter((entry) => entry.mountUnavailable).forEach((entry) => next.delete(entry.id));
+      if (allLoadedSelected) selectableEntries.forEach((entry) => next.delete(entry.id));
+      else selectableEntries.forEach((entry) => next.add(entry.id));
       return next;
     });
   }
@@ -993,7 +1021,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   }
 
   function openBatchFileOperation(mode: FileOperationMode) {
-    if (!canSubmitBatchFileOperation) return;
+    if (!canSubmitBatchFileOperation || mode === 'move' && selectedEntries.some((entry) => entry.readOnly)) return;
     setNotice('');
     setBatchFileOperationResult(null);
     setBatchFileOperation(mode);
@@ -1092,7 +1120,8 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   }
 
   function canMoveEntryToTrash(entry: FileEntry): boolean {
-    return Boolean(entry.version) && (entry.kind !== 'other' || entry.symlink);
+    return Boolean(entry.version) && !entry.readOnly && !entry.mountUnavailable
+      && (entry.kind !== 'other' || entry.symlink);
   }
 
   function openTrashDialog(entry: FileEntry) {
@@ -1248,9 +1277,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
     <section className="files-page" aria-labelledby="files-page-title">
       <header className="files-page-heading">
         <div>
-          <p className="files-eyebrow"><span className={`files-status-dot${loadError ? ' is-offline' : ''}`} />文件系统工作区 <span className="files-eyebrow-divider">·</span> 服务器实时目录</p>
           <h1 id="files-page-title">我的文件</h1>
-          <p className="files-page-subtitle">通过真实文件夹整理和查找内容。</p>
         </div>
         <div className="files-heading-actions">
           <button className="files-button files-button-secondary" type="button" onClick={onOpenTrash}>
@@ -1265,11 +1292,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
         </div>
       </header>
 
-      <p className="files-status-note" role="note">
-        页面直接读取管理根目录；上传文件会先暂存，只有服务器确认发布后才会显示成功。
-      </p>
-
-      <div className="files-browser-shell">
+      <div className={`files-browser-shell${activeEntry ? ' has-details' : ''}`}>
         <aside className="files-directory-panel" aria-label="目录导航">
           <div className="files-panel-heading"><span>目录</span><span className="files-realtime-label">实时</span></div>
           <nav className="files-directory-list" aria-label="管理根目录">
@@ -1283,11 +1306,6 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
               <span>全部文件</span>
             </button>
           </nav>
-          <div className="files-volume-card">
-            <div className="files-volume-heading"><HardDrive size={15} aria-hidden="true" /><span>管理根目录</span></div>
-            <strong>{loadError ? '服务未连接' : '原生文件系统'}</strong>
-            <small>{displayLoading ? '正在读取目录…' : loadError ? '检查服务器和根目录配置' : '文件夹是唯一分类方式'}</small>
-          </div>
         </aside>
 
         <div className="files-main-column">
@@ -1332,13 +1350,15 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                 />
                 {query && <button type="button" className="files-search-clear" aria-label="清空搜索" onClick={() => { setQuery(''); setSearchScope('current'); }}><X size={15} /></button>}
               </label>
-              <label className="files-search-scope-label">
-                <span className="files-visually-hidden">搜索范围</span>
-                <select className="files-search-scope" aria-label="搜索范围" value={searchScope} disabled={!queryTerm} onChange={(event) => setSearchScope(event.currentTarget.value as FileSearchScope)}>
-                  <option value="current">当前文件夹</option>
-                  <option value="recursive">包含子文件夹</option>
-                </select>
-              </label>
+              {queryTerm && (
+                <label className="files-search-scope-label">
+                  <span className="files-visually-hidden">搜索范围</span>
+                  <select className="files-search-scope" aria-label="搜索范围" value={searchScope} onChange={(event) => setSearchScope(event.currentTarget.value as FileSearchScope)}>
+                    <option value="current">当前文件夹</option>
+                    <option value="recursive">包含子文件夹</option>
+                  </select>
+                </label>
+              )}
             </div>
             <select className="files-sort-select" aria-label="排序方式" value={sortMode} onChange={(event) => setSortMode(event.currentTarget.value as FileSortMode)}>
               <option value="name-asc">名称升序</option>
@@ -1437,13 +1457,12 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
             </section>
           )}
 
-          {visibleEntries.length > 0 && !displayLoading && !loadError && (
+            {viewMode === 'grid' && selectableEntries.length > 0 && !displayLoading && !loadError && (
             <div className="files-loaded-select">
               <label>
-                <input ref={selectAllRef} type="checkbox" checked={allLoadedSelected} onChange={toggleAllVisible} aria-label="选择已加载的全部项目" />
-                <span>选择已加载的全部项目</span>
+                <input ref={selectAllRef} type="checkbox" checked={allLoadedSelected} onChange={toggleAllVisible} aria-label="全选已加载项目" />
+                <span>全选已加载</span>
               </label>
-              <small>{countLabel}{pageHasMore ? '，还有更多' : ''}</small>
             </div>
           )}
 
@@ -1485,7 +1504,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                   <button type="button" className="files-selection-copy" onClick={() => openBatchFileOperation('copy')} disabled={!canSubmitBatchFileOperation} aria-describedby={batchFileOperationIssue ? (batchFileOperationIssue === selectionIssue ? 'files-selection-download-help' : 'files-selection-file-operation-help') : undefined}>
                     <Copy size={15} aria-hidden="true" />复制到
                   </button>
-                  <button type="button" className="files-selection-move" onClick={() => openBatchFileOperation('move')} disabled={!canSubmitBatchFileOperation} aria-describedby={batchFileOperationIssue ? (batchFileOperationIssue === selectionIssue ? 'files-selection-download-help' : 'files-selection-file-operation-help') : undefined}>
+                  <button type="button" className="files-selection-move" onClick={() => openBatchFileOperation('move')} disabled={!canSubmitBatchMove} aria-describedby={batchMoveIssue ? (batchMoveIssue === batchFileOperationIssue ? (batchFileOperationIssue === selectionIssue ? 'files-selection-download-help' : 'files-selection-file-operation-help') : 'files-selection-move-help') : undefined}>
                     <MoveRight size={15} aria-hidden="true" />移动到
                   </button>
                 </>
@@ -1518,6 +1537,7 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
               {selectedIds.size > 1 && batchRenameIssue && batchRenameIssue !== selectionIssue && <small id="files-selection-rename-help" className="files-selection-help">{batchRenameIssue}</small>}
               {selectedIds.size > 1 && batchTrashIssue && batchTrashIssue !== selectionIssue && <small id="files-selection-trash-help" className="files-selection-help">{batchTrashIssue}</small>}
               {selectedIds.size > 1 && batchFileOperationIssue && batchFileOperationIssue !== selectionIssue && <small id="files-selection-file-operation-help" className="files-selection-help">{batchFileOperationIssue}</small>}
+              {selectedIds.size > 1 && batchMoveIssue && batchMoveIssue !== batchFileOperationIssue && <small id="files-selection-move-help" className="files-selection-help">{batchMoveIssue}</small>}
               {createArchiveIssue && createArchiveIssue !== selectionIssue && <small id="files-selection-archive-help" className="files-selection-help">{createArchiveIssue}</small>}
             </div>
           )}
@@ -1615,7 +1635,10 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
           ) : viewMode === 'list' ? (
             <div className="files-list-wrap">
               <div className="files-list-header">
-                <span />
+                <label className="files-select-all">
+                  <input ref={selectAllRef} type="checkbox" checked={allLoadedSelected} onChange={toggleAllVisible} aria-label="全选已加载项目" />
+                  <span className="files-visually-hidden">全选已加载</span>
+                </label>
                 <span>名称</span><span>大小</span><span>修改时间</span><span />
               </div>
               <div className="files-list" role="list" aria-label={`${currentDirectoryLabel}中的文件`}>
@@ -1625,8 +1648,8 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                   const isActive = activeEntry?.id === entry.id;
                   return (
                     <div className={`files-list-row${checked ? ' is-checked' : ''}${isActive ? ' is-current' : ''}`} role="listitem" key={entry.id}>
-                      <label className="files-row-check"><input type="checkbox" checked={checked} onChange={() => toggleSelection(entry.id)} aria-label={`选择 ${entry.name}`} /></label>
-                      <button className="files-row-main" type="button" onClick={() => activateEntry(entry)}>
+                      <label className="files-row-check"><input type="checkbox" checked={checked} disabled={entry.mountUnavailable} onChange={() => toggleSelection(entry.id)} aria-label={`选择 ${entry.name}`} /></label>
+                      <button className="files-row-main" type="button" onClick={() => activateEntry(entry)} disabled={entry.mountUnavailable}>
                         <span className={`files-entry-icon kind-${entry.displayKind}`}><EntryIcon size={19} strokeWidth={1.8} aria-hidden="true" /></span>
                         <span className="files-entry-copy">
                           <strong>{entry.name}</strong>
@@ -1648,15 +1671,15 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                 const checked = selectedIds.has(entry.id);
                 return (
                   <article className={`files-grid-card${checked ? ' is-checked' : ''}`} key={entry.id}>
-                    <label className="files-grid-check"><input type="checkbox" checked={checked} onChange={() => toggleSelection(entry.id)} aria-label={`选择 ${entry.name}`} /></label>
-                    <button className="files-grid-open" type="button" onClick={() => activateEntry(entry)}>
+                    <label className="files-grid-check"><input type="checkbox" checked={checked} disabled={entry.mountUnavailable} onChange={() => toggleSelection(entry.id)} aria-label={`选择 ${entry.name}`} /></label>
+                    <button className="files-grid-open" type="button" onClick={() => activateEntry(entry)} disabled={entry.mountUnavailable}>
                       <span className={`files-grid-art kind-${entry.displayKind}${entry.displayKind === 'video' ? ' is-video-poster' : ''}`} aria-hidden="true">
                         {entry.displayKind === 'video'
                           ? <VideoPosterThumbnail key={`${entry.path}:${entry.version}`} path={entry.path} version={entry.version} Icon={EntryIcon} />
                           : <EntryIcon size={25} strokeWidth={1.7} />}
                       </span>
                       <strong>{entry.name}</strong>
-                      <small>{entry.kind === 'directory' ? '文件夹' : formatBytes(entry.size)} <span>·</span> {formatDate(entry.modifiedAt)}</small>
+                      <small>{entry.mountUnavailable ? '磁盘不可用' : `${entry.kind === 'directory' ? '文件夹' : formatBytes(entry.size)} · ${formatDate(entry.modifiedAt)}`}</small>
                       {queryTerm && effectiveScope === 'recursive' && <small className="files-grid-path">{entry.displayPath}</small>}
                     </button>
                     <button className="files-grid-info" type="button" aria-label={`查看 ${entry.name} 详情`} title="查看详情" onClick={() => showDetails(entry)}><Info size={16} aria-hidden="true" /></button>
@@ -1675,86 +1698,92 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
             </div>
           )}
 
-          <footer className="files-list-footer">
-            <span>{countLabel}{pageHasMore ? '，还有更多' : ''}</span>
-            <span>{displayLoading ? '正在同步' : loadingMore ? '正在加载更多' : loadError ? '服务不可用' : '实时文件系统'}</span>
-          </footer>
-
-          <button className="files-agent-link" type="button" onClick={onOpenAgent}>
+          <button className="files-agent-link" type="button" onClick={() => onOpenAgent(
+              selectedEntries.length > 0 && !selectionHasMissingEntries && !selectionHasUnavailableEntries
+              ? { kind: 'selection', paths: selectedEntries.map((entry) => entry.path) }
+              : { kind: 'directory', path: relativePath },
+          )}>
             <span className="files-agent-symbol"><Sparkles size={17} aria-hidden="true" /></span>
             <span><strong>让 Agent 帮我整理</strong><small>描述目标，在对话中审核方案</small></span>
             <ChevronRight size={17} aria-hidden="true" />
           </button>
         </div>
 
-        <aside className={`files-detail-panel${detailOpen ? ' is-open' : ''}`} aria-label="文件详情">
-          <div className="files-detail-header">
-            <div><strong>文件详情</strong><small>服务器文件系统信息</small></div>
-            <button type="button" className="files-detail-close" aria-label="关闭详情" onClick={() => setDetailOpen(false)}><X size={17} /></button>
-          </div>
-          {activeEntry ? (() => {
-            const DetailIcon = iconFor(activeEntry.displayKind);
-            return (
+        {activeEntry && (() => {
+          const entry = activeEntry;
+          const DetailIcon = iconFor(entry.displayKind);
+          const detailNotice = entry.mountUnavailable
+            ? '磁盘不可用，无法进入。'
+            : entry.readOnly ? '此项目只读，不能执行文件变更。'
+              : entry.symlink ? linkStatusDescription(entry.linkStatus) : '';
+          return (
+            <aside className={`files-detail-panel${detailOpen ? ' is-open' : ''}`} aria-label="文件详情">
+              <div className="files-detail-header">
+                <strong>文件详情</strong>
+                <button type="button" className="files-detail-close" aria-label="关闭详情" onClick={() => setDetailOpen(false)}><X size={17} /></button>
+              </div>
               <div className="files-detail-content">
-                <div className={`files-detail-art kind-${activeEntry.displayKind}`}><DetailIcon size={31} strokeWidth={1.6} aria-hidden="true" /></div>
-                <span className="files-detail-kind">{kindLabel(activeEntry)}</span>
-                <h2>{activeEntry.name}</h2>
-                <p className="files-detail-description">{activeEntry.symlink ? linkStatusDescription(activeEntry.linkStatus) : '此条目来自服务器的原生文件系统。'}</p>
+                <div className={`files-detail-art kind-${entry.displayKind}`}><DetailIcon size={31} strokeWidth={1.6} aria-hidden="true" /></div>
+                <span className="files-detail-kind">{kindLabel(entry)}</span>
+                <h2>{entry.name}</h2>
+                {detailNotice && <p className="files-detail-description">{detailNotice}</p>}
                 <dl className="files-detail-metadata">
-                  <div><dt>所在位置</dt><dd>{activeEntry.displayPath === '/' ? '根目录' : activeEntry.displayPath}</dd></div>
-                  <div><dt>大小</dt><dd>{activeEntry.kind === 'directory' ? '—' : formatBytes(activeEntry.size)}</dd></div>
-                  <div><dt>修改时间</dt><dd>{formatDate(activeEntry.modifiedAt)}</dd></div>
-                  <div><dt>权限模式</dt><dd>{formatPermissionMode(activeEntry.mode)}</dd></div>
-                  <div><dt>属主 UID</dt><dd>{formatOwnerId(activeEntry.ownerUid, activeEntry.ownershipAvailable)}</dd></div>
-                  <div><dt>属组 GID</dt><dd>{formatOwnerId(activeEntry.groupGid, activeEntry.ownershipAvailable)}</dd></div>
+                  <div><dt>所在位置</dt><dd>{entry.displayPath === '/' ? '根目录' : entry.displayPath}</dd></div>
+                  <div><dt>大小</dt><dd>{entry.kind === 'directory' ? '—' : formatBytes(entry.size)}</dd></div>
+                  <div><dt>修改时间</dt><dd>{formatDate(entry.modifiedAt)}</dd></div>
                 </dl>
-                <p className="files-live-state"><span />来自服务器实时目录</p>
-                {activeEntry.kind === 'file' && (
-                  <a className="files-detail-download" href={fileDownloadURL(activeEntry.path)} download={activeEntry.name}>
-                    <Download size={15} aria-hidden="true" />下载原件
-                  </a>
-                )}
-                {(activeEntry.kind === 'file' || activeEntry.kind === 'directory') && (
-                  <button className="files-detail-open-folder" type="button" onClick={() => setSymlinkTarget(activeEntry)}>
-                    <Link2 size={16} aria-hidden="true" />创建软链接
-                  </button>
-                )}
-                {canEditFileMetadata(activeEntry) && (
-                  <div className="files-detail-metadata-actions">
-                    <button className="files-detail-open-folder" type="button" onClick={() => setMetadataEditMode('mode')} disabled={!activeEntry.version}>
-                      <Shield size={16} aria-hidden="true" />修改权限
+                <details className="files-detail-advanced">
+                  <summary>权限与属主</summary>
+                  <dl className="files-detail-metadata">
+                    <div><dt>权限模式</dt><dd>{formatPermissionMode(entry.mode)}</dd></div>
+                    <div><dt>属主 UID</dt><dd>{formatOwnerId(entry.ownerUid, entry.ownershipAvailable)}</dd></div>
+                    <div><dt>属组 GID</dt><dd>{formatOwnerId(entry.groupGid, entry.ownershipAvailable)}</dd></div>
+                  </dl>
+                </details>
+                {!entry.mountUnavailable && (
+                  <>
+                    {entry.kind === 'file' && (
+                      <a className="files-detail-download" href={fileDownloadURL(entry.path)} download={entry.name}>
+                        <Download size={15} aria-hidden="true" />下载原件
+                      </a>
+                    )}
+                    {(entry.kind === 'file' || entry.kind === 'directory') && !entry.readOnly && (
+                      <button className="files-detail-open-folder" type="button" onClick={() => setSymlinkTarget(entry)}>
+                        <Link2 size={16} aria-hidden="true" />创建软链接
+                      </button>
+                    )}
+                    {!entry.readOnly && canEditFileMetadata(entry) && (
+                      <div className="files-detail-metadata-actions">
+                        <button className="files-detail-open-folder" type="button" onClick={() => setMetadataEditMode('mode')} disabled={!entry.version}>
+                          <Shield size={16} aria-hidden="true" />修改权限
+                        </button>
+                        <button
+                          className="files-detail-open-folder"
+                          type="button"
+                          onClick={() => setMetadataEditMode('owner')}
+                          disabled={!entry.version || entry.ownershipAvailable !== true}
+                          title={entry.ownershipAvailable === true ? undefined : '服务器未提供属主信息'}
+                        >
+                          <Users size={16} aria-hidden="true" />修改属主
+                        </button>
+                        {entry.ownershipAvailable !== true && <p className="files-detail-ownership-note">服务器未提供属主信息，暂不能修改。</p>}
+                      </div>
+                    )}
+                    <button className="files-detail-rename" type="button" onClick={() => openRenameDialog(entry)} disabled={!entry.version || entry.readOnly}>
+                      <Pencil size={15} aria-hidden="true" />重命名
                     </button>
-                    <button
-                      className="files-detail-open-folder"
-                      type="button"
-                      onClick={() => setMetadataEditMode('owner')}
-                      disabled={!activeEntry.version || activeEntry.ownershipAvailable !== true}
-                      title={activeEntry.ownershipAvailable === true ? undefined : '服务器未提供属主信息'}
-                    >
-                      <Users size={16} aria-hidden="true" />修改属主
+                    <button className="files-detail-trash" type="button" onClick={() => openTrashDialog(entry)} disabled={!canMoveEntryToTrash(entry)} title={entry.kind === 'other' && !entry.symlink ? '特殊文件不能通过此接口删除' : undefined}>
+                      <Trash2 size={15} aria-hidden="true" />移入回收站
                     </button>
-                    {activeEntry.ownershipAvailable !== true && <p className="files-detail-ownership-note">服务器未提供属主信息，暂不能修改。</p>}
-                  </div>
-                )}
-                <button className="files-detail-rename" type="button" onClick={() => openRenameDialog(activeEntry)} disabled={!activeEntry.version}>
-                  <Pencil size={15} aria-hidden="true" />重命名
-                </button>
-                <button className="files-detail-trash" type="button" onClick={() => openTrashDialog(activeEntry)} disabled={!canMoveEntryToTrash(activeEntry)} title={activeEntry.kind === 'other' && !activeEntry.symlink ? '特殊文件不能通过此接口删除' : undefined}>
-                  <Trash2 size={15} aria-hidden="true" />移入回收站
-                </button>
-                {activeEntry.kind === 'directory' && (
-                  <button className="files-detail-open-folder" type="button" onClick={() => activateEntry(activeEntry)}><FolderOpen size={16} />打开此文件夹</button>
+                    {entry.kind === 'directory' && (
+                      <button className="files-detail-open-folder" type="button" onClick={() => activateEntry(entry)} disabled={entry.mountUnavailable}><FolderOpen size={16} />打开此文件夹</button>
+                    )}
+                  </>
                 )}
               </div>
-            );
-          })() : (
-            <div className="files-detail-empty">
-              <span><Info size={20} aria-hidden="true" /></span>
-              <strong>选择一项查看详情</strong>
-              <p>名称、所在路径、大小和修改时间会显示在这里。</p>
-            </div>
-          )}
-        </aside>
+            </aside>
+          );
+        })()}
       </div>
 
       {directoryDrawerOpen && (
@@ -1825,10 +1854,11 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                         key={entry.path}
                         className="files-directory-drawer-item"
                         type="button"
+                        disabled={entry.mountUnavailable}
                         onClick={() => navigate(entry.path.split('/').filter(Boolean))}
                       >
                         <Folder size={17} aria-hidden="true" />
-                        <span>{entry.name}</span>
+                        <span>{entry.mountUnavailable ? `${entry.name} · 磁盘不可用` : entry.name}</span>
                       </button>
                     ))}
                   </div>

@@ -1,0 +1,10 @@
+/* 桌面设置项与五项移动导航的状态。 */
+.settings-link[aria-current='page'] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+  font-weight: 600;
+}
+
+.settings-link[aria-current='page']:hover {
+  background: var(--color-accent-soft);
+}

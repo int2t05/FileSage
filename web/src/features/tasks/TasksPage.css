@@ -10,14 +10,6 @@
   margin-bottom: 20px;
 }
 
-.tasks-eyebrow {
-  margin: 0 0 7px;
-  color: var(--color-accent);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: .04em;
-}
-
 .tasks-heading h1 {
   margin: 0;
   font-size: 26px;
@@ -67,13 +59,6 @@
   min-width: 0;
 }
 
-.tasks-intro {
-  margin: 7px 0 0;
-  color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .tasks-refresh,
 .tasks-load-more,
 .tasks-more-audit {
@@ -104,30 +89,6 @@
 .tasks-more-audit:disabled {
   opacity: .6;
   cursor: wait;
-}
-
-.tasks-data-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin-bottom: 18px;
-  padding: 11px 13px;
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-muted);
-  color: var(--color-text-muted);
-}
-
-.tasks-data-note svg {
-  flex: none;
-  margin-top: 1px;
-  color: var(--color-accent-strong);
-}
-
-.tasks-data-note p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.55;
 }
 
 .tasks-filters {
@@ -308,7 +269,6 @@
   color: var(--color-text-muted);
 }
 
-.tasks-meta-row,
 .tasks-path-row {
   display: flex;
   align-items: baseline;
@@ -320,7 +280,6 @@
   line-height: 1.5;
 }
 
-.tasks-meta-row code,
 .tasks-path-row code {
   min-width: 0;
   color: #586259;
@@ -328,12 +287,7 @@
   overflow-wrap: anywhere;
 }
 
-.tasks-meta-row code {
-  font-size: 11px;
-}
-
-.tasks-field-label,
-.tasks-meta-row span {
+.tasks-field-label {
   flex: none;
   color: var(--color-text-muted);
 }
@@ -409,16 +363,34 @@
 }
 
 .tasks-upload-panel,
-.tasks-agent-panel,
-.tasks-audit {
+.tasks-agent-panel {
   margin-top: 14px;
   padding-top: 13px;
   border-top: 1px solid var(--color-line);
 }
 
+.tasks-agent-panel.is-shell-only {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.tasks-agent-panel.is-shell-only .tasks-agent-list {
+  gap: 0;
+}
+
+.tasks-agent-panel.is-shell-only .tasks-agent-item {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.tasks-agent-panel.is-shell-only .agent-shell-tool-call {
+  margin: 0;
+}
+
 .tasks-upload-panel h3,
-.tasks-agent-panel h3,
-.tasks-audit h3 {
+.tasks-agent-panel h3 {
   margin: 0 0 10px;
   color: var(--color-text);
   font-size: 12px;
@@ -472,8 +444,7 @@
   gap: 5px;
 }
 
-.tasks-agent-paths code,
-.tasks-agent-command {
+.tasks-agent-paths code {
   padding: 3px 5px;
   border-radius: 4px;
   background: var(--color-surface-muted);
@@ -490,11 +461,51 @@
   color: var(--color-danger);
 }
 
-.tasks-agent-command {
-  max-height: 180px;
-  margin: 7px 0 0;
-  overflow: auto;
-  white-space: pre-wrap;
+.tasks-technical-info > summary {
+  width: fit-content;
+  min-height: 32px;
+  padding: 7px 2px 4px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.tasks-technical-info {
+  margin-top: 10px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.tasks-technical-info .tasks-detail-grid {
+  display: grid;
+  gap: 5px;
+  margin-top: 5px;
+}
+
+.tasks-audit {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--color-line);
+}
+
+.tasks-audit > summary {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tasks-audit-count {
+  color: var(--color-text-muted);
+  font-weight: 450;
+}
+
+.tasks-audit-list {
+  margin-top: 8px;
 }
 
 .tasks-scan-error {
@@ -765,21 +776,6 @@
     font-size: 23px;
   }
 
-  .tasks-intro {
-    max-width: 34em;
-    font-size: 12px;
-  }
-
-  .tasks-data-note {
-    gap: 8px;
-    margin-bottom: 14px;
-    padding: 10px 11px;
-  }
-
-  .tasks-data-note p {
-    font-size: 11px;
-  }
-
   .tasks-filters {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -865,7 +861,6 @@
     grid-template-columns: 1fr;
   }
 
-  .tasks-meta-row,
   .tasks-path-row {
     align-items: flex-start;
     flex-direction: column;

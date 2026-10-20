@@ -45,6 +45,8 @@ export interface FileEntry {
   ownershipAvailable?: boolean;
   symlink: boolean;
   linkStatus?: FileLinkStatus;
+  mountUnavailable?: boolean;
+  readOnly?: boolean;
   version: string;
 }
 
@@ -401,6 +403,8 @@ function isFileEntry(value: unknown): value is FileEntry {
     && typeof entry.symlink === 'boolean'
     && (entry.linkStatus === undefined || entry.linkStatus === 'internal' || entry.linkStatus === 'dangling'
       || entry.linkStatus === 'outside_root' || entry.linkStatus === 'cycle' || entry.linkStatus === 'unavailable')
+    && (entry.mountUnavailable === undefined || typeof entry.mountUnavailable === 'boolean')
+    && (entry.readOnly === undefined || typeof entry.readOnly === 'boolean')
     && typeof entry.version === 'string';
 }
 

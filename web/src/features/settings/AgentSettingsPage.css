@@ -1,0 +1,137 @@
+/* Agent 设置页及权限模式开关。 */
+.agent-settings-page {
+  width: min(100%, 760px);
+  margin: 0 auto;
+}
+
+.agent-settings-heading {
+  margin-bottom: 20px;
+}
+
+.agent-settings-heading h1 {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 30px);
+  letter-spacing: -.035em;
+}
+
+.agent-settings-copy p {
+  margin: 7px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.agent-settings-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px 20px;
+  padding: 20px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.agent-settings-copy h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.agent-settings-copy p {
+  max-width: 58ch;
+  font-size: 12px;
+}
+
+.agent-settings-switch {
+  position: relative;
+  width: 46px;
+  height: 28px;
+  padding: 3px;
+  border: 1px solid #aab2a9;
+  border-radius: 999px;
+  background: #e7eae7;
+  cursor: pointer;
+}
+
+.agent-settings-switch.is-on {
+  border-color: var(--color-accent-strong);
+  background: var(--color-accent-strong);
+}
+
+.agent-settings-switch:disabled {
+  cursor: progress;
+  opacity: .72;
+}
+
+.agent-settings-switch-thumb {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
+  transition: transform .15s ease;
+}
+
+.agent-settings-switch.is-on .agent-settings-switch-thumb {
+  transform: translateX(18px);
+}
+
+.agent-settings-value {
+  grid-column: 2;
+  justify-self: center;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.agent-settings-state,
+.agent-settings-retry,
+.agent-settings-error {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.agent-settings-retry {
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  cursor: pointer;
+}
+
+.agent-settings-error {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--color-danger);
+}
+
+.agent-settings-spinner {
+  animation: agent-settings-spin .9s linear infinite;
+}
+
+@keyframes agent-settings-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 600px) {
+  .agent-settings-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 16px;
+  }
+
+  .agent-settings-copy p {
+    font-size: 11px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-settings-spinner,
+  .agent-settings-switch-thumb {
+    animation: none;
+    transition: none;
+  }
+}
