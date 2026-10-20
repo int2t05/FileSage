@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# 生成可复现的 Linux amd64 发布包。
+if [ "$#" -ne 2 ]; then
+  echo "usage: package-release.sh vMAJOR.MINOR.PATCH COMMIT" >&2
+  exit 2
+fi
+
+version="$1"
+commit="$2"
+if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "release version must use vMAJOR.MINOR.PATCH" >&2
+  exit 2
+fi
+git cat-file -e "$commit^{commit}"
+
+bundle="filesage_"$version"_linux_amd64"
+stage="dist/$bundle"
+case "$stage" in
+  dist/filesage_v*_linux_amd64) ;;
+  *) echo "invalid package path" >&2; exit 2 ;;
+esac
+
+mkdir -p dist
+rm -rf -- "$stage"
+mkdir -p "$stage/web" "$stage/deploy" "$stage/docs" "$stage/LICENSES"
+install -m 0755 dist/filesage "$stage/filesage"
+cp -R web/dist/. "$stage/web/"
+cp deploy/filesage.service deploy/filesage.env.example "$stage/deploy/"
+cp docs/DEPLOYMENT.md docs/agent-conversation-api.md "$stage/docs/"
+cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
+cp -R LICENSES/. "$stage/LICENSES/"
+
+{
+  printf 'Version: %s\n' "$version"
+  printf 'Commit: %s\n' "$commit"
+  printf 'Go: %s\n' "$(go version)"
+  printf 'Node: %s\n' "$(node --version)"
+  printf 'npm: %s\n' "$(npm --version)"
+} > "$stage/BUILDINFO.txt"
+
+source_date_epoch="$(git show -s --format=%ct "$commit")"
+archive="$bundle.tar.gz"
+tar --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner -cf - -C dist "$bundle" | gzip -n > "dist/$archive"
+(cd dist && sha256sum "$archive" > "$archive.sha256")
+tar -tzf "dist/$archive" >/dev/null
+(cd dist && sha256sum -c "$archive.sha256" >&2)
+
+printf 'archive=dist/%s\n' "$archive"
+printf 'checksum=dist/%s.sha256\n' "$archive"

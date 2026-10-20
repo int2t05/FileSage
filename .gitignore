@@ -25,6 +25,7 @@
 *.sqlite-wal
 
 # 编译产物
+/dist/
 /filesage
 *.exe
 *.test

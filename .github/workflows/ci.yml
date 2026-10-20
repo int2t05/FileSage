@@ -59,3 +59,13 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - name: Build and smoke-test Linux release package
+        working-directory: .
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/filesage ./cmd/filesage
+          output="$(bash scripts/package-release.sh v0.0.0 "$GITHUB_SHA")"
+          printf '%s\n' "$output"
+          archive="$(printf '%s\n' "$output" | sed -n 's/^archive=//p')"
+          bash scripts/smoke-release-package.sh "$archive" filesage_v0.0.0_linux_amd64
