@@ -109,7 +109,7 @@ sudo systemctl enable --now filesage.service
 sudo systemctl status filesage.service
 ```
 
-更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。检查日志：`sudo journalctl -u filesage.service`。
+更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。运行日志由 systemd journal 接收，使用 `sudo journalctl -u filesage.service` 查看。HTTP 错误和超过 2 秒的请求带有 `X-Request-ID`，可按 ID 检索对应记录；请求日志仅包含路由模板、方法、状态与耗时。
 
 ## 更新版本
 
