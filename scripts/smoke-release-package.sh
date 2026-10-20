@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 解包并验证 Linux 发布包的基本服务流程。
+# 解包并以空 PATH 验证 Linux 发布包的基本服务流程。
 if [ "$#" -ne 2 ]; then
   echo "usage: smoke-release-package.sh dist/FILE.tar.gz filesage_vX.Y.Z_linux_amd64" >&2
   exit 2
@@ -35,7 +35,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$smoke/extract" "$smoke/root" "$smoke/data"
+mkdir -p "$smoke/extract" "$smoke/root" "$smoke/data" "$smoke/empty-path"
 tar -xzf "$archive" -C "$smoke/extract"
 package="$smoke/extract/$bundle"
 test -x "$package/filesage"
@@ -43,6 +43,7 @@ test -s "$package/web/index.html"
 
 port=18089
 name="release-smoke-$$"
+PATH="$smoke/empty-path" \
 FILESAGE_ROOT="$smoke/root" \
 FILESAGE_DATA_DIR="$smoke/data" \
 FILESAGE_WEB_DIR="$package/web" \
