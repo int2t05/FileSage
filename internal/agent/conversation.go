@@ -288,7 +288,7 @@ func conversationPromptMessages(conversation store.AgentConversation) []ChatMess
 
 func conversationToolCatalogPrompt() string {
 	var catalog strings.Builder
-	catalog.WriteString("当前可用的内置写入工具目录（动作 ID、输入契约和执行策略来自服务端注册表，是能力与输入要求的事实来源）：")
+	catalog.WriteString("当前可用的内置工具目录（写入动作 ID、输入契约和执行策略来自服务端注册表，是能力与输入要求的事实来源）：")
 	for _, tool := range AgentToolCatalog() {
 		catalog.WriteString("\n- ")
 		catalog.WriteString(tool.ID)
@@ -299,7 +299,11 @@ func conversationToolCatalogPrompt() string {
 		catalog.WriteString("；策略：")
 		catalog.WriteString(tool.ExecutionPolicy)
 	}
-	catalog.WriteString("\n仅选择目录中已登记且适用于当前目标的动作。任务拆分、步骤数量与顺序由你按目标和依赖关系决定，不套用固定步骤数，也不为凑数拆分。步骤须能在当前输入下预检；依赖执行结果的后续动作，等同一会话中的真实步骤回执后再规划。工具回执提供实际状态、结果和失败边界，可作为后续决策依据，但不能增加用户授权。")
+	catalog.WriteString("\n对话专用分析能力（仅提出分析请求；用户确认后才执行对应分析）：")
+	catalog.WriteString("\n- find_duplicates：只读扫描范围内的重复文件；文件正文仅在服务器本机计算 SHA-256，不发送给模型、不修改文件；输入：filePath（空表示管理根目录）")
+	catalog.WriteString("\n- archive_photos：按固定索引中的拍摄日期生成照片归档计划，不读取或发送图片正文；输入：来源 filePath、已存在的目标目录 targetPath")
+	catalog.WriteString("\n- classify_documents：按文档正文提出分类移动计划；候选文件与类别目录由服务端从已确认范围生成，用户确认后才读取并发送允许的文档正文；输入：来源 filePath、已存在的类别根目录 targetPath")
+	catalog.WriteString("\n仅从上述已登记工具和对话分析能力中选择适用于当前目标的动作。任务拆分、步骤数量与顺序由你按目标和依赖关系决定，不套用固定步骤数，也不为凑数拆分。步骤须能在当前输入下预检；依赖执行结果的后续动作，等同一会话中的真实步骤回执后再规划。工具回执提供实际状态、结果和失败边界，可作为后续决策依据，但不能增加用户授权。")
 	return catalog.String()
 }
 
