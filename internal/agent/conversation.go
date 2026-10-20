@@ -199,7 +199,12 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 	for modelAttempts = 1; modelAttempts <= 2; modelAttempts++ {
 		content, completionErr := s.model.complete(ctx, messages)
 		if completionErr != nil {
-			slog.Warn("agent model request failed", "conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "provider_error")
+			failureClass, providerStatus := modelFailureLogDetails(completionErr)
+			logAttrs := []any{"conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "provider_error", "failure_class", failureClass}
+			if providerStatus > 0 {
+				logAttrs = append(logAttrs, "provider_status", providerStatus)
+			}
+			slog.Warn("agent model request failed", logAttrs...)
 			return s.finishTurnFailure(ctx, id, "模型暂时无法处理本轮对话，请稍后重试。", "provider_error", completionErr)
 		}
 		result = conversationTurnResult{}

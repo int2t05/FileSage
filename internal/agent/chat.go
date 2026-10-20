@@ -34,6 +34,30 @@ var (
 	ErrMessageTooLarge  = errors.New("agent conversation message is too large")
 )
 
+// modelRequestFailure 只记录安全的失败类别和 HTTP 状态码。
+type modelRequestFailure struct {
+	class  string
+	status int
+}
+
+func (e *modelRequestFailure) Error() string { return ErrModelRequest.Error() }
+
+func (e *modelRequestFailure) Unwrap() error { return ErrModelRequest }
+
+func modelFailureLogDetails(err error) (string, int) {
+	var requestFailure *modelRequestFailure
+	if errors.As(err, &requestFailure) {
+		return requestFailure.class, requestFailure.status
+	}
+	if errors.Is(err, ErrModelResponse) {
+		return "invalid_response", 0
+	}
+	if errors.Is(err, ErrModelUnavailable) {
+		return "model_unavailable", 0
+	}
+	return "unknown", 0
+}
+
 type ModelStatus struct {
 	Available   bool   `json:"available"`
 	Provider    string `json:"provider,omitempty"`
@@ -172,7 +196,7 @@ func (c *chatClient) completeWithLimits(ctx context.Context, messages []ChatMess
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
 	if err != nil {
-		return "", ErrModelRequest
+		return "", &modelRequestFailure{class: "request_build"}
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
@@ -181,7 +205,7 @@ func (c *chatClient) completeWithLimits(ctx context.Context, messages []ChatMess
 	}
 	response, err := c.http.Do(request)
 	if err != nil {
-		return "", ErrModelRequest
+		return "", &modelRequestFailure{class: "transport"}
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, int64(maxResponse)+1))
@@ -189,7 +213,7 @@ func (c *chatClient) completeWithLimits(ctx context.Context, messages []ChatMess
 		return "", ErrModelResponse
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", ErrModelRequest
+		return "", &modelRequestFailure{class: "http_status", status: response.StatusCode}
 	}
 	var result struct {
 		Choices []struct {
