@@ -89,6 +89,8 @@ sudo install -d -o filesage -g filesage -m 0750 /srv/filesage-files
 
 unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需的独立挂载相符；systemd 不会从 `EnvironmentFile` 展开目录变量。数据库目录也必须在管理根目录之外。
 
+unit 会等待 `network-online.target` 再启动。启用当前网络管理器对应的 wait-online 服务，确保固定监听地址已配置；例如 NetworkManager 使用 `NetworkManager-wait-online.service`，systemd-networkd 使用 `systemd-networkd-wait-online.service`。
+
 若另一个卷挂载在管理根目录的子目录，为它添加 systemd drop-in；每个启动前必须就绪的挂载点各列一项：
 
 ```ini
@@ -107,6 +109,7 @@ sudo systemd-analyze verify /etc/systemd/system/filesage.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now filesage.service
 sudo systemctl status filesage.service
+sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor
 ```
 
 更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。运行日志由 systemd journal 接收，使用 `sudo journalctl -u filesage.service` 查看。HTTP 错误和超过 2 秒的请求带有 `X-Request-ID`，可按 ID 检索对应记录；请求日志仅包含路由模板、方法、状态与耗时。
