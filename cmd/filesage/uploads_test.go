@@ -55,7 +55,7 @@ func newUploadIntegration(t *testing.T) *uploadIntegration {
 		_ = root.Close()
 		t.Fatal(err)
 	}
-	uploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20})
+	uploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		_ = metadata.Close()
 		_ = root.Close()
@@ -564,7 +564,7 @@ func TestUploadStatusReconcilesTusCompletionAndKeepsPublishedResult(t *testing.T
 		t.Fatal(err)
 	}
 	defer metadata.Close()
-	application, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath})
+	application, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +739,7 @@ func TestUploadPublicationRecoveryAfterCommitBeforeSuccessRecord(t *testing.T) {
 		_ = root.Close()
 		t.Fatal(err)
 	}
-	firstUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20})
+	firstUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		_ = metadata.Close()
 		_ = root.Close()
@@ -756,7 +756,7 @@ func TestUploadPublicationRecoveryAfterCommitBeforeSuccessRecord(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rootPath, filepath.FromSlash(candidate)), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	preRecoveryUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20})
+	preRecoveryUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}
