@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 解包并以空 PATH 验证 Linux 发布包的基本服务流程。
+# 解包并以空 PATH 验证 Linux 发布包的写入与重启恢复。
 if [ "$#" -ne 2 ]; then
   echo "usage: smoke-release-package.sh dist/FILE.tar.gz filesage_vX.Y.Z_linux_amd64" >&2
   exit 2
@@ -43,24 +43,31 @@ test -s "$package/web/index.html"
 
 port=18089
 name="release-smoke-$$"
-PATH="$smoke/empty-path" \
-FILESAGE_ROOT="$smoke/root" \
-FILESAGE_DATA_DIR="$smoke/data" \
-FILESAGE_WEB_DIR="$package/web" \
-FILESAGE_LISTEN_ADDR="127.0.0.1:$port" \
-  "$package/filesage" > "$smoke/server.log" 2>&1 &
-server_pid=$!
+start_server() {
+  PATH="$smoke/empty-path" \
+  FILESAGE_ROOT="$smoke/root" \
+  FILESAGE_DATA_DIR="$smoke/data" \
+  FILESAGE_WEB_DIR="$package/web" \
+  FILESAGE_LISTEN_ADDR="127.0.0.1:$port" \
+    "$package/filesage" >> "$smoke/server.log" 2>&1 &
+  server_pid=$!
+}
 
-ready=0
-for attempt in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:$port/api/v1/health" -o "$smoke/health.json" 2>/dev/null; then
-    ready=1
-    break
-  fi
-  sleep 1
-done
-test "$ready" = 1
-grep -q '"status":"ok"' "$smoke/health.json"
+wait_for_server() {
+  local ready=0
+  for attempt in $(seq 1 30); do
+    if curl -fsS "http://127.0.0.1:$port/api/v1/health" -o "$smoke/health.json" 2>/dev/null; then
+      ready=1
+      break
+    fi
+    sleep 1
+  done
+  test "$ready" = 1
+  grep -q '"status":"ok"' "$smoke/health.json"
+}
+
+start_server
+wait_for_server
 curl -fsS "http://127.0.0.1:$port/" -o "$smoke/index.html"
 
 curl -fsS --request POST \
@@ -79,4 +86,22 @@ for attempt in $(seq 1 20); do
 done
 test "$listed" = 1
 test -d "$smoke/root/$name"
-echo "Release package smoke test passed."
+
+kill -TERM "$server_pid"
+wait "$server_pid"
+server_pid=
+start_server
+wait_for_server
+
+listed=0
+for attempt in $(seq 1 20); do
+  if curl -fsS "http://127.0.0.1:$port/api/v1/files?path=" -o "$smoke/list-after-restart.json" \
+    && grep -q "$name" "$smoke/list-after-restart.json"; then
+    listed=1
+    break
+  fi
+  sleep 1
+done
+test "$listed" = 1
+test -d "$smoke/root/$name"
+echo "Release package smoke test passed (start, write, restart, read)."
