@@ -542,13 +542,14 @@ export async function startAgentPlan(
   planId: string,
   expectedPlanVersion: number,
   expectedExecutionMode: AgentExecutionMode,
+  confirmPermanentDelete: boolean,
 ): Promise<AgentPlan> {
   if (expectedExecutionMode !== 'bypass' && expectedExecutionMode !== 'manual') {
     throw new AgentApiError('Agent 执行模式无效。');
   }
   const response = await request(`/api/v1/agent/plans/${encodeURIComponent(planId)}/start`, {
     method: 'POST',
-    body: JSON.stringify({ expectedPlanVersion, expectedExecutionMode }),
+    body: JSON.stringify({ expectedPlanVersion, expectedExecutionMode, confirmPermanentDelete }),
   });
   return readPlanResponse(response, '确认并开始执行计划失败');
 }

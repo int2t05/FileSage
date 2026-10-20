@@ -85,6 +85,16 @@ sudo install -d -o filesage -g filesage -m 0750 /srv/filesage-files
 
 unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需的独立挂载相符；systemd 不会从 `EnvironmentFile` 展开目录变量。数据库目录也必须在管理根目录之外。
 
+若另一个卷挂载在管理根目录的子目录，为它添加 systemd drop-in；每个启动前必须就绪的挂载点各列一项：
+
+```ini
+# /etc/systemd/system/filesage.service.d/local-volumes.conf
+[Unit]
+RequiresMountsFor=/srv/filesage-files/home
+```
+
+保存后运行 `sudo systemctl daemon-reload`，再用 `systemctl show filesage.service -p RequiresMountsFor` 确认根目录和子卷均已列出。
+
 安装并校验 unit 后启动：
 
 ```sh
@@ -110,7 +120,7 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
 sudo journalctl -u filesage.service -n 100 --no-pager
 ```
 
-若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。迁移后的旧二进制可能不兼容新 schema；若启动失败，应保留日志并修复前向版本，不要直接回退旧二进制。v27 会清除历史 Shell 输出，并从 SQLite WAL 中截断旧页。
+若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。迁移后的旧二进制可能不兼容新 schema；若启动失败，应保留日志并修复前向版本，不要直接回退旧二进制。v27 会清除历史 Shell 输出，并从 SQLite WAL 中截断旧页；v28 增加最多 4 KiB 的 Agent 会话上下文摘要，不保存文件正文。
 
 更新前可将当前二进制和 `web/` 暂存为 `rollback-before-<新提交>`，只保留一份上一版本。新服务通过健康检查后清理更早的程序备份；数据库迁移后只有确认 schema 兼容才能回退二进制。
 
@@ -185,4 +195,4 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health # 按 FILE
 
 FileSage 没有登录、权限分用户或 HTTPS 终止。默认仅监听回环地址。局域网使用时只绑定可信私有网卡、设置 `FILESAGE_ALLOWED_HOSTS` 并配置主机防火墙；不要暴露到公网或不可信网络。当前服务不支持通过 HTTP 反向代理访问 HTTPS 页面。
 
-模型密钥只通过服务进程环境注入。目录列表不把文件正文写入任务或审计记录；正文只在用户确认相应 Agent 分析任务和数据范围后发送给模型。模型接入与隐私边界见 [Agent API 说明](agent-conversation-api.md)。
+模型密钥只通过服务进程环境注入。Agent 对话消息会在每轮交流时发送给配置模型；文件正文不会在澄清阶段读取，只有用户确认相应分析卡后才按卡片列明范围读取并发送。正文不写入任务或审计记录。模型接入与隐私边界见 [Agent API 说明](agent-conversation-api.md)。

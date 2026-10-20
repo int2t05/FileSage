@@ -64,7 +64,7 @@ jobs:
           install -m 0755 dist/filesage "$stage/filesage"
           cp -R web/dist/. "$stage/web/"
           cp deploy/filesage.service deploy/filesage.env.example "$stage/deploy/"
-          cp docs/DEPLOYMENT.md "$stage/docs/"
+          cp docs/DEPLOYMENT.md docs/agent-conversation-api.md "$stage/docs/"
           cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
           cp -R LICENSES/. "$stage/LICENSES/"
           {

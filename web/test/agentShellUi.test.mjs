@@ -45,7 +45,7 @@ describe('Agent Shell 审核界面', () => {
   it('文件变化直接显示差异；命令和结果使用统一的紧凑工具调用卡片', () => {
     assert.match(review, /拒绝整份方案/);
     assert.match(review, /审阅完成，开始执行/);
-    assert.match(review, /onClick=\{onStartPlan\}/);
+    assert.match(review, /onClick=\{\(\) => onStartPlan\(permanentDeleteCount > 0 && permanentDeleteConfirmed\)\}/);
     assert.match(review, /<ShellToolCall[\s\S]*?command=\{operation\.command \?\? ''\}[\s\S]*?>\s*<ShellChangeReview/);
     assert.match(review, /executionStatus=\{operation\.executionStatus\}/);
     assert.match(toolCall, /Bash 工具调用/);

@@ -171,6 +171,71 @@ func TestMoveFileAcrossMounts(t *testing.T) {
 	}
 }
 
+func TestMoveFileRejectsExternalSourceChangeAfterApproval(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(rootPath, "source"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rootPath, "destination"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(rootPath, "source", "file.txt")
+	targetPath := filepath.Join(rootPath, "destination", "file.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved source content"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	assertMoveRejectsChangedSourceAfterApproval(t, ctx, service, metadata, sourcePath, targetPath, "source/file.txt", "destination/file.txt")
+}
+
+func assertMoveRejectsChangedSourceAfterApproval(t *testing.T, ctx context.Context, service *Service, metadata *store.Store, sourcePath, targetPath, sourceRelative, targetRelative string) {
+	t.Helper()
+	plan, err := service.Propose(ctx, moveFileProposal(sourceRelative, targetRelative))
+	if err != nil {
+		t.Fatalf("Propose() = %v", err)
+	}
+	if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve"); err != nil {
+		t.Fatalf("approve move plan: %v", err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalData := strings.Repeat("x", int(approvedInfo.Size()))
+	if err := os.WriteFile(sourcePath, []byte(externalData), approvedInfo.Mode().Perm()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sourcePath, approvedInfo.ModTime(), approvedInfo.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := service.Execute(ctx, plan.ID)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated || updated.Operations[0].Status != store.OperationSkipped {
+		t.Fatalf("move after source change = (%#v, %v), want invalidated conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+		t.Fatalf("external source content changed: %q (%v)", content, err)
+	}
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("changed source was published to target: %v", err)
+	}
+	events, err := metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidationAudit := false
+	for _, event := range events {
+		if event.OperationID == plan.Operations[0].ID && event.EventType == "operation_invalidated" && event.Outcome == "stale" {
+			invalidationAudit = true
+		}
+	}
+	if !invalidationAudit {
+		t.Fatalf("changed source invalidation was not audited: %#v", events)
+	}
+}
+
 func TestMoveFileRejectsTargetAndParentConflicts(t *testing.T) {
 	ctx := context.Background()
 	t.Run("occupied target at proposal", func(t *testing.T) {

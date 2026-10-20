@@ -1603,6 +1603,14 @@ DROP TABLE shell_runs;
 ALTER TABLE shell_runs_v27 RENAME TO shell_runs;
 `,
 	},
+	{
+		version: 28,
+		// 保存 Agent 会话的受限摘要，用于长对话上下文压缩。
+		sql: `
+ALTER TABLE agent_conversations ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''
+	CHECK (length(CAST(context_summary AS BLOB)) <= 4096);
+`,
+	},
 }
 
 // migrate 顺序应用迁移，并清理旧 Shell 输出的 SQLite 残留。

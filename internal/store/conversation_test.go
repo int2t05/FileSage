@@ -42,11 +42,11 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	}
 	if err := db.FinishConversationTurn(ctx, "conversation-1", ConversationAwaitingConfirmation, "将读取单个文件全文，请确认。", AnalysisCard{
 		Goal: "依据正文标题重命名", FilePath: "notes.md", Provider: "test", Model: "model", Destination: "local",
-	}, "", createdAt.Add(time.Second)); err != nil {
+	}, "", createdAt.Add(time.Second), "保留用户选择的归档目录与命名偏好。"); err != nil {
 		t.Fatal(err)
 	}
 	conversation, err := db.Conversation(ctx, "conversation-1")
-	if err != nil || conversation.State != ConversationAwaitingConfirmation || conversation.Analysis == nil || len(conversation.Messages) != 2 {
+	if err != nil || conversation.State != ConversationAwaitingConfirmation || conversation.Analysis == nil || len(conversation.Messages) != 2 || conversation.ContextSummary != "保留用户选择的归档目录与命名偏好。" {
 		t.Fatalf("Conversation() = (%#v, %v)", conversation, err)
 	}
 	list, hasMore, err := db.ListConversations(ctx, 20, 0)
@@ -65,7 +65,7 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	}
 	defer db.Close()
 	conversation, err = db.Conversation(ctx, "conversation-1")
-	if err != nil || conversation.State != ConversationAwaitingConfirmation || len(conversation.Messages) != 2 {
+	if err != nil || conversation.State != ConversationAwaitingConfirmation || len(conversation.Messages) != 2 || conversation.ContextSummary != "保留用户选择的归档目录与命名偏好。" {
 		t.Fatalf("reloaded Conversation() = (%#v, %v)", conversation, err)
 	}
 	if claimed, err := db.BeginConversationAnalysis(ctx, "conversation-1", time.Now()); err != nil || !claimed {
@@ -84,6 +84,16 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	conversation, err = db.Conversation(ctx, "conversation-1")
 	if err != nil || conversation.State != ConversationFailed || conversation.Error != "service_restarted" || conversation.Analysis == nil {
 		t.Fatalf("recovered Conversation() = (%#v, %v)", conversation, err)
+	}
+	if err := db.StartConversationTurn(ctx, "conversation-1", "继续整理另一个文件", time.Now()); err != nil {
+		t.Fatalf("StartConversationTurn() = %v", err)
+	}
+	if err := db.FinishConversationTurn(ctx, "conversation-1", ConversationClarifying, "请说明范围。", AnalysisCard{}, "", time.Now()); err != nil {
+		t.Fatalf("FinishConversationTurn() without summary = %v", err)
+	}
+	conversation, err = db.Conversation(ctx, "conversation-1")
+	if err != nil || conversation.ContextSummary != "保留用户选择的归档目录与命名偏好。" {
+		t.Fatalf("omitted summary erased previous context: (%#v, %v)", conversation, err)
 	}
 }
 

@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -48,7 +49,7 @@ func TestReviewAgentPlanCapturesModeAndPausesBetweenSteps(t *testing.T) {
 		t.Fatal(err)
 	}
 	at := time.Now().UTC()
-	mode, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "manual", at)
+	mode, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "manual", at, false)
 	if err != nil || mode != "manual" {
 		t.Fatalf("review manual plan: %v", err)
 	}
@@ -91,7 +92,7 @@ func TestReviewAgentPlanCapturesModeAndPausesBetweenSteps(t *testing.T) {
 func TestBypassPlanReviewApprovesEveryOperationAtomically(t *testing.T) {
 	ctx := context.Background()
 	metadata, plan := revisionFixture(t, 2)
-	mode, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "bypass", time.Now().UTC())
+	mode, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "bypass", time.Now().UTC(), false)
 	if err != nil || mode != "bypass" {
 		t.Fatalf("review bypass plan: %v", err)
 	}
@@ -112,11 +113,66 @@ func TestBypassPlanReviewApprovesEveryOperationAtomically(t *testing.T) {
 func TestAgentPlanReviewRejectsStaleExecutionMode(t *testing.T) {
 	ctx := context.Background()
 	metadata, plan := revisionFixture(t, 1)
-	if _, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "manual", time.Now().UTC()); !errors.Is(err, ErrConflict) {
+	if _, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "manual", time.Now().UTC(), false); !errors.Is(err, ErrConflict) {
 		t.Fatalf("review with stale manual mode = %v, want conflict", err)
 	}
 	unchanged, err := metadata.Plan(ctx, plan.ID)
 	if err != nil || unchanged.Status != PlanAwaitingApproval || unchanged.ReviewedAt != nil || unchanged.Operations[0].Approval != ApprovalPending {
 		t.Fatalf("stale mode changed plan: (%#v, %v)", unchanged, err)
+	}
+}
+
+func TestReviewAgentPlanRequiresAndAuditsPermanentDeleteConfirmation(t *testing.T) {
+	ctx := context.Background()
+	metadata, plan := revisionFixture(t, 1)
+	if err := metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metadata.db.ExecContext(ctx, `UPDATE operations SET action = 'permanent_delete', source_path = 'old.txt', target_path = '' WHERE id = ?`, plan.Operations[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "manual", time.Now().UTC(), false); !errors.Is(err, ErrConflict) {
+		t.Fatalf("review permanent-delete plan without confirmation = %v, want conflict", err)
+	}
+	unchanged, err := metadata.Plan(ctx, plan.ID)
+	if err != nil || unchanged.Status != PlanAwaitingApproval || unchanged.ReviewedAt != nil {
+		t.Fatalf("missing confirmation changed plan: (%#v, %v)", unchanged, err)
+	}
+	if _, err := metadata.ReviewAgentPlan(ctx, plan.ID, plan.Version, "manual", time.Now().UTC(), true); err != nil {
+		t.Fatalf("review confirmed permanent-delete plan: %v", err)
+	}
+	page, err := metadata.AuditForTaskPage(ctx, plan.TaskID, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var confirmationAudited bool
+	for _, record := range page.Records {
+		if record.EventType == "plan_reviewed" && strings.Contains(record.Message, "已确认计划中的永久删除不可恢复") {
+			confirmationAudited = true
+		}
+	}
+	if !confirmationAudited {
+		t.Fatalf("plan audit omitted explicit irreversible-delete confirmation: %#v", page.Records)
+	}
+
+	bypassMetadata, bypassPlan := revisionFixture(t, 1)
+	if _, err := bypassMetadata.db.ExecContext(ctx, `UPDATE operations SET action = 'permanent_delete', source_path = 'old.txt', target_path = '' WHERE id = ?`, bypassPlan.Operations[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bypassMetadata.ReviewAgentPlan(ctx, bypassPlan.ID, bypassPlan.Version, "bypass", time.Now().UTC(), true); err != nil {
+		t.Fatalf("review confirmed bypass permanent-delete plan: %v", err)
+	}
+	page, err = bypassMetadata.AuditForTaskPage(ctx, bypassPlan.TaskID, 20, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operationConfirmationAudited bool
+	for _, record := range page.Records {
+		if record.EventType == "operation_approved" && record.OperationID == bypassPlan.Operations[0].ID && strings.Contains(record.Message, "不可恢复删除") {
+			operationConfirmationAudited = true
+		}
+	}
+	if !operationConfirmationAudited {
+		t.Fatalf("bypass operation audit omitted irreversible-delete confirmation: %#v", page.Records)
 	}
 }

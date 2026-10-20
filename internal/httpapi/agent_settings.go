@@ -13,8 +13,13 @@ type agentSettingsRequest struct {
 }
 
 type agentPlanStartRequest struct {
-	ExpectedPlanVersion   int    `json:"expectedPlanVersion"`
-	ExpectedExecutionMode string `json:"expectedExecutionMode"`
+	ExpectedPlanVersion    int    `json:"expectedPlanVersion"`
+	ExpectedExecutionMode  string `json:"expectedExecutionMode"`
+	ConfirmPermanentDelete *bool  `json:"confirmPermanentDelete"`
+}
+
+type agentPlanStepRequest struct {
+	ExpectedPlanVersion int `json:"expectedPlanVersion"`
 }
 
 type agentPlanRejectRequest struct {
@@ -113,11 +118,11 @@ func (api *API) startAgentPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	planID := r.PathValue("planId")
-	if !validTaskID(planID) || request.ExpectedPlanVersion < 1 || request.ExpectedExecutionMode != "bypass" && request.ExpectedExecutionMode != "manual" {
-		writeError(w, http.StatusBadRequest, "invalid plan identifier, expected plan version, or expected execution mode")
+	if !validTaskID(planID) || request.ExpectedPlanVersion < 1 || request.ExpectedExecutionMode != "bypass" && request.ExpectedExecutionMode != "manual" || request.ConfirmPermanentDelete == nil {
+		writeError(w, http.StatusBadRequest, "invalid plan identifier, expected plan version, execution mode, or permanent-delete confirmation")
 		return
 	}
-	plan, err := workflow.StartPlan(r.Context(), planID, request.ExpectedPlanVersion, request.ExpectedExecutionMode)
+	plan, err := workflow.StartPlan(r.Context(), planID, request.ExpectedPlanVersion, request.ExpectedExecutionMode, *request.ConfirmPermanentDelete)
 	if err != nil {
 		writeAgentError(w, err)
 		return
@@ -134,7 +139,7 @@ func (api *API) executeAgentStep(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "Agent execution workflow is not configured")
 		return
 	}
-	var request agentPlanStartRequest
+	var request agentPlanStepRequest
 	if !decodeRequestJSON(w, r, &request) {
 		return
 	}

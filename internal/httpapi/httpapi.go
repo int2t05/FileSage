@@ -81,7 +81,7 @@ type agentWorkflow interface {
 }
 
 type agentExecutionWorkflow interface {
-	StartPlan(context.Context, string, int, string) (store.PlanRecord, error)
+	StartPlan(context.Context, string, int, string, bool) (store.PlanRecord, error)
 	ExecuteStep(context.Context, string, string, int) (store.PlanRecord, error)
 }
 

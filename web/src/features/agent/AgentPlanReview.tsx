@@ -69,7 +69,7 @@ interface AgentPlanReviewProps {
   onRetry: () => void;
   onRefresh: () => void;
   onRejectPlan: () => void;
-  onStartPlan: () => void;
+  onStartPlan: (confirmPermanentDelete: boolean) => void;
   onResumePlan: () => void;
   onRunStep: (operationId: string) => void;
   onStop: () => void;
@@ -906,7 +906,7 @@ export function AgentPlanReview({
               {!executionModeReady && <p className="agent-plan-start-hint" role="alert">{executionModeError || '正在读取 Agent 执行设置，暂不能开始计划。'}</p>}
               {permanentDeleteCount > 0 && <p className="agent-plan-start-hint">执行后无法恢复已永久删除的文件。</p>}
               {planExecutionMode === 'manual' && <p className="agent-plan-start-hint">确认计划后不会自动运行，你可逐步启动每一步。</p>}
-              <button className="agent-primary-button" type="button" onClick={onStartPlan} disabled={!canStartPlan}>
+              <button className="agent-primary-button" type="button" onClick={() => onStartPlan(permanentDeleteCount > 0 && permanentDeleteConfirmed)} disabled={!canStartPlan}>
                 {actionBusy === 'execute' || actionBusy === 'start-plan' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
                 {planExecutionMode === 'bypass'
                   ? permanentDeleteCount > 0 ? '确认永久删除并执行计划' : '审阅完成，开始执行'

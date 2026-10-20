@@ -138,6 +138,21 @@ func TestPersistedConversationFailuresRemainSuccessfulResponses(t *testing.T) {
 	}
 }
 
+func TestAgentConversationResponseKeepsContextSummaryPrivate(t *testing.T) {
+	stub := &conversationServiceStub{conversation: store.AgentConversation{
+		ID: "0123456789abcdef0123456789abcdef", State: store.ConversationClarifying,
+		ContextSummary: "private-context-summary-sentinel",
+		Messages:       []store.ConversationMessage{{Role: "assistant", Content: "请补充整理范围。"}},
+	}}
+	handler := NewWithAgentAndIndexAndConversation(nil, nil, nil, nil, nil, stub, nil, nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent/conversations/0123456789abcdef0123456789abcdef", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "private-context-summary-sentinel") || strings.Contains(response.Body.String(), "contextSummary") {
+		t.Fatalf("conversation response exposed internal summary: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestCreateDirectoryConfirmationCardKeepsActionAndTargetPath(t *testing.T) {
 	stub := &conversationServiceStub{
 		status: agent.ModelStatus{Available: true, Provider: "ollama", Model: "qwen-local", Destination: "local"},

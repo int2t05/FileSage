@@ -749,8 +749,8 @@ func (s *Service) RejectPlan(ctx context.Context, planID string, expectedVersion
 	return s.Decide(ctx, planID, plan.Operations[0].ID, "reject", expectedVersion)
 }
 
-// StartPlan 固定审核时的权限模式；bypass 模式审核后立即顺序执行。
-func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string) (store.PlanRecord, error) {
+// StartPlan 固定审核时的权限模式，并验证不可恢复删除的明确确认。
+func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string, confirmPermanentDelete bool) (store.PlanRecord, error) {
 	if expectedVersion < 1 || expectedMode != "bypass" && expectedMode != "manual" {
 		return store.PlanRecord{}, ErrConflict
 	}
@@ -759,6 +759,9 @@ func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion 
 		return store.PlanRecord{}, err
 	}
 	if plan.Version != expectedVersion || plan.Status != store.PlanAwaitingApproval || plan.ReviewedAt != nil {
+		return store.PlanRecord{}, ErrConflict
+	}
+	if planContainsPermanentDelete(plan) != confirmPermanentDelete {
 		return store.PlanRecord{}, ErrConflict
 	}
 	at := time.Now().UTC()
@@ -793,7 +796,7 @@ func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion 
 				return updated, fmt.Errorf("plan review invalidated: %w (%v)", ErrConflict, snapshotErr)
 			}
 		}
-		mode, err = s.store.ReviewAgentPlan(ctx, planID, expectedVersion, expectedMode, at)
+		mode, err = s.store.ReviewAgentPlan(ctx, planID, expectedVersion, expectedMode, at, confirmPermanentDelete)
 		if err != nil {
 			return store.PlanRecord{}, err
 		}
@@ -806,6 +809,16 @@ func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion 
 		return s.executeOperation(ctx, reviewed.ID, reviewed.ScopePath, reviewed.Operations[0])
 	}
 	return s.Execute(ctx, planID, reviewed.Version)
+}
+
+// planContainsPermanentDelete 检查计划是否含不可恢复删除。
+func planContainsPermanentDelete(plan store.PlanRecord) bool {
+	for _, operation := range plan.Operations {
+		if operation.Action == "permanent_delete" {
+			return true
+		}
+	}
+	return false
 }
 
 // reviewShellPlan 锁定并校验快照；返回后释放文件锁，再进入工具执行器。

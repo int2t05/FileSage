@@ -238,6 +238,54 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	}
 }
 
+// TestMoveFilePreservesSourceChangedAfterCopy 验证复制发布后源文件变化时不会删除外部内容。
+func TestMoveFilePreservesSourceChangedAfterCopy(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(rootPath, "source.txt")
+	approvedContent := []byte("approved source")
+	externalContent := []byte("external update")
+	if len(approvedContent) != len(externalContent) {
+		t.Fatal("test contents must have the same size")
+	}
+	if err := os.WriteFile(sourcePath, approvedContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	entry, err := root.LstatEntry("source.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyResult, err := root.CopyFileNoReplace(context.Background(), "source.txt", "target/moved.txt", entry.Fingerprint())
+	if err != nil || !copyResult.Published {
+		t.Fatalf("copy result = (%#v, %v)", copyResult, err)
+	}
+	if err := os.WriteFile(sourcePath, externalContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sourcePath, entry.ModifiedAt, entry.ModifiedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := platformRemoveFileIfUnchanged(root, "source.txt", entry.Fingerprint())
+	if removed || !errors.Is(err, ErrConflict) {
+		t.Fatalf("remove changed source = (%t, %v), want conflict without removal", removed, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != string(externalContent) {
+		t.Fatalf("external source content = (%q, %v)", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(rootPath, "target", "moved.txt")); err != nil || string(content) != string(approvedContent) {
+		t.Fatalf("copied target content = (%q, %v)", content, err)
+	}
+}
+
 // TestWriteAtomicIfUnchangedDetectsRestoredModTime 验证 ctime 可发现伪装成旧版本的原地改写。
 func TestWriteAtomicIfUnchangedDetectsRestoredModTime(t *testing.T) {
 	rootPath := t.TempDir()

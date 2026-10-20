@@ -168,7 +168,7 @@ func TestBypassReviewsAndExecutesShellThroughOneToolStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass")
+	completed, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass", false)
 	if err != nil || completed.Status != store.PlanCompleted || len(completed.Operations) != 1 || completed.Operations[0].Action != "run_shell" || completed.Operations[0].Status != store.OperationSucceeded {
 		t.Fatalf("StartPlan() = (%#v, %v)", completed, err)
 	}
