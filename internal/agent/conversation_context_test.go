@@ -9,6 +9,7 @@ import (
 	"filesage/internal/store"
 )
 
+// TestConversationPromptKeepsSummaryAndRecentMessages 验证工具能力、记忆与结果回执均进入上下文。
 func TestConversationPromptKeepsSummaryAndRecentMessages(t *testing.T) {
 	conversation := store.AgentConversation{ContextSummary: "用户希望使用同一会话继续任务。"}
 	for index := 0; index < 60; index++ {
@@ -28,6 +29,17 @@ func TestConversationPromptKeepsSummaryAndRecentMessages(t *testing.T) {
 	}
 	if !strings.Contains(messages[0].Content, "run_shell：在隔离副本中运行 Shell") || !strings.Contains(messages[0].Content, "输入：scopePath, workingDir, shellCommand") {
 		t.Fatalf("system prompt omitted the registered tool catalog: %q", messages[0].Content)
+	}
+	for _, analysisAction := range []string{"find_duplicates", "archive_photos", "classify_documents"} {
+		if !strings.Contains(messages[0].Content, analysisAction) {
+			t.Errorf("system prompt omitted the conversation analysis capability %q", analysisAction)
+		}
+	}
+	if !strings.Contains(messages[0].Content, "候选文件与类别目录由服务端") || !strings.Contains(messages[0].Content, "不发送给模型、不修改文件") {
+		t.Fatal("system prompt omitted the analysis data or side-effect boundaries")
+	}
+	if !strings.Contains(messages[0].Content, "从上述已登记工具和对话分析能力中选择") {
+		t.Fatal("system prompt did not make the analysis actions selectable")
 	}
 	if messages[2].Content != "消息-36" || messages[len(messages)-1].Content != "消息-59" {
 		t.Fatalf("recent window = (%q, %q)", messages[2].Content, messages[len(messages)-1].Content)
