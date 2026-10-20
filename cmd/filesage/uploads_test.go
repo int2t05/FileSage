@@ -97,6 +97,38 @@ func TestTusUploadDoesNotAllowCrossOriginPreflight(t *testing.T) {
 	}
 }
 
+func TestTusUploadRejectsFilesAboveConfiguredLimit(t *testing.T) {
+	fixture := newUploadIntegration(t)
+	metadata := []string{
+		"filename " + base64.StdEncoding.EncodeToString([]byte("large.bin")),
+		"target " + base64.StdEncoding.EncodeToString([]byte(".")),
+		"relativepath " + base64.StdEncoding.EncodeToString([]byte("large.bin")),
+	}
+	request, err := http.NewRequest(http.MethodPost, fixture.server.URL+"/api/v1/uploads/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Tus-Resumable", "1.0.0")
+	request.Header.Set("Upload-Length", fmt.Sprint((1<<20)+1))
+	request.Header.Set("Upload-Metadata", strings.Join(metadata, ","))
+	response, err := fixture.server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("create oversized tus upload: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("oversized upload status = %d, want %d: %s", response.StatusCode, http.StatusRequestEntityTooLarge, body)
+	}
+	entries, err := os.ReadDir(fixture.staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("oversized upload created %d staging entries", len(entries))
+	}
+}
+
 func (fixture *uploadIntegration) close() {
 	fixture.server.Close()
 	fixture.cancel()

@@ -85,8 +85,9 @@ func main() {
 	conversationService := agent.NewConversationService(metadata, root, agentService, cfg.AgentModel, fileIndex)
 	defer conversationService.Close()
 	uploads, err := upload.New(upload.Config{
-		StagingDir:  filepath.Join(cfg.DataDir, "upload-staging"),
-		ManagedRoot: cfg.RootDir,
+		StagingDir:    filepath.Join(cfg.DataDir, "upload-staging"),
+		ManagedRoot:   cfg.RootDir,
+		MaxUploadSize: cfg.UploadMaxBytes,
 	})
 	if err != nil {
 		slog.Error("cannot create upload handler", "error", err)
