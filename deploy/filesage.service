@@ -1,6 +1,8 @@
 [Unit]
 Description=FileSage file management service
-After=network.target
+# 等待网络管理器完成地址配置后再绑定服务地址。
+Wants=network-online.target
+After=network-online.target
 # 与环境文件中的 FILESAGE_ROOT 保持一致；其他挂载卷也应列在此处。
 RequiresMountsFor=/srv/filesage-files
 
