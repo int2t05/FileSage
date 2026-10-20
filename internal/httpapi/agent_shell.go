@@ -15,7 +15,6 @@ import (
 type agentShellHTTPWorkflow interface {
 	ShellChanges(context.Context, string, int, int) (store.ShellChangePage, error)
 	PreviewShellChange(context.Context, string, string) (agent.ShellChangePreview, error)
-	DecideShellChange(context.Context, string, string, string, int) (store.PlanRecord, error)
 }
 
 type agentShellChangeStateResponse struct {
@@ -48,11 +47,6 @@ type agentShellChangesResponse struct {
 type agentShellChangePreviewResponse struct {
 	Change   agentShellChangeResponse `json:"change"`
 	TextDiff string                   `json:"textDiff"`
-}
-
-type agentShellChangeApprovalRequest struct {
-	Decision            string `json:"decision"`
-	ExpectedPlanVersion int    `json:"expectedPlanVersion"`
 }
 
 // listAgentShellChanges 返回无缓存的变更分页。
@@ -120,37 +114,6 @@ func (api *API) previewAgentShellChange(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, agentShellChangePreviewResponse{Change: change, TextDiff: preview.Diff})
-}
-
-// decideAgentShellChange 校验同源请求后逐项提交审批。
-func (api *API) decideAgentShellChange(w http.ResponseWriter, r *http.Request) {
-	if !requireSameOrigin(w, r) {
-		return
-	}
-	workflow, ok := api.agent.(agentShellHTTPWorkflow)
-	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "Agent Shell review is not configured")
-		return
-	}
-	planID, changeID := r.PathValue("planId"), r.PathValue("changeId")
-	if !validTaskID(planID) || !validTaskID(changeID) {
-		writeError(w, http.StatusBadRequest, "invalid plan or change identifier")
-		return
-	}
-	var request agentShellChangeApprovalRequest
-	if !decodeRequestJSON(w, r, &request) {
-		return
-	}
-	if (request.Decision != "approve" && request.Decision != "reject") || request.ExpectedPlanVersion < 1 {
-		writeError(w, http.StatusBadRequest, "invalid Shell change approval")
-		return
-	}
-	plan, err := workflow.DecideShellChange(r.Context(), planID, changeID, request.Decision, request.ExpectedPlanVersion)
-	if err != nil {
-		writeAgentError(w, err)
-		return
-	}
-	api.writeAgentPlanResponse(w, r, plan)
 }
 
 func shellPageQuery(w http.ResponseWriter, r *http.Request) (int, int, bool) {

@@ -1048,7 +1048,14 @@ export function ReaderPanel({ path, name, kind, capturedAt, onClose, onFileCreat
                   <MarkdownPreview path={path} content={visibleState.content} allowLocalImages={!isReadOnly} />
                 </Suspense>
               ) : (
-                <pre className="reader-text-content" tabIndex={0} aria-label={`${name} 的${isMarkdown(name) ? 'Markdown 原文' : '纯文本内容'}`}>{visibleState.content}</pre>
+                <Suspense fallback={<div className="reader-state" role="status"><LoaderCircle className="reader-spinner" size={22} aria-hidden="true" />正在加载文本阅读器…</div>}>
+                  <TextCodeEditor
+                    name={name}
+                    value={visibleState.content}
+                    disabled={false}
+                    readOnly
+                  />
+                </Suspense>
               )}
               {saveMessage && saveStatus !== 'conflict' && (
                 <p className={`reader-save-message reader-save-${saveStatus}`} role={saveStatus === 'error' ? 'alert' : 'status'}>{saveMessage}</p>

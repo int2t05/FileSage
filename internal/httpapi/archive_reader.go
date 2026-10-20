@@ -392,6 +392,8 @@ func (api *API) archiveDestination(relativePath string) (fsroot.Entry, error) {
 
 func writeArchiveReadError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, fsroot.ErrVolumeUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "管理卷暂不可用，请确认磁盘已挂载后重试。")
 	case errors.Is(err, fsroot.ErrArchiveEncrypted):
 		writeError(w, http.StatusUnprocessableEntity, "压缩包已加密，当前不支持解密。")
 	case errors.Is(err, fsroot.ErrArchiveUnsafeEntry):

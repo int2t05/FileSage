@@ -175,9 +175,10 @@ func (g *Generator) Generate(ctx context.Context, video io.Reader) ([]byte, erro
 		close(stderrDone)
 	}()
 
-	waitErr := cmd.Wait()
 	copyErr := <-stdoutErr
 	<-stderrDone
+	// 先读完管道再等待进程，避免 Wait 提前关闭仍在读取的文件描述符。
+	waitErr := cmd.Wait()
 	if copyErr != nil {
 		if errors.Is(copyErr, ErrOutputLimit) {
 			return nil, ErrOutputLimit

@@ -191,19 +191,12 @@
 }
 
 .upload-scope-note {
-  display: grid;
-  gap: 4px;
   margin: 13px 0 0;
-  padding: 10px 12px;
-  border: 1px solid #e4ece5;
-  border-radius: var(--radius-md);
-  background: #f7faf7;
+  padding: 8px 0 0;
   color: #617163;
-  font-size: 11px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.4;
 }
-
-.upload-scope-note strong { color: #42624b; font-size: 11px; }
 
 .upload-selection-error,
 .upload-task-error {

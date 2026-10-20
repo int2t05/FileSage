@@ -22,6 +22,9 @@ func (r *Root) TrashArea(source string) (area, mountRoot string, mountID uint64,
 	if err = validateMutationPath(source); err != nil {
 		return "", "", 0, err
 	}
+	if err = r.checkVolumeAvailability(source); err != nil {
+		return "", "", 0, err
+	}
 	if err = r.rejectSymlinkParents(source); err != nil {
 		return "", "", 0, err
 	}
@@ -74,6 +77,9 @@ func (r *Root) VerifyTrashArea(area string, mountID uint64) error {
 // MountID 返回路径当前所在的 Linux 挂载实例标识。
 func (r *Root) MountID(relativePath string) (uint64, error) {
 	if err := validateRelativePath(relativePath); err != nil {
+		return 0, err
+	}
+	if err := r.checkVolumeAvailability(relativePath); err != nil {
 		return 0, err
 	}
 	if relativePath != "" {

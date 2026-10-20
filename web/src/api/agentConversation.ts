@@ -83,6 +83,7 @@ export interface AgentConversationSummary {
   title: string;
   updatedAt: string;
   taskId?: string;
+  taskStatus?: string;
   planId?: string;
 }
 
@@ -354,7 +355,7 @@ function parseAnalysisCard(value: unknown): AgentAnalysisCard | null {
     const shellCommand = value.shellCommand ?? operation.shellCommand;
     const workingDir = value.workingDir ?? operation.workingDir;
     if (typeof filePath !== 'string' || !isSafeRelativePath(filePath, true)
-      || !isShellCommand(shellCommand) || typeof workingDir !== 'string' || !isSafeRelativePath(workingDir, true)
+      || !isShellCommand(shellCommand) || typeof workingDir !== 'string' || !isShellWorkingDirectory(workingDir)
       || value.targetPath !== undefined && value.targetPath !== ''
       || value.files !== undefined || value.categories !== undefined
       || value.requestedMode != null || value.requestedOwnerUid != null || value.requestedGroupGid != null) {
@@ -595,6 +596,7 @@ export function parseAgentConversationPage(value: unknown): AgentConversationPag
       title: item.title,
       updatedAt: item.updatedAt,
       ...(item.taskId === undefined ? {} : { taskId: optionalString(item.taskId, '任务 ID') }),
+      ...(item.taskStatus === undefined ? {} : { taskStatus: optionalString(item.taskStatus, '任务状态') }),
       ...(item.planId === undefined ? {} : { planId: optionalString(item.planId, '方案 ID') }),
     };
   });
@@ -607,9 +609,14 @@ export function parseAgentConversationPage(value: unknown): AgentConversationPag
   };
 }
 
-export function canSendAgentMessage(state: AgentConversationState | null): boolean {
-  return state === null || state === 'clarifying' || state === 'awaiting_confirmation'
-    || state === 'unsupported' || state === 'failed' || state === 'analysis_complete';
+export function canSendAgentMessage(state: AgentConversationState | null, planStatus?: string, messageCount = 0, hasLinkedPlan = false): boolean {
+  const terminalPlan = ['completed', 'failed', 'invalidated', 'rejected', 'cancelled'].includes(planStatus ?? '');
+  const canContinue = hasLinkedPlan
+    ? terminalPlan && ['awaiting_approval', 'analysis_complete', 'failed'].includes(state ?? '')
+    : state === null || state === 'clarifying' || state === 'awaiting_confirmation'
+      || state === 'unsupported' || state === 'failed' || state === 'analysis_complete';
+  if (!canContinue) return false;
+  return messageCount + (hasLinkedPlan ? 4 : 3) <= 100;
 }
 
 export function canConfirmAgentAnalysis(conversation: AgentConversation | null): boolean {
@@ -620,7 +627,7 @@ async function readResponseError(response: Response, fallback: string): Promise<
   const message = response.status === 400 ? '请求无效，请检查消息后重试。'
     : response.status === 404 ? '会话不存在，请刷新历史记录。'
       : response.status === 409 ? '会话状态已变化，请刷新后重新核对。'
-        : response.status === 413 ? '消息或文件正文超过服务限制。'
+      : response.status === 413 ? '消息、文件正文或本会话记录已达上限。'
           : response.status === 422 ? '当前任务或文件格式暂不支持。'
             : response.status === 502 ? '模型请求失败；对话草稿已保留，请稍后重试。'
               : response.status === 503 ? '模型尚未配置或当前不可用。'

@@ -55,6 +55,9 @@ func (r *Root) WriteAtomicFrom(rel string, expected Fingerprint, source io.Reade
 	if err := validatePermissionMode(perm); err != nil {
 		return "", err
 	}
+	if err := r.checkVolumeAvailability(rel); err != nil {
+		return "", err
+	}
 	if !atomicWriteSupported() {
 		return "", fmt.Errorf("write %q: %w", rel, ErrAtomicWriteUnsupported)
 	}

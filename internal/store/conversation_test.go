@@ -42,11 +42,11 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	}
 	if err := db.FinishConversationTurn(ctx, "conversation-1", ConversationAwaitingConfirmation, "将读取单个文件全文，请确认。", AnalysisCard{
 		Goal: "依据正文标题重命名", FilePath: "notes.md", Provider: "test", Model: "model", Destination: "local",
-	}, "", createdAt.Add(time.Second)); err != nil {
+	}, "", createdAt.Add(time.Second), "保留用户选择的归档目录与命名偏好。"); err != nil {
 		t.Fatal(err)
 	}
 	conversation, err := db.Conversation(ctx, "conversation-1")
-	if err != nil || conversation.State != ConversationAwaitingConfirmation || conversation.Analysis == nil || len(conversation.Messages) != 2 {
+	if err != nil || conversation.State != ConversationAwaitingConfirmation || conversation.Analysis == nil || len(conversation.Messages) != 2 || conversation.ContextSummary != "保留用户选择的归档目录与命名偏好。" {
 		t.Fatalf("Conversation() = (%#v, %v)", conversation, err)
 	}
 	list, hasMore, err := db.ListConversations(ctx, 20, 0)
@@ -65,7 +65,7 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	}
 	defer db.Close()
 	conversation, err = db.Conversation(ctx, "conversation-1")
-	if err != nil || conversation.State != ConversationAwaitingConfirmation || len(conversation.Messages) != 2 {
+	if err != nil || conversation.State != ConversationAwaitingConfirmation || len(conversation.Messages) != 2 || conversation.ContextSummary != "保留用户选择的归档目录与命名偏好。" {
 		t.Fatalf("reloaded Conversation() = (%#v, %v)", conversation, err)
 	}
 	if claimed, err := db.BeginConversationAnalysis(ctx, "conversation-1", time.Now()); err != nil || !claimed {
@@ -84,6 +84,63 @@ func TestConversationPersistenceRecoveryAndListSummary(t *testing.T) {
 	conversation, err = db.Conversation(ctx, "conversation-1")
 	if err != nil || conversation.State != ConversationFailed || conversation.Error != "service_restarted" || conversation.Analysis == nil {
 		t.Fatalf("recovered Conversation() = (%#v, %v)", conversation, err)
+	}
+	if err := db.StartConversationTurn(ctx, "conversation-1", "继续整理另一个文件", time.Now()); err != nil {
+		t.Fatalf("StartConversationTurn() = %v", err)
+	}
+	if err := db.FinishConversationTurn(ctx, "conversation-1", ConversationClarifying, "请说明范围。", AnalysisCard{}, "", time.Now()); err != nil {
+		t.Fatalf("FinishConversationTurn() without summary = %v", err)
+	}
+	conversation, err = db.Conversation(ctx, "conversation-1")
+	if err != nil || conversation.ContextSummary != "保留用户选择的归档目录与命名偏好。" {
+		t.Fatalf("omitted summary erased previous context: (%#v, %v)", conversation, err)
+	}
+}
+
+// TestConversationSummaryIncludesCurrentTaskStatus 验证摘要读取关联任务的最新状态。
+func TestConversationSummaryIncludesCurrentTaskStatus(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := db.CreateConversation(ctx, "conversation-task", "整理文件", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.PutTask(ctx, TaskRecord{ID: "task-current", Kind: "agent", Status: TaskSucceeded}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `INSERT INTO plans (id, task_id, version, status, data_scope_json, created_at_ns, updated_at_ns) VALUES (?, ?, 1, 'completed', '{}', 1, 1)`, "plan-current", "task-current"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.db.ExecContext(ctx, `UPDATE agent_conversations SET state = ?, task_id = ?, plan_id = ? WHERE id = ?`, ConversationAwaitingApproval, "task-current", "plan-current", "conversation-task"); err != nil {
+		t.Fatal(err)
+	}
+
+	summaries, _, err := db.ListConversations(ctx, 20, 0)
+	if err != nil || len(summaries) != 1 || summaries[0].TaskStatus != TaskSucceeded {
+		t.Fatalf("ListConversations() = (%#v, %v)", summaries, err)
+	}
+}
+
+// TestConversationSummaryUsesFirstMessageUntilGoalIsKnown 验证任务目标生成前使用首条消息标识会话。
+func TestConversationSummaryUsesFirstMessageUntilGoalIsKnown(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	message := "按拍摄日期归档本周照片"
+	if err := db.CreateConversation(ctx, "conversation-title", message, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	summaries, _, err := db.ListConversations(ctx, 20, 0)
+	if err != nil || len(summaries) != 1 || summaries[0].Title != message {
+		t.Fatalf("ListConversations() = (%#v, %v)", summaries, err)
 	}
 }
 

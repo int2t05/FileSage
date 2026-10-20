@@ -1546,10 +1546,83 @@ DROP TABLE duplicate_scan_groups_v23;
 DROP TABLE duplicate_scan_files_v23;
 `,
 	},
+	{
+		version: 25,
+		// 保存全局 Agent 权限偏好及每个方案的审计模式。
+		sql: `
+ALTER TABLE plans ADD COLUMN execution_mode TEXT NOT NULL DEFAULT ''
+	CHECK (execution_mode IN ('', 'bypass', 'manual'));
+ALTER TABLE plans ADD COLUMN reviewed_at_ns INTEGER;
+
+CREATE TABLE agent_settings (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	bypass_permission INTEGER NOT NULL CHECK (bypass_permission IN (0, 1)),
+	updated_at_ns INTEGER NOT NULL
+);
+INSERT INTO agent_settings (id, bypass_permission, updated_at_ns)
+VALUES (1, 1, CAST(strftime('%s', 'now') AS INTEGER) * 1000000000);
+`,
+	},
+	{
+		version: 26,
+		// 保存有上限的 Shell 输出，支持恢复历史工具调用。
+		sql: `
+ALTER TABLE shell_runs ADD COLUMN exit_code INTEGER NOT NULL DEFAULT 0 CHECK (exit_code BETWEEN 0 AND 255);
+ALTER TABLE shell_runs ADD COLUMN stdout TEXT NOT NULL DEFAULT '';
+ALTER TABLE shell_runs ADD COLUMN stderr TEXT NOT NULL DEFAULT '';
+ALTER TABLE shell_runs ADD COLUMN output_available INTEGER NOT NULL DEFAULT 0 CHECK (output_available IN (0, 1));
+`,
+	},
+	{
+		version: 27,
+		// 删除 Shell 原始输出，仅保留退出码和输出省略标记。
+		sql: `
+CREATE TABLE shell_runs_v27 (
+	id TEXT PRIMARY KEY CHECK (id <> ''),
+	plan_id TEXT NOT NULL UNIQUE REFERENCES plans(id) ON DELETE RESTRICT,
+	operation_id TEXT NOT NULL UNIQUE REFERENCES operations(id) ON DELETE RESTRICT,
+	command TEXT NOT NULL CHECK (length(command) > 0),
+	working_directory TEXT NOT NULL,
+	output_discarded INTEGER NOT NULL CHECK (output_discarded IN (0, 1)),
+	exit_code INTEGER NOT NULL CHECK (exit_code BETWEEN 0 AND 255),
+	stage_id TEXT NOT NULL UNIQUE CHECK (stage_id <> ''),
+	status TEXT NOT NULL CHECK (status IN ('awaiting_approval', 'approved', 'executing', 'completed', 'failed', 'rejected', 'cancelled', 'invalidated', 'partial')),
+	created_at_ns INTEGER NOT NULL,
+	updated_at_ns INTEGER NOT NULL
+);
+INSERT INTO shell_runs_v27 (
+	id, plan_id, operation_id, command, working_directory, output_discarded,
+	exit_code, stage_id, status, created_at_ns, updated_at_ns
+)
+SELECT id, plan_id, operation_id, command, working_directory,
+	CASE WHEN length(CAST(stdout AS BLOB)) > 0 OR length(CAST(stderr AS BLOB)) > 0 THEN 1 ELSE 0 END,
+	exit_code, stage_id, status, created_at_ns, updated_at_ns
+FROM shell_runs;
+UPDATE shell_runs SET stdout = '', stderr = '';
+DROP TABLE shell_runs;
+ALTER TABLE shell_runs_v27 RENAME TO shell_runs;
+`,
+	},
+	{
+		version: 28,
+		// 保存 Agent 会话的受限摘要，用于长对话上下文压缩。
+		sql: `
+ALTER TABLE agent_conversations ADD COLUMN context_summary TEXT NOT NULL DEFAULT ''
+	CHECK (length(CAST(context_summary AS BLOB)) <= 4096);
+`,
+	},
 }
 
+// migrate 顺序应用迁移，并清理旧 Shell 输出的 SQLite 残留。
 func migrate(ctx context.Context, db *sql.DB) error {
-	if _, err := db.ExecContext(ctx, `
+	// 固定单一连接，确保安全删除设置覆盖迁移事务。
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("get migration connection: %w", err)
+	}
+	defer conn.Close()
+
+	if _, err := conn.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS schema_migrations (
 			version INTEGER PRIMARY KEY CHECK (version > 0),
 			applied_at_ns INTEGER NOT NULL
@@ -1558,18 +1631,33 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	}
 
 	var current int
-	if err := db.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT COALESCE(MAX(version), 0) FROM schema_migrations`).Scan(&current); err != nil {
 		return fmt.Errorf("read current schema version: %w", err)
 	}
 	if current > len(migrations) {
 		return fmt.Errorf("database schema version %d is newer than this application supports (latest %d)", current, len(migrations))
 	}
 
+	clearShellOutput := current >= 27
 	for _, next := range migrations {
 		if next.version <= current {
 			continue
 		}
-		tx, err := db.BeginTx(ctx, nil)
+		if next.version == 27 {
+			// 覆盖旧输出后再删表，避免正文留在空闲页。
+			if _, err := conn.ExecContext(ctx, `PRAGMA secure_delete = ON`); err != nil {
+				return fmt.Errorf("enable secure deletion for migration %d: %w", next.version, err)
+			}
+			var enabled int
+			if err := conn.QueryRowContext(ctx, `PRAGMA secure_delete`).Scan(&enabled); err != nil {
+				return fmt.Errorf("verify secure deletion for migration %d: %w", next.version, err)
+			}
+			if enabled != 1 {
+				return fmt.Errorf("secure deletion is disabled for migration %d", next.version)
+			}
+			clearShellOutput = true
+		}
+		tx, err := conn.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin migration %d: %w", next.version, err)
 		}
@@ -1583,6 +1671,15 @@ func migrate(ctx context.Context, db *sql.DB) error {
 		}
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("commit migration %d: %w", next.version, err)
+		}
+	}
+	if clearShellOutput {
+		var busy, logFrames, checkpointedFrames int
+		if err := conn.QueryRowContext(ctx, `PRAGMA wal_checkpoint(TRUNCATE)`).Scan(&busy, &logFrames, &checkpointedFrames); err != nil {
+			return fmt.Errorf("clear Shell output from SQLite WAL: %w", err)
+		}
+		if busy != 0 || (logFrames >= 0 && checkpointedFrames < logFrames) {
+			return fmt.Errorf("clear Shell output from SQLite WAL: checkpoint incomplete (busy=%d log=%d checkpointed=%d)", busy, logFrames, checkpointedFrames)
 		}
 	}
 	return nil

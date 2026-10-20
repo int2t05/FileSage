@@ -1,16 +1,32 @@
 // 本文件集中管理文本编辑器的语法映射与 CodeMirror 扩展。
-import type { Extension } from '@codemirror/state';
+import { EditorState, type Extension } from '@codemirror/state';
 import { bracketMatching, defaultHighlightStyle, indentOnInput, StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { search, searchKeymap } from '@codemirror/search';
 import { highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view';
 
+export const textReaderKeymap = [...searchKeymap];
+
 export const textEditorKeymap = [
-  ...searchKeymap,
+  ...textReaderKeymap,
   indentWithTab,
   ...defaultKeymap,
   ...historyKeymap,
 ];
+
+const searchPhrases = {
+  Find: '查找',
+  Replace: '替换',
+  next: '下一个',
+  previous: '上一个',
+  all: '全部',
+  'match case': '区分大小写',
+  regexp: '正则表达式',
+  'by word': '全字匹配',
+  replace: '替换',
+  'replace all': '全部替换',
+  close: '关闭',
+};
 
 // 按服务端可编辑扩展白名单按需加载解析器，其他文件继续按纯文本处理。
 export async function languageSupportFor(name: string): Promise<Extension | null> {
@@ -77,15 +93,31 @@ export async function languageSupportFor(name: string): Promise<Extension | null
 // 为编辑与阅读提供一致的行号、查找、撤销和语法高亮行为。
 export function textEditorExtensions(languageSupport?: Extension | null): Extension[] {
   return [
-    lineNumbers(),
-    highlightActiveLineGutter(),
-    highlightActiveLine(),
+    ...textCodeViewExtensions(),
     history(),
     indentOnInput(),
     bracketMatching(),
-    search(),
-    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     keymap.of(textEditorKeymap),
     ...(languageSupport ? [languageSupport] : []),
+  ];
+}
+
+// 阅读器复用行号、查找和语法高亮，不加载编辑行为。
+export function textReaderExtensions(languageSupport?: Extension | null): Extension[] {
+  return [
+    ...textCodeViewExtensions(),
+    keymap.of(textReaderKeymap),
+    ...(languageSupport ? [languageSupport] : []),
+  ];
+}
+
+function textCodeViewExtensions(): Extension[] {
+  return [
+    lineNumbers(),
+    highlightActiveLineGutter(),
+    highlightActiveLine(),
+    search(),
+    syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+    EditorState.phrases.of(searchPhrases),
   ];
 }

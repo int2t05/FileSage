@@ -6,8 +6,8 @@ import ts from 'typescript';
 const source = await readFile(new URL('../src/features/photos/PhotosPage.tsx', import.meta.url), 'utf8');
 const sourceFile = ts.createSourceFile('PhotosPage.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const helpers = sourceFile.statements.filter((statement) => ts.isFunctionDeclaration(statement)
-  && ['dateBoundary', 'photoDay', 'formatCaptureTime', 'adjacentPhoto', 'stepPhotoZoom'].includes(statement.name?.text ?? ''));
-const { outputText } = ts.transpileModule(`${helpers.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { dateBoundary, photoDay, formatCaptureTime, adjacentPhoto, stepPhotoZoom };`, {
+  && ['dateBoundary', 'photoDay', 'formatCaptureTime', 'photoIndexNotice', 'photoEmptyMessage', 'adjacentPhoto', 'stepPhotoZoom'].includes(statement.name?.text ?? ''));
+const { outputText } = ts.transpileModule(`${helpers.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { dateBoundary, photoDay, formatCaptureTime, photoIndexNotice, photoEmptyMessage, adjacentPhoto, stepPhotoZoom };`, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
 const photos = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString('base64')}`);
@@ -48,6 +48,13 @@ describe('照片页拍摄日', () => {
     assert.deepEqual(photos.photoDay({}), { key: 'unknown', label: '拍摄日期未知' });
     assert.deepEqual(photos.photoDay({ capturedAt: 'invalid' }), { key: 'unknown', label: '拍摄日期未知' });
     assert.equal(photos.formatCaptureTime(undefined), '日期未知');
+  });
+
+  it('空态只说明下一步，照片存在时才展示排序提示', () => {
+    assert.equal(photos.photoIndexNotice('ready'), '按拍摄时间排序；无拍摄时间的照片列在最后。');
+    assert.equal(photos.photoIndexNotice('building'), '照片索引尚未完成，结果可能不完整。');
+    assert.equal(photos.photoEmptyMessage('ready'), '当前筛选范围内没有照片。');
+    assert.equal(photos.photoEmptyMessage('building'), '照片索引完成后，支持格式的图片会显示在这里。');
   });
 
   it('仅在当前已加载照片列表内按顺序切换', () => {

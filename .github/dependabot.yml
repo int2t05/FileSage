@@ -15,3 +15,12 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      vite-toolchain:
+        applies-to: version-updates
+        # Vite 与 React 插件需同步更新，避免 peer 依赖冲突。
+        update-types:
+          - major
+        patterns:
+          - vite
+          - "@vitejs/plugin-react"

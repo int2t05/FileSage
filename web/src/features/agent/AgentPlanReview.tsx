@@ -1,4 +1,4 @@
-// Agent 方案卡片：集中呈现逐项审核与执行确认。
+// Agent 计划按步骤展示执行意图和进度。
 import { useCallback, useEffect, useState } from 'react';
 import {
   AlertTriangle,
@@ -17,10 +17,13 @@ import {
 } from 'lucide-react';
 import { AgentApiError, getAgentOperationPreview, type AgentOperation, type AgentOperationPreview, type AgentPlan, type AgentPlanEditOperation, type AgentTextCandidateAction } from '../../api/agent';
 import { ShellChangeReview } from './ShellChangeReview';
+import { ShellToolCall } from './ShellToolCall';
+import { isSameDirectoryPath } from './pathSemantics';
+import './AgentPlanReview.css';
 
 const PLAN_STATUS_LABELS: Record<string, string> = {
-  awaiting_approval: '待审核',
-  approved: '已批准',
+  awaiting_approval: '待你审阅',
+  approved: '计划已确认',
   executing: '执行中',
   completed: '已完成',
   failed: '执行失败',
@@ -28,13 +31,6 @@ const PLAN_STATUS_LABELS: Record<string, string> = {
   rejected: '已拒绝',
   cancelled: '已停止',
   needs_attention: '需你核查',
-};
-
-const APPROVAL_LABELS: Record<string, string> = {
-  pending: '待审核',
-  approved: '已批准',
-  rejected: '已拒绝',
-  invalidated: '已过期',
 };
 
 const EXECUTION_LABELS: Record<string, string> = {
@@ -47,10 +43,8 @@ const EXECUTION_LABELS: Record<string, string> = {
   cancelled: '已取消',
 };
 
-type Decision = 'approve' | 'reject';
+type ExecutionMode = 'bypass' | 'manual';
 
-// 未明确支持的动作一律不提供审批和执行入口。
-const APPROVABLE_ACTIONS = new Set(['rename', 'edit_text', 'create_file', 'overwrite_file', 'create_directory', 'move_file', 'copy_file', 'copy_directory', 'create_symlink', 'create_archive', 'extract_archive', 'set_permissions', 'set_owner', 'trash_duplicate', 'archive_photo', 'trash', 'permanent_delete', 'run_shell']);
 const EDIT_ACTION_LABELS: Record<string, string> = {
   rename: '重命名',
   create_directory: '新建文件夹',
@@ -69,12 +63,15 @@ interface AgentPlanReviewProps {
   conversationBusy: string;
   actionError: string;
   notice: string;
+  executionMode: ExecutionMode;
+  executionModeReady: boolean;
+  executionModeError: string;
   onRetry: () => void;
   onRefresh: () => void;
-  onDecision: (operationId: string, decision: Decision) => void;
-  onShellChangeDecision: (changeId: string) => void;
   onRejectPlan: () => void;
-  onExecute: () => void;
+  onStartPlan: (confirmPermanentDelete: boolean) => void;
+  onResumePlan: () => void;
+  onRunStep: (operationId: string) => void;
   onStop: () => void;
   stopBusy: boolean;
   editable: boolean;
@@ -96,18 +93,15 @@ function planStatusTone(status: string): string {
 export function canExecute(plan: AgentPlan): boolean {
   return plan.status === 'approved'
     && plan.operations.length > 0
-    && plan.operations.every((operation) => isApprovableOperation(operation)
-      && operation.approval === 'approved'
-      && operation.executionStatus === 'pending');
+    && plan.operations.every((operation) => operation.executionStatus === 'pending');
 }
 
-export function approvalCounts(plan: AgentPlan) {
-  return {
-    pending: plan.operations.filter((operation) => operation.approval === 'pending').length,
-    approved: plan.operations.filter((operation) => operation.approval === 'approved').length,
-    rejected: plan.operations.filter((operation) => operation.approval === 'rejected').length,
-    total: plan.operations.length,
-  };
+export function canResumeBypassPlan(plan: AgentPlan): boolean {
+  return plan.executionMode === 'bypass' && canExecute(plan);
+}
+
+export function canStartPlanReview(plan: AgentPlan): boolean {
+  return plan.status === 'awaiting_approval' && plan.operations.length > 0;
 }
 
 export function executionProgress(plan: AgentPlan) {
@@ -130,24 +124,68 @@ export function executionLabel(planStatus: string, operationStatus: string): str
   return statusLabel(EXECUTION_LABELS, operationStatus);
 }
 
+type StepPresentationState = 'review' | 'current' | 'waiting' | 'ready' | 'completed' | 'failed' | 'attention' | 'stopped';
+
+const STEP_STATE_LABELS: Record<StepPresentationState, string> = {
+  review: '待审阅',
+  current: '正在执行',
+  waiting: '等待中',
+  ready: '下一步',
+  completed: '已完成',
+  failed: '执行失败',
+  attention: '需要核查',
+  stopped: '未执行',
+};
+
+function stepPresentationState(plan: AgentPlan, operation: AgentOperation, index: number, mode: ExecutionMode): StepPresentationState {
+  if (!['pending', 'running', 'succeeded', 'failed', 'partial', 'skipped', 'cancelled'].includes(operation.executionStatus)) return 'attention';
+  if (operation.executionStatus === 'succeeded') return 'completed';
+  if (operation.executionStatus === 'failed') return 'failed';
+  if (operation.executionStatus === 'partial') return 'attention';
+  if (operation.executionStatus === 'running') return 'current';
+  if (operation.executionStatus === 'skipped' || operation.executionStatus === 'cancelled') return 'stopped';
+  if (plan.status === 'awaiting_approval') return 'review';
+  if (['failed', 'invalidated', 'needs_attention', 'cancelled', 'rejected'].includes(plan.status)) return 'stopped';
+  if (plan.status === 'approved' && mode === 'manual') {
+    const next = plan.operations.findIndex((item) => item.executionStatus === 'pending');
+    return index === next ? 'ready' : 'waiting';
+  }
+  return 'waiting';
+}
+
+function effectiveExecutionMode(plan: AgentPlan | null, currentMode: ExecutionMode): ExecutionMode {
+  if (!plan || !('reviewedAt' in plan) || !plan.reviewedAt) return currentMode;
+  if (!('executionMode' in plan)) return 'manual';
+  return plan.executionMode === 'manual' || plan.executionMode === 'bypass' ? plan.executionMode : 'manual';
+}
+
+function stepLabel(operation: AgentOperation): string {
+  return operationPresentationForOperation(operation).title;
+}
+
+// 根目录和默认工作目录不重复占用主界面。
+function shellScopeSummary(operation: AgentOperation): string {
+  const scope = operation.sourcePath;
+  const workingDirectory = operation.workingDir;
+  if (!scope && (!workingDirectory || workingDirectory === '.')) return '';
+  const parts = [`范围：${scope || '管理根目录'}`];
+  if (workingDirectory && workingDirectory !== '.') {
+    parts.push(`工作目录：${[scope, workingDirectory].filter(Boolean).join('/')}`);
+  }
+  return parts.join(' · ');
+}
+
 // 仅状态失效或结果不确定时提示人工核查。
 export function shouldShowSafetyNotice(plan: AgentPlan): boolean {
   return plan.status === 'invalidated' || plan.status === 'needs_attention'
     || plan.operations.some((operation) => operation.executionStatus === 'partial');
 }
 
-export function operationApprovalLabel(planStatus: string, operation: AgentOperation): string {
-  if (planStatus === 'cancelled' && operation.approval === 'invalidated' && operation.executionStatus === 'cancelled') {
-    return '已撤销';
-  }
-  return statusLabel(APPROVAL_LABELS, operation.approval);
-}
-
 export function requiresTextCandidatePreview(action: string): boolean {
   return action === 'create_file' || action === 'overwrite_file';
 }
 
-// 普通对话方案可在审批前编辑；照片归档路径由服务端生成。
+// 对话方案可在确认前编辑；照片归档路径由服务端生成。
 export function canEditPlan(plan: AgentPlan, editable: boolean): boolean {
   return editable
     && ['conversation', 'model-analysis', 'user-edit'].includes(plan.proposalSource)
@@ -156,7 +194,7 @@ export function canEditPlan(plan: AgentPlan, editable: boolean): boolean {
     && plan.operations.length <= 20
     && plan.operations.every((operation) => operation.action !== 'archive_photo')
     && plan.operations.every((operation) => Object.hasOwn(EDIT_ACTION_LABELS, operation.action)
-      && operation.approval === 'pending' && operation.executionStatus === 'pending');
+      && operation.executionStatus === 'pending');
 }
 
 export function createPlanEditDrafts(plan: AgentPlan): AgentPlanEditOperation[] {
@@ -184,37 +222,7 @@ export function cancelPlanEdit(plan: AgentPlan): AgentPlanEditOperation[] {
 }
 
 export function canRejectPlan(plan: AgentPlan): boolean {
-  return plan.status === 'awaiting_approval'
-    && plan.operations.some((operation) => operation.approval === 'pending'
-      && operation.executionStatus === 'pending');
-}
-
-function isApprovableOperation(operation: AgentPlan['operations'][number]): boolean {
-  if (!APPROVABLE_ACTIONS.has(operation.action)) return false;
-  if (operation.action === 'run_shell') {
-    return typeof operation.command === 'string' && operation.command.trim().length > 0
-      && operation.command.length <= 64 * 1024 && !operation.command.includes('\0')
-      && typeof operation.workingDir === 'string';
-  }
-  if (operation.action === 'extract_archive' && (!operation.plannedPaths || operation.plannedPaths.length === 0)) return false;
-  if (operation.action === 'set_permissions') {
-    return Number.isInteger(operation.beforeMode) && operation.beforeMode! >= 0 && operation.beforeMode! <= 511
-      && Number.isInteger(operation.mode) && operation.mode! >= 0 && operation.mode! <= 511;
-  }
-  if (operation.action === 'set_owner') {
-    return [operation.beforeOwnerUid, operation.ownerUid, operation.beforeGroupGid, operation.groupGid]
-      .every((value) => Number.isInteger(value) && value! >= 0 && value! <= 0xffff_ffff);
-  }
-  return true;
-}
-
-// 未知动作不能进入逐项审核。
-export function canDecideOperation(planStatus: string, operation: AgentPlan['operations'][number]): boolean {
-  return planStatus === 'awaiting_approval'
-    && operation.action !== 'run_shell'
-    && isApprovableOperation(operation)
-    && operation.approval === 'pending'
-    && operation.executionStatus === 'pending';
+  return plan.status === 'awaiting_approval' && plan.operations.length > 0;
 }
 
 // 根据动作呈现对应的路径含义；新建目录的目标是完整路径。
@@ -264,11 +272,12 @@ export function operationPresentation(
   }
 
   if (action === 'move_file') {
+    const isRename = isSameDirectoryPath(sourcePath, targetPath);
     return {
-      title: '移动文件',
-      sourceLabel: '从',
+      title: isRename ? '重命名' : '移动文件',
+      sourceLabel: isRename ? '原路径' : '从',
       sourceDisplayPath: sourcePath || '—',
-      targetLabel: '移动到',
+      targetLabel: isRename ? '新路径' : '移动到',
       targetDisplayPath: targetPath || '—',
     };
   }
@@ -383,7 +392,7 @@ export function operationPresentation(
   }
 
   return {
-    title: `未知操作：${action}`,
+    title: `其他工具操作 · ${action}`,
     sourceLabel: '原路径',
     sourceDisplayPath: sourcePath || '—',
     targetLabel: '新路径',
@@ -395,7 +404,7 @@ export function operationPresentation(
 export function operationPresentationForOperation(operation: AgentPlan['operations'][number]) {
   if (operation.action === 'run_shell') {
     return {
-      title: '隔离运行 Shell',
+      title: 'Bash',
       sourceLabel: '管理范围',
       sourceDisplayPath: operation.sourcePath || '管理根目录',
       targetLabel: '工作目录',
@@ -590,12 +599,15 @@ export function AgentPlanReview({
   conversationBusy,
   actionError,
   notice,
+  executionMode,
+  executionModeReady,
+  executionModeError,
   onRetry,
   onRefresh,
-  onDecision,
-  onShellChangeDecision,
   onRejectPlan,
-  onExecute,
+  onStartPlan,
+  onResumePlan,
+  onRunStep,
   onStop,
   stopBusy,
   editable,
@@ -607,16 +619,23 @@ export function AgentPlanReview({
   const [previewedTextCandidateKey, setPreviewedTextCandidateKey] = useState('');
   const [editOperations, setEditOperations] = useState<AgentPlanEditOperation[]>([]);
   const [editError, setEditError] = useState('');
+  const [permanentDeleteConfirmationKey, setPermanentDeleteConfirmationKey] = useState('');
   const editableNow = plan ? canEditPlan(plan, editable) : false;
+  const planExecutionMode = effectiveExecutionMode(plan, executionMode);
+  const currentPlanKey = plan ? `${plan.planId}:${plan.planVersion}` : '';
+  const permanentDeleteConfirmed = currentPlanKey !== '' && permanentDeleteConfirmationKey === currentPlanKey;
   const markTextCandidatePreviewed = useCallback((key: string) => setPreviewedTextCandidateKey(key), []);
-  const shellPlan = Boolean(plan?.operations.some((operation) => operation.action === 'run_shell'));
   const photoArchivePlan = Boolean(plan?.operations.some((operation) => operation.action === 'archive_photo'));
   const permanentDeleteCount = plan?.operations.filter((operation) => operation.action === 'permanent_delete').length ?? 0;
-  const executeButtonLabel = permanentDeleteCount === plan?.operations.length
-    ? `确认永久删除 ${permanentDeleteCount} 项`
-    : permanentDeleteCount > 0
-      ? `确认执行 ${plan?.operations.length ?? 0} 项（永久删除 ${permanentDeleteCount} 项）`
-      : shellPlan ? '执行已批准的 Shell 命令' : photoArchivePlan ? '执行照片归档' : `执行 ${plan?.operations.length ?? 0} 项`;
+  const mustReviewTextCandidates = Boolean(plan && plan.operations.some((operation) => requiresTextCandidatePreview(operation.action)
+    && previewedTextCandidateKey !== `${plan.planId}:${plan.planVersion}:${operation.id}`));
+  const canStartPlan = Boolean(plan && canStartPlanReview(plan)
+    && executionModeReady
+    && !actionBusy && !conversationBusy && !editing && !editingTextOperationId && !mustReviewTextCandidates
+    && (permanentDeleteCount === 0 || permanentDeleteConfirmed));
+  const nextStep = plan?.status === 'approved' && planExecutionMode === 'manual'
+    ? plan.operations.find((operation) => operation.executionStatus === 'pending')
+    : undefined;
 
   function beginEditing() {
     if (!plan || !editableNow) return;
@@ -649,10 +668,10 @@ export function AgentPlanReview({
   }
 
   return (
-    <section className="agent-proposal-section" aria-labelledby="agent-proposal-title">
+    <section className="agent-proposal-section agent-plan-workflow" aria-labelledby="agent-proposal-title">
       <div className="agent-section-heading agent-proposal-heading">
-        <div><h2 id="agent-proposal-title">{photoArchivePlan ? '照片归档清单' : '操作清单'}</h2><p>{photoArchivePlan ? '按拍摄日期逐项核对原路径、归档位置和执行结果。' : '逐项查看路径、审批状态与执行结果。'}</p></div>
-        {plan && (
+        <div><h2 id="agent-proposal-title">执行计划</h2><p>{plan ? `${plan.operations.length} 个步骤${plan.status === 'awaiting_approval' ? ` · 审阅后${planExecutionMode === 'bypass' ? '自动执行' : '逐步执行'}` : ''}` : '审阅计划后开始执行。'}</p></div>
+        {plan && plan.operations.length === 0 && (
           <span className={`agent-plan-status ${planStatusTone(plan.status)}`}>
             <Clock3 size={14} aria-hidden="true" />{statusLabel(PLAN_STATUS_LABELS, plan.status)}
           </span>
@@ -668,25 +687,19 @@ export function AgentPlanReview({
         <div className="agent-state"><strong>方案尚未生成</strong></div>
       ) : plan ? (
         <>
-          {(() => {
-            const counts = approvalCounts(plan);
-            return (
-              <div className="agent-plan-meta">
-                <span>{shellPlan ? '1 项隔离 Shell 命令' : `${counts.total} 项操作`}</span>
-                {!shellPlan && <span className="agent-approval-count" role="status">待审核 {counts.pending} · 已批准 {counts.approved}</span>}
-                {editableNow && !editing && (
-                  <button className="agent-text-button" type="button" onClick={beginEditing} disabled={Boolean(actionBusy || conversationBusy)}>
-                    <Pencil size={14} aria-hidden="true" />修改清单
-                  </button>
-                )}
-                {!editing && (
-                  <button className="agent-text-button" type="button" onClick={onRefresh} disabled={loading || Boolean(actionBusy || editingTextOperationId)}>
-                    <RefreshCw size={14} aria-hidden="true" />刷新
-                  </button>
-                )}
-              </div>
-            );
-          })()}
+          <div className="agent-plan-meta">
+            {photoArchivePlan && <span>按拍摄日期整理照片</span>}
+            {editableNow && !editing && (
+              <button className="agent-text-button" type="button" onClick={beginEditing} disabled={Boolean(actionBusy || conversationBusy)}>
+                <Pencil size={14} aria-hidden="true" />修改计划
+              </button>
+            )}
+            {!editing && (
+              <button className="agent-text-button" type="button" onClick={onRefresh} disabled={loading || Boolean(actionBusy || editingTextOperationId)}>
+                <RefreshCw size={14} aria-hidden="true" />刷新
+              </button>
+            )}
+          </div>
 
           {shouldShowSafetyNotice(plan) && (
             <div className="agent-safety-notice" role="status"><AlertTriangle size={16} aria-hidden="true" /><span>文件状态已变化或执行结果需要核查，请刷新并检查文件。</span></div>
@@ -763,103 +776,113 @@ export function AgentPlanReview({
           ) : plan.operations.length === 0 ? (
             <div className="agent-state"><strong>没有待处理操作</strong></div>
           ) : (
-            <div className="agent-operation-list">
-              {plan.operations.map((operation) => {
+            <ol className="agent-step-list" aria-label="执行步骤">
+              {plan.operations.map((operation, index) => {
                 const presentation = operationPresentationForOperation(operation);
-                const canDecide = canDecideOperation(plan.status, operation);
                 const candidatePreviewKey = `${plan.planId}:${plan.planVersion}:${operation.id}`;
                 const mustPreviewCandidate = requiresTextCandidatePreview(operation.action);
                 const candidateWasPreviewed = previewedTextCandidateKey === candidatePreviewKey;
-                const unknownAction = !isApprovableOperation(operation);
+                const state = stepPresentationState(plan, operation, index, planExecutionMode);
+                const isNextManualStep = nextStep?.id === operation.id;
                 return (
-                  <article className={`agent-operation-card${operation.action === 'permanent_delete' ? ' agent-operation-card-danger' : ''}`} key={operation.action === 'edit_text' ? `edit_text:${operation.sourcePath}` : operation.id}>
-                    <div className="agent-operation-content">
-                      <div className="agent-operation-heading">
-                        <h3>{presentation.title}</h3>
-                        <span className="agent-operation-state">{operationApprovalLabel(plan.status, operation)}</span>
-                        {plan.status === 'executing' && <span className="agent-operation-execution">{executionLabel(plan.status, operation.executionStatus)}</span>}
-                      </div>
-                      <div className="agent-operation-paths">
-                        {'metadataChanges' in presentation && Array.isArray(presentation.metadataChanges) ? (
-                          <div className="agent-operation-metadata">
-                            <div className="agent-operation-metadata-file"><span>文件</span><code>{presentation.metadataPath}</code></div>
-                            {presentation.metadataChanges.map((change) => (
-                              <div className="agent-operation-metadata-change" key={change.label}>
-                                <span>{change.label}</span>
-                                {change.unchanged
-                                  ? <code>{change.before}（不变）</code>
-                                  : <><code>{change.before}</code><ArrowRight size={14} aria-hidden="true" /><code>{change.after}</code></>}
-                              </div>
-                            ))}
+                  <li className={`agent-step-card is-${state}${operation.action === 'permanent_delete' ? ' is-danger' : ''}`} key={operation.action === 'edit_text' ? `edit_text:${operation.sourcePath}` : operation.action === 'run_shell' ? `${plan.planId}:${plan.planVersion}:${operation.id}` : operation.id}>
+                    <div className="agent-step-row">
+                      <span className="agent-step-index" aria-hidden="true">{state === 'completed' ? <Check size={15} /> : index + 1}</span>
+                      <div className="agent-step-main">
+                        {operation.action !== 'run_shell' && <div className="agent-step-heading">
+                          <h3>{stepLabel(operation)}</h3>
+                          <span className={`agent-step-status is-${state}`}>{STEP_STATE_LABELS[state]}</span>
+                        </div>}
+                        {operation.action !== 'run_shell' && <p className="agent-step-purpose">{operation.reason || '按计划执行此步骤。'}</p>}
+                        {operation.action === 'permanent_delete' && <p className="agent-step-warning">永久删除后无法恢复。</p>}
+                        {mustPreviewCandidate && !candidateWasPreviewed && <p className="agent-step-warning">开始前请展开详情并核对文件候选。</p>}
+                        {operation.action !== 'run_shell' && operation.resultMessage && <p className="agent-step-result" role={operation.executionStatus === 'failed' || operation.executionStatus === 'partial' ? 'alert' : 'status'}>{operation.resultMessage}</p>}
+                        {isNextManualStep && (
+                          <div className="agent-step-next-action">
+                            <button className="agent-primary-button" type="button" onClick={() => onRunStep(operation.id)} disabled={Boolean(actionBusy || conversationBusy)}>
+                              {actionBusy === operation.id ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
+                              {actionBusy === operation.id ? '正在执行…' : operation.action === 'permanent_delete' ? '确认并永久删除这一步' : '执行这一步'}
+                            </button>
+                            <span>只执行当前步骤，后续步骤仍由你决定。</span>
                           </div>
-                        ) : 'textFilePath' in presentation ? (
-                          <div className="agent-operation-metadata-file"><span>{'textFileLabel' in presentation ? presentation.textFileLabel : '文件正文（全文）'}</span><code>{presentation.textFilePath}</code></div>
-                        ) : (
-                          <>
-                            <div><span>{presentation.sourceLabel}</span><code>{presentation.sourceDisplayPath}</code></div>
-                            <ArrowRight size={15} aria-hidden="true" />
-                            <div><span>{presentation.targetLabel}</span><code>{presentation.targetDisplayPath}</code></div>
-                          </>
                         )}
                       </div>
-                      {operation.reason && <p className="agent-operation-reason">{operation.reason}</p>}
-                      {operation.action === 'run_shell' && <pre className="agent-shell-command agent-shell-plan-command">{operation.command}</pre>}
-                      {operation.action === 'run_shell' && (
+                    </div>
+                    {operation.action === 'run_shell' ? (
+                      <ShellToolCall
+                        command={operation.command ?? ''}
+                        resultMessage={operation.resultMessage ?? ''}
+                        outputDiscarded={operation.outputDiscarded ?? false}
+                        exitCode={operation.exitCode}
+                        executionStatus={operation.executionStatus}
+                        scope={shellScopeSummary(operation)}
+                        showStatus={false}
+                      >
                         <ShellChangeReview
                           key={`${plan.planId}:${operation.id}`}
                           planId={plan.planId}
                           planVersion={plan.planVersion}
-                          planStatus={plan.status}
+                          executionStatus={operation.executionStatus}
                           actionBusy={actionBusy}
                           conversationBusy={conversationBusy}
-                          onApprove={onShellChangeDecision}
-                          onRefreshPlan={onRefresh}
                         />
-                      )}
-                      {operation.action === 'extract_archive' && operation.plannedPaths && <ArchivePlannedPaths paths={operation.plannedPaths} />}
-                      {operation.action === 'permanent_delete' && <p className="agent-safety-inline">永久删除后无法恢复。请核对路径，批准后还需再次确认执行。</p>}
-                      {operation.action === 'create_file' && <p className="agent-safety-inline">仅按已确认的任务与路径生成候选，不读取原文；批准后仍需单独确认执行。</p>}
-                      {operation.action === 'overwrite_file' && <p className="agent-safety-inline">确认分析时已读取完整原文并发送给当前模型。候选会完整替换原文件，执行后原内容不可恢复；批准后仍需单独确认执行。</p>}
-                      {mustPreviewCandidate && !candidateWasPreviewed && <p className="agent-safety-inline">请先打开并核对文本候选，之后才能批准。</p>}
-                      {operation.evidence && (
-                        <details className="agent-operation-evidence">
-                          <summary>查看依据</summary>
-                          <p>{operation.evidence}</p>
-                        </details>
-                      )}
-                      {(operation.action === 'edit_text' || operation.action === 'create_file' || operation.action === 'overwrite_file') && (
-                        <OperationTextPreview
-                          planId={plan.planId}
-                          planVersion={plan.planVersion}
-                          operation={operation}
-                          editable={plan.status === 'awaiting_approval' && operation.approval === 'pending' && operation.executionStatus === 'pending'}
-                          disabled={Boolean(actionBusy || conversationBusy)}
-                          onSave={onEditTextContent}
-                          onEditingChange={(isEditing) => setEditingTextOperationId((current) => isEditing ? operation.id : current === operation.id ? '' : current)}
-                          onPreviewReady={markTextCandidatePreviewed}
-                        />
-                      )}
-                      {(operation.executionStatus !== 'pending' || operation.resultMessage) && (
-                        <div className="agent-operation-result">
-                          <span>{executionLabel(plan.status, operation.executionStatus)}</span>
-                          {operation.resultMessage && <p>{operation.resultMessage}</p>}
+                      </ShellToolCall>
+                    ) : (
+                    <details className="agent-step-details">
+                      <summary>查看操作详情</summary>
+                      <div className="agent-step-detail-body">
+                        {operation.reason && <p className="agent-step-detail-reason">{operation.reason}</p>}
+                        <div className="agent-operation-paths">
+                          {'metadataChanges' in presentation && Array.isArray(presentation.metadataChanges) ? (
+                            <div className="agent-operation-metadata">
+                              <div className="agent-operation-metadata-file"><span>文件</span><code>{presentation.metadataPath}</code></div>
+                              {presentation.metadataChanges.map((change) => (
+                                <div className="agent-operation-metadata-change" key={change.label}>
+                                  <span>{change.label}</span>
+                                  {change.unchanged
+                                    ? <code>{change.before}（不变）</code>
+                                    : <><code>{change.before}</code><ArrowRight size={14} aria-hidden="true" /><code>{change.after}</code></>}
+                                </div>
+                              ))}
+                            </div>
+                          ) : 'textFilePath' in presentation ? (
+                            <div className="agent-operation-metadata-file"><span>{'textFileLabel' in presentation ? presentation.textFileLabel : '文件正文（全文）'}</span><code>{presentation.textFilePath}</code></div>
+                          ) : (
+                            <>
+                              <div><span>{presentation.sourceLabel}</span><code>{presentation.sourceDisplayPath}</code></div>
+                              <ArrowRight size={15} aria-hidden="true" />
+                              <div><span>{presentation.targetLabel}</span><code>{presentation.targetDisplayPath}</code></div>
+                            </>
+                          )}
                         </div>
-                      )}
-                      {unknownAction && <p className="agent-safety-inline">此操作暂不支持。</p>}
-                      <div className="agent-operation-actions">
-                        {canDecide ? (
-                          <button className="agent-primary-button" type="button" onClick={() => onDecision(operation.id, 'approve')} disabled={Boolean(actionBusy || conversationBusy || editingTextOperationId === operation.id || mustPreviewCandidate && !candidateWasPreviewed)}>
-                            {actionBusy === operation.id ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}批准
-                          </button>
-                        ) : operation.action !== 'run_shell' && plan.status !== 'completed' && operation.approval === 'pending' ? (
-                          <span className="agent-operation-lock">此项暂不可审批</span>
-                        ) : null}
+                        {operation.action === 'extract_archive' && operation.plannedPaths && <ArchivePlannedPaths paths={operation.plannedPaths} />}
+                        {operation.action === 'create_file' && <p className="agent-safety-inline">只按已确认的任务和路径生成候选，不读取原文件正文。</p>}
+                        {operation.action === 'overwrite_file' && <p className="agent-safety-inline">已读取完整原文并发送给当前模型；执行后会完整替换原文件，旧内容不可恢复。</p>}
+                        {operation.evidence && (
+                          <details className="agent-operation-evidence">
+                            <summary>查看依据</summary>
+                            <p>{operation.evidence}</p>
+                          </details>
+                        )}
+                        {(operation.action === 'edit_text' || operation.action === 'create_file' || operation.action === 'overwrite_file') && (
+                          <OperationTextPreview
+                            planId={plan.planId}
+                            planVersion={plan.planVersion}
+                            operation={operation}
+                            editable={plan.status === 'awaiting_approval' && operation.executionStatus === 'pending'}
+                            disabled={Boolean(actionBusy || conversationBusy)}
+                            onSave={onEditTextContent}
+                            onEditingChange={(isEditing) => setEditingTextOperationId((current) => isEditing ? operation.id : current === operation.id ? '' : current)}
+                            onPreviewReady={markTextCandidatePreviewed}
+                          />
+                        )}
                       </div>
-                    </div>
-                  </article>
+                    </details>
+                    )}
+                  </li>
                 );
               })}
-            </div>
+            </ol>
           )}
 
           {canRejectPlan(plan) && (
@@ -871,12 +894,33 @@ export function AgentPlanReview({
             </footer>
           )}
 
-          {canExecute(plan) && (
-            <footer className="agent-execution-panel">
-              <p>{permanentDeleteCount > 0 ? `${permanentDeleteCount} 项永久删除后无法恢复。` : ''}{shellPlan ? '已批准全部文件变化，确认后运行 Shell 命令。' : `已批准全部 ${plan.operations.length} 项${photoArchivePlan ? '照片归档' : '操作'}，确认后立即执行。`}</p>
-              <button className="agent-primary-button" type="button" onClick={onExecute} disabled={Boolean(actionBusy)}>
+          {plan.status === 'awaiting_approval' && plan.operations.length > 0 && (
+            <footer className="agent-plan-start-panel">
+              {permanentDeleteCount > 0 && (
+                <label className="agent-plan-danger-confirm">
+                  <input type="checkbox" checked={permanentDeleteConfirmed} onChange={(event) => setPermanentDeleteConfirmationKey(event.currentTarget.checked ? currentPlanKey : '')} />
+                  <span>我已确认 {permanentDeleteCount} 项永久删除无法恢复</span>
+                </label>
+              )}
+              {mustReviewTextCandidates && <p className="agent-plan-start-hint">请先打开并核对所有文件候选，再确认计划。</p>}
+              {!executionModeReady && <p className="agent-plan-start-hint" role="alert">{executionModeError || '正在读取 Agent 执行设置，暂不能开始计划。'}</p>}
+              {permanentDeleteCount > 0 && <p className="agent-plan-start-hint">执行后无法恢复已永久删除的文件。</p>}
+              {planExecutionMode === 'manual' && <p className="agent-plan-start-hint">确认计划后不会自动运行，你可逐步启动每一步。</p>}
+              <button className="agent-primary-button" type="button" onClick={() => onStartPlan(permanentDeleteCount > 0 && permanentDeleteConfirmed)} disabled={!canStartPlan}>
+                {actionBusy === 'execute' || actionBusy === 'start-plan' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
+                {planExecutionMode === 'bypass'
+                  ? permanentDeleteCount > 0 ? '确认永久删除并执行计划' : '审阅完成，开始执行'
+                  : '确认计划'}
+              </button>
+            </footer>
+          )}
+
+          {canResumeBypassPlan(plan) && (
+            <footer className="agent-plan-start-panel">
+              <p>计划已审核，尚未执行；可以继续执行。</p>
+              <button className="agent-primary-button" type="button" onClick={onResumePlan} disabled={Boolean(actionBusy || conversationBusy)}>
                 {actionBusy === 'execute' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}
-                {executeButtonLabel}
+                {actionBusy === 'execute' ? '正在执行…' : '继续执行'}
               </button>
             </footer>
           )}

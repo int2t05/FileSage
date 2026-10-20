@@ -746,7 +746,7 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
             <input ref={setFolderInputRef} className="upload-hidden-input" type="file" multiple tabIndex={-1} onChange={handleFileSelection} aria-label="选择要上传的文件夹" />
           </div>
 
-          <p className="upload-scope-note"><strong>实际上传 · 状态以服务端为准</strong><span>文件先进入暂存区；“上传完成”不代表发布完成。只有服务端返回“已确认发布”才会显示成功。</span></p>
+          <p className="upload-scope-note">服务器确认发布后，才会显示上传成功。</p>
           {selectionError && <p className="upload-selection-error" role="alert">{selectionError}</p>}
           {recoveryState === 'loading' && <p className="upload-recovery-note" role="status">正在恢复最近的服务端上传记录…</p>}
           {recoveryState === 'error' && (

@@ -742,6 +742,8 @@ func batchTransferFailureMessage(err error, move, published bool) string {
 		return "目标已发布，但持久化状态无法确认；请刷新目录核对。"
 	}
 	switch {
+	case errors.Is(err, fsroot.ErrVolumeUnavailable):
+		return "管理卷暂不可用，请确认磁盘已挂载后重试。"
 	case errors.Is(err, fsroot.ErrConflict), errors.Is(err, fs.ErrExist):
 		return "文件状态或目标目录已变化，请刷新后重试。"
 	case errors.Is(err, fs.ErrPermission):

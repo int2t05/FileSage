@@ -1,0 +1,224 @@
+.agent-shell-tool-call {
+  min-width: 0;
+  margin: 8px 0 0 36px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.agent-shell-tool-call-main {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  padding: 9px 0 8px;
+}
+
+.agent-shell-tool-call-command {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 16px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.agent-shell-tool-call-command.has-status {
+  grid-template-columns: 16px auto minmax(0, 1fr) auto;
+}
+
+.agent-shell-tool-call-command > svg {
+  color: var(--color-text-muted);
+}
+
+.agent-shell-tool-call-command > strong {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.agent-shell-tool-call-command > code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-shell-tool-call-status {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.agent-shell-tool-call-status.is-succeeded { color: var(--color-success); }
+.agent-shell-tool-call-status.is-failed,
+.agent-shell-tool-call-status.is-partial { color: var(--color-warning); }
+
+.agent-shell-tool-call-result {
+  display: flex;
+  min-width: 0;
+  overflow: hidden;
+  margin: 0 0 0 23px;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--color-text-muted);
+}
+
+.agent-shell-tool-call-result.is-warning .agent-shell-tool-call-result-text {
+  color: var(--color-warning);
+}
+
+.agent-shell-tool-call-result-label {
+  flex: none;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.agent-shell-tool-call-result-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-shell-tool-call-details {
+  border-top: 1px solid var(--color-line);
+}
+
+.agent-shell-tool-call-details > summary {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-shell-tool-call-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-shell-tool-call-details > summary:focus-visible {
+  border-radius: var(--radius-sm);
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.agent-shell-tool-call-chevron {
+  flex: none;
+  transition: transform .15s ease;
+}
+
+.agent-shell-tool-call-details[open] .agent-shell-tool-call-chevron {
+  transform: rotate(180deg);
+}
+
+.agent-shell-tool-call-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 0 10px;
+}
+
+.agent-shell-tool-call-scope {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.agent-shell-tool-call-scope > span,
+.agent-shell-tool-call-block > strong,
+.agent-shell-tool-call-result-heading > strong,
+.agent-shell-tool-call-output > small {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.agent-shell-tool-call-scope > code {
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+.agent-shell-tool-call-block {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  margin: 0;
+}
+
+.agent-shell-tool-call-block > pre,
+.agent-shell-tool-call-output > pre {
+  max-height: 180px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px 9px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.agent-shell-tool-call-result-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.agent-shell-tool-call-result-heading > span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.agent-shell-tool-call-result-heading > .is-success { color: var(--color-success); }
+.agent-shell-tool-call-result-heading > .is-error { color: var(--color-warning); }
+
+.agent-shell-tool-call-block > p {
+  margin: 0;
+  color: var(--color-text);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.agent-shell-tool-call-output {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.agent-shell-tool-call-output > pre.is-error {
+  color: var(--color-warning);
+}
+
+@media (max-width: 520px) {
+  .agent-shell-tool-call {
+    margin-left: 0;
+    padding: 0 9px;
+  }
+
+  .agent-shell-tool-call-command {
+    grid-template-columns: 16px auto minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .agent-shell-tool-call-status {
+    grid-column: 2 / -1;
+    margin-top: -2px;
+  }
+
+  .agent-shell-tool-call-result {
+    margin-left: 22px;
+  }
+}

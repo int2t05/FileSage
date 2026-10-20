@@ -23,6 +23,8 @@ const (
 	maxModelRequestBytes  = 512 << 10
 	maxModelResponseBytes = 128 << 10
 	maxModelContentBytes  = 16 << 10
+	// modelRequestTimeout 为较慢的模型 JSON 生成留出时间。
+	modelRequestTimeout = 90 * time.Second
 )
 
 var (
@@ -81,7 +83,7 @@ func newChatClient(cfg config.AgentModelConfig) *chatClient {
 		endpoint: endpoint,
 		apiKey:   cfg.APIKey,
 		http: &http.Client{
-			Timeout:       30 * time.Second,
+			Timeout:       modelRequestTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}

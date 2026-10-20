@@ -8,11 +8,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -195,6 +198,9 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	}
 	root, err := Open("/")
 	if err != nil {
+		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+			t.Skipf("host denies inspection of an unrelated system mount: %v", err)
+		}
 		t.Fatal(err)
 	}
 	defer root.Close()
@@ -229,6 +235,54 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	}
 	if data, err := os.ReadFile(destinationPath); err != nil || string(data) != "cross mount contents" {
 		t.Fatalf("cross-mount destination = (%q, %v)", data, err)
+	}
+}
+
+// TestMoveFilePreservesSourceChangedAfterCopy 验证复制发布后源文件变化时不会删除外部内容。
+func TestMoveFilePreservesSourceChangedAfterCopy(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(rootPath, "source.txt")
+	approvedContent := []byte("approved source")
+	externalContent := []byte("external update")
+	if len(approvedContent) != len(externalContent) {
+		t.Fatal("test contents must have the same size")
+	}
+	if err := os.WriteFile(sourcePath, approvedContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	entry, err := root.LstatEntry("source.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyResult, err := root.CopyFileNoReplace(context.Background(), "source.txt", "target/moved.txt", entry.Fingerprint())
+	if err != nil || !copyResult.Published {
+		t.Fatalf("copy result = (%#v, %v)", copyResult, err)
+	}
+	if err := os.WriteFile(sourcePath, externalContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(sourcePath, entry.ModifiedAt, entry.ModifiedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := platformRemoveFileIfUnchanged(root, "source.txt", entry.Fingerprint())
+	if removed || !errors.Is(err, ErrConflict) {
+		t.Fatalf("remove changed source = (%t, %v), want conflict without removal", removed, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != string(externalContent) {
+		t.Fatalf("external source content = (%q, %v)", content, err)
+	}
+	if content, err := os.ReadFile(filepath.Join(rootPath, "target", "moved.txt")); err != nil || string(content) != string(approvedContent) {
+		t.Fatalf("copied target content = (%q, %v)", content, err)
 	}
 }
 
@@ -267,6 +321,105 @@ func TestWriteAtomicIfUnchangedDetectsRestoredModTime(t *testing.T) {
 	}
 	if string(content) != "second" {
 		t.Fatalf("external content changed to %q", content)
+	}
+}
+
+func TestReplaceAtomicIfUnchangedPreservesReplacementAtPublishBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		mutate     func(string, string, time.Time) error
+		wantDigest []byte
+	}{
+		{
+			name: "path replacement",
+			mutate: func(rootPath, target string, _ time.Time) error {
+				replacement := filepath.Join(rootPath, "replacement.txt")
+				if err := os.WriteFile(replacement, []byte("external update"), 0o640); err != nil {
+					return err
+				}
+				return os.Rename(replacement, target)
+			},
+			wantDigest: []byte("external update"),
+		},
+		{
+			name: "same-size in-place update with restored mtime",
+			mutate: func(_, target string, modified time.Time) error {
+				if err := os.WriteFile(target, []byte("edited!"), 0o640); err != nil {
+					return err
+				}
+				return os.Chtimes(target, modified, modified)
+			},
+			wantDigest: []byte("edited!"),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootPath := t.TempDir()
+			target := filepath.Join(rootPath, "note.txt")
+			const original = "initial"
+			const candidate = "approved"
+			if err := os.WriteFile(target, []byte(original), 0o640); err != nil {
+				t.Fatal(err)
+			}
+			root, err := Open(rootPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			entry, err := root.LstatEntry("note.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			modified := entry.ModifiedAt
+			tempRel := ".filesage-write-test"
+			if err := os.WriteFile(filepath.Join(rootPath, tempRel), []byte(candidate), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.mutate(rootPath, target, modified); err != nil {
+				t.Fatal(err)
+			}
+
+			err = platformReplaceAtomicIfUnchanged(root, "note.txt", tempRel, entry.Fingerprint(), sha256.Sum256([]byte(original)), sha256.Sum256([]byte(candidate)), int64(len(candidate)), 0o600)
+			if !errors.Is(err, ErrConflict) {
+				t.Fatalf("publish error = %v, want ErrConflict", err)
+			}
+			if got, err := os.ReadFile(target); err != nil || string(got) != string(test.wantDigest) {
+				t.Fatalf("external file = (%q, %v), want %q", got, err, test.wantDigest)
+			}
+			if got, err := os.ReadFile(filepath.Join(rootPath, tempRel)); err != nil || string(got) != candidate {
+				t.Fatalf("candidate after rollback = (%q, %v), want %q", got, err, candidate)
+			}
+		})
+	}
+}
+
+func TestReplaceAtomicIfUnchangedPublishesExpectedVersion(t *testing.T) {
+	rootPath := t.TempDir()
+	target := filepath.Join(rootPath, "note.txt")
+	const original = "initial"
+	const candidate = "approved"
+	if err := os.WriteFile(target, []byte(original), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootPath, ".filesage-write-test"), []byte(candidate), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	entry, err := root.LstatEntry("note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := platformReplaceAtomicIfUnchanged(root, "note.txt", ".filesage-write-test", entry.Fingerprint(), sha256.Sum256([]byte(original)), sha256.Sum256([]byte(candidate)), int64(len(candidate)), 0o600); err != nil {
+		t.Fatalf("publish expected version: %v", err)
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != candidate {
+		t.Fatalf("published file = (%q, %v), want %q", got, err, candidate)
+	}
+	if _, err := os.Lstat(filepath.Join(rootPath, ".filesage-write-test")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("replaced source remains at staging path: %v", err)
 	}
 }
 
@@ -336,4 +489,62 @@ func TestWriteAtomicFromRejectsStaleVersionAndWrongSize(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Name() != "note.txt" {
 		t.Fatalf("failed replacement left temporary files: (%v, %v)", entries, err)
 	}
+}
+
+func TestWriteAtomicFromRejectsExternalChangeDuringStreaming(t *testing.T) {
+	rootPath := t.TempDir()
+	target := filepath.Join(rootPath, "note.txt")
+	if err := os.WriteFile(target, []byte("before"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	entry, err := root.LstatEntry("note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := &externalChangeReader{
+		reader: strings.NewReader("approved candidate"),
+		change: func() error {
+			if err := os.WriteFile(target, []byte("update"), 0o640); err != nil {
+				return err
+			}
+			if entry.Fingerprint().ChangeTimeAvailable {
+				return os.Chtimes(target, entry.ModifiedAt, entry.ModifiedAt)
+			}
+			return nil
+		},
+	}
+	if _, err := root.WriteAtomicFrom("note.txt", entry.Fingerprint(), reader, int64(len("approved candidate")), 0o600); !errors.Is(err, ErrConflict) {
+		t.Fatalf("write during external change error = %v, want conflict", err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "update" {
+		t.Fatalf("external content changed to (%q, %v)", data, err)
+	}
+	entries, err := os.ReadDir(rootPath)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "note.txt" {
+		t.Fatalf("external conflict left temporary files: (%v, %v)", entries, err)
+	}
+}
+
+// 外部进程在候选写入期间修改原文件，模拟进程内锁无法协调的变化。
+type externalChangeReader struct {
+	reader io.Reader
+	change func() error
+	done   bool
+}
+
+func (r *externalChangeReader) Read(buffer []byte) (int, error) {
+	n, err := r.reader.Read(buffer)
+	if !r.done {
+		r.done = true
+		if changeErr := r.change(); changeErr != nil {
+			return n, changeErr
+		}
+	}
+	return n, err
 }

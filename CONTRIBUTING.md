@@ -21,6 +21,8 @@ npm ci
 npm test
 npm run typecheck
 npm run build
+npx playwright install chromium
+npm run e2e
 ```
 
 ## Pull Request

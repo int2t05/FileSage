@@ -22,6 +22,8 @@ export interface AgentOperation {
   resultMessage?: string;
   command?: string;
   workingDir?: string;
+  exitCode?: number;
+  outputDiscarded?: boolean;
 }
 
 export interface AgentOperationPreview {
@@ -77,11 +79,15 @@ export interface AgentPlanEditOperation {
   groupGid?: number;
 }
 
+export type AgentExecutionMode = 'bypass' | 'manual';
+
 export interface AgentPlan {
   taskId: string;
   planId: string;
   planVersion: number;
   status: string;
+  executionMode?: AgentExecutionMode;
+  reviewedAt?: string;
   stopRequested: boolean;
   proposalSource: string;
   operations: AgentOperation[];
@@ -180,6 +186,8 @@ function parseOperation(value: unknown): AgentOperation | null {
     || beforeGroupGid !== undefined || groupGid !== undefined || requestedGroupGid !== undefined;
   const command = value.command;
   const workingDir = value.workingDir;
+  const exitCode = value.exitCode;
+  const outputDiscarded = value.outputDiscarded;
   if (hasInvalidInteger
     || (value.action === 'edit_text' && (!isSafeRootRelativePath(value.sourcePath) || value.sourcePath !== value.targetPath || !isSupportedTextPath(value.sourcePath)))
     || (value.action === 'create_file' && (!isSafeRootRelativePath(value.targetPath) || !isSupportedTextPath(value.targetPath)
@@ -187,8 +195,10 @@ function parseOperation(value: unknown): AgentOperation | null {
     || (value.action === 'overwrite_file' && (!isSafeRootRelativePath(value.sourcePath) || value.sourcePath !== value.targetPath || !isSupportedTextPath(value.sourcePath)))
     || (value.action === 'run_shell' && (!isShellCommand(command)
       || !isSafeRootRelativePath(value.sourcePath) && value.sourcePath !== ''
-      || typeof workingDir !== 'string' || !isShellWorkingDirectory(workingDir) || value.targetPath !== ''))
-    || (value.action !== 'run_shell' && (command !== undefined || workingDir !== undefined))
+      || typeof workingDir !== 'string' || !isShellWorkingDirectory(workingDir) || value.targetPath !== ''
+      || exitCode !== undefined && (typeof exitCode !== 'number' || !Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)
+      || outputDiscarded !== undefined && typeof outputDiscarded !== 'boolean'))
+    || (value.action !== 'run_shell' && (command !== undefined || workingDir !== undefined || exitCode !== undefined || outputDiscarded !== undefined || value.stdout !== undefined || value.stderr !== undefined))
     || (value.action === 'set_permissions' && (beforeMode === undefined || mode === undefined || hasOwner))
     || (value.action === 'set_owner' && (hasMode || beforeOwnerUid === undefined || ownerUid === undefined
       || beforeGroupGid === undefined || groupGid === undefined))
@@ -219,7 +229,11 @@ function parseOperation(value: unknown): AgentOperation | null {
     ...(requestedGroupGid === undefined ? {} : { requestedGroupGid }),
     ...(plannedPaths === undefined ? {} : { plannedPaths }),
     ...(typeof value.resultMessage === 'string' ? { resultMessage: value.resultMessage } : {}),
-    ...(value.action === 'run_shell' ? { command: command as string, workingDir: workingDir as string } : {}),
+    ...(value.action === 'run_shell' ? {
+      command: command as string, workingDir: workingDir as string,
+      ...(typeof exitCode === 'number' ? { exitCode } : {}),
+      ...(typeof outputDiscarded === 'boolean' ? { outputDiscarded } : {}),
+    } : {}),
   };
 }
 
@@ -229,6 +243,8 @@ function parsePlan(value: unknown): AgentPlan {
     || typeof value.planId !== 'string'
     || !Number.isSafeInteger(value.planVersion)
     || typeof value.status !== 'string'
+    || value.executionMode !== undefined && value.executionMode !== 'bypass' && value.executionMode !== 'manual'
+    || value.reviewedAt !== undefined && (typeof value.reviewedAt !== 'string' || Number.isNaN(Date.parse(value.reviewedAt)))
     || typeof value.stopRequested !== 'boolean'
     || typeof value.proposalSource !== 'string'
     || !Array.isArray(value.operations)) {
@@ -246,6 +262,8 @@ function parsePlan(value: unknown): AgentPlan {
     planId: value.planId,
     planVersion: value.planVersion as number,
     status: value.status,
+    ...(value.executionMode === 'bypass' || value.executionMode === 'manual' ? { executionMode: value.executionMode } : {}),
+    ...(typeof value.reviewedAt === 'string' ? { reviewedAt: value.reviewedAt } : {}),
     stopRequested: value.stopRequested,
     proposalSource: value.proposalSource,
     operations: operations as AgentOperation[],
@@ -463,24 +481,6 @@ export async function getAgentShellChangePreview(
   return parseAgentShellChangePreview(payload, changeId, expectedPath);
 }
 
-export async function setAgentShellChangeApproval(
-  planId: string,
-  changeId: string,
-  decision: 'approve' | 'reject',
-  expectedPlanVersion: number,
-): Promise<AgentPlan> {
-  const response = await request(
-    `/api/v1/agent/plans/${encodeURIComponent(planId)}/shell-changes/${encodeURIComponent(changeId)}/approval`,
-    {
-      method: 'POST',
-      body: JSON.stringify({ decision, expectedPlanVersion }),
-    },
-  );
-  const plan = await readPlanResponse(response, '提交 Shell 变更审批失败');
-  if (plan.planId !== planId) throw new AgentApiError('Agent 服务返回了不匹配的 Shell 方案。');
-  return plan;
-}
-
 // 保存候选正文后要求服务端返回新版本与新操作 ID。
 export async function reviseAgentOperationContent(
   planId: string,
@@ -528,17 +528,46 @@ export async function reviseAgentPlan(
   return readPlanResponse(response, '保存修改失败');
 }
 
-export async function setAgentOperationApproval(
+// 拒绝整份计划，不提供逐项批准请求。
+export async function rejectAgentPlan(planId: string, expectedPlanVersion: number): Promise<AgentPlan> {
+  const response = await request(`/api/v1/agent/plans/${encodeURIComponent(planId)}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ expectedPlanVersion }),
+  });
+  return readPlanResponse(response, '拒绝计划失败');
+}
+
+// 用户审核计划后，由服务端按固定权限模式开始执行。
+export async function startAgentPlan(
+  planId: string,
+  expectedPlanVersion: number,
+  expectedExecutionMode: AgentExecutionMode,
+  confirmPermanentDelete: boolean,
+): Promise<AgentPlan> {
+  if (expectedExecutionMode !== 'bypass' && expectedExecutionMode !== 'manual') {
+    throw new AgentApiError('Agent 执行模式无效。');
+  }
+  const response = await request(`/api/v1/agent/plans/${encodeURIComponent(planId)}/start`, {
+    method: 'POST',
+    body: JSON.stringify({ expectedPlanVersion, expectedExecutionMode, confirmPermanentDelete }),
+  });
+  return readPlanResponse(response, '确认并开始执行计划失败');
+}
+
+// 手动模式下只执行当前顺序中的下一步。
+export async function executeAgentStep(
   planId: string,
   operationId: string,
-  decision: 'approve' | 'reject',
   expectedPlanVersion: number,
 ): Promise<AgentPlan> {
-  const response = await request(`/api/v1/agent/plans/${encodeURIComponent(planId)}/operations/${encodeURIComponent(operationId)}/approval`, {
-    method: 'POST',
-    body: JSON.stringify({ decision, expectedPlanVersion }),
-  });
-  return readPlanResponse(response, '提交审批失败');
+  const response = await request(
+    `/api/v1/agent/plans/${encodeURIComponent(planId)}/steps/${encodeURIComponent(operationId)}/execute`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ expectedPlanVersion }),
+    },
+  );
+  return readPlanResponse(response, '执行当前步骤失败');
 }
 
 // 执行绑定当前方案版本，并直接返回最新结果。

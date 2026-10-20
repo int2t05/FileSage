@@ -763,6 +763,20 @@ func TestWriteEndpointsAllowSameOriginViteProxyAndOriginlessClient(t *testing.T)
 	}
 }
 
+func TestWriteEndpointsRejectCrossSiteFetchWithoutOrigin(t *testing.T) {
+	rootPath, handler := newMutationHandler(t)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/files/directories", strings.NewReader(`{"parent":"","name":"blocked"}`))
+	request.Header.Set("Sec-Fetch-Site", "cross-site")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-site request without Origin status = %d, want 403: %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, "blocked")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cross-site request changed filesystem: %v", err)
+	}
+}
+
 func TestSameOriginRejectsProtocolMismatchAndMalformedOrigins(t *testing.T) {
 	for _, test := range []struct {
 		origin string

@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -75,6 +76,25 @@ func newUploadIntegration(t *testing.T) *uploadIntegration {
 	}
 	t.Cleanup(fixture.close)
 	return fixture
+}
+
+func TestTusUploadDoesNotAllowCrossOriginPreflight(t *testing.T) {
+	fixture := newUploadIntegration(t)
+	request, err := http.NewRequest(http.MethodOptions, fixture.server.URL+"/api/v1/uploads/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Origin", "http://attacker.test")
+	request.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	request.Header.Set("Access-Control-Request-Headers", "tus-resumable,upload-length,upload-metadata")
+	response, err := fixture.server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("send tus preflight: %v", err)
+	}
+	defer response.Body.Close()
+	if origin := response.Header.Get("Access-Control-Allow-Origin"); origin != "" {
+		t.Fatalf("cross-origin tus preflight received Access-Control-Allow-Origin %q", origin)
+	}
 }
 
 func (fixture *uploadIntegration) close() {
@@ -328,6 +348,17 @@ func TestUploadPublicationFailureRetainsStageAndCanRetry(t *testing.T) {
 	result := fixture.waitStatus(t, id, publicationSucceeded)
 	if result.PublishedPath != "missing/retry.txt" {
 		t.Fatalf("retry published path = %q", result.PublishedPath)
+	}
+}
+
+func TestUploadPublicationExplainsInsufficientStorage(t *testing.T) {
+	manager := &publicationManager{}
+	want := "服务器存储空间或配额不足，文件未发布；完整暂存文件保留，清理空间或调整配额后可重试。"
+	for _, cause := range []error{syscall.ENOSPC, syscall.EDQUOT} {
+		got := manager.safePublicationError(fmt.Errorf("write candidate: %w", cause))
+		if got != want {
+			t.Errorf("safePublicationError(%v) = %q, want %q", cause, got, want)
+		}
 	}
 }
 

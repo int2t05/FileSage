@@ -34,6 +34,7 @@ const (
 	ConversationUnsupported          ConversationState = "unsupported"
 	ConversationFailed               ConversationState = "failed"
 	maxConversationMessages                            = 100
+	MaxConversationSummaryBytes                        = 4 << 10 // 限制持久会话摘要大小。
 )
 
 const (
@@ -265,7 +266,7 @@ func AnalysisDataTypes(action string) []string {
 	case "set_owner":
 		return []string{"任务描述、文件路径与目标属主"}
 	case "run_shell":
-		return []string{"经确认的命令与工作目录；命令在隔离暂存区执行，仅提交逐项审批后的文件变化"}
+		return []string{"经确认的命令与工作目录；隔离结果作为一个 Shell 步骤展示并提交"}
 	case "find_duplicates":
 		return []string{"任务描述与扫描范围会发送给模型；文件内容仅在服务端本机读取并计算 SHA-256，不发送给模型"}
 	case "archive_photos":
@@ -281,6 +282,7 @@ type AgentConversation struct {
 	ID              string
 	State           ConversationState
 	Messages        []ConversationMessage
+	ContextSummary  string
 	Analysis        *AnalysisCard
 	TaskID          string
 	PlanID          string
@@ -295,6 +297,7 @@ type ConversationSummary struct {
 	State           ConversationState
 	Title           string
 	TaskID          string
+	TaskStatus      TaskStatus
 	PlanID          string
 	DuplicateScanID string
 	UpdatedAt       time.Time
@@ -324,7 +327,7 @@ func (s *Store) CreateConversation(ctx context.Context, id, message string, at t
 	return nil
 }
 
-// StartConversationTurn 仅允许未生成方案的终态继续澄清，并解除旧扫描关联。
+// StartConversationTurn 允许终态会话或已结束计划继续交互。
 func (s *Store) StartConversationTurn(ctx context.Context, id, message string, at time.Time) error {
 	if len(message) == 0 || len(message) > 4096 {
 		return errors.New("invalid conversation message")
@@ -336,12 +339,58 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 		return fmt.Errorf("begin agent conversation turn: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	var state ConversationState
+	var planID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT state, plan_id FROM agent_conversations WHERE id = ?`, id).Scan(&state, &planID); errors.Is(err, sql.ErrNoRows) {
+		return ErrConversationNotFound
+	} else if err != nil {
+		return fmt.Errorf("read conversation turn state: %w", err)
+	}
+	var receipt string
+	if planID.Valid {
+		if state != ConversationAwaitingApproval && state != ConversationAnalysisComplete && state != ConversationFailed {
+			return ErrConversationConflict
+		}
+		var status PlanStatus
+		if err := tx.QueryRowContext(ctx, `SELECT status FROM plans WHERE id = ?`, planID.String).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+			return ErrConversationConflict
+		} else if err != nil {
+			return fmt.Errorf("read linked plan status: %w", err)
+		}
+		if !terminalPlanStatus(status) {
+			return ErrConversationConflict
+		}
+		receipt, err = conversationPlanReceipt(ctx, tx, planID.String, status)
+		if err != nil {
+			return err
+		}
+	} else if !continuableConversationState(state) {
+		return ErrConversationConflict
+	}
+	var count int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_conversation_messages WHERE conversation_id = ?`, id).Scan(&count); err != nil {
+		return fmt.Errorf("count agent conversation messages: %w", err)
+	}
+	// 预留用户消息、模型回复和计划生成回执。
+	messagesNeeded := 3
+	if receipt != "" {
+		messagesNeeded++
+	}
+	if count+messagesNeeded > maxConversationMessages {
+		return ErrConversationLimit
+	}
 
 	result, err := tx.ExecContext(ctx, `
-		UPDATE agent_conversations SET state = 'processing', analysis_action = 'rename', goal = '', file_path = '',
+		UPDATE agent_conversations SET state = 'processing', task_id = NULL, plan_id = NULL, analysis_action = 'rename', goal = '', file_path = '',
 			target_path = '', mode = NULL, owner_uid = NULL, group_gid = NULL,
 			operations_json = '[]', provider = '', model = '', destination = '', duplicate_scan_id = NULL, error_code = '', updated_at_ns = ?
-		WHERE id = ? AND plan_id IS NULL AND state IN ('clarifying', 'awaiting_confirmation', 'analysis_complete', 'unsupported', 'failed')`, atNS, id)
+		WHERE id = ? AND state = ? AND plan_id IS ? AND (
+			(plan_id IS NULL AND state IN ('clarifying', 'awaiting_confirmation', 'analysis_complete', 'unsupported', 'failed'))
+			OR (plan_id IS NOT NULL AND state IN ('awaiting_approval', 'analysis_complete', 'failed') AND EXISTS (
+				SELECT 1 FROM plans WHERE plans.id = agent_conversations.plan_id
+					AND plans.status IN ('completed', 'failed', 'invalidated', 'rejected', 'cancelled')
+			))
+		)`, atNS, id, state, nullablePlanID(planID))
 	if err != nil {
 		return fmt.Errorf("start agent conversation turn: %w", err)
 	}
@@ -358,12 +407,11 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 		}
 		return ErrConversationConflict
 	}
-	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_conversation_messages WHERE conversation_id = ?`, id).Scan(&count); err != nil {
-		return fmt.Errorf("count agent conversation messages: %w", err)
-	}
-	if count >= maxConversationMessages {
-		return ErrConversationLimit
+	if receipt != "" {
+		if err := s.insertConversationMessage(ctx, tx, id, count+1, "assistant", receipt, at); err != nil {
+			return err
+		}
+		count++
 	}
 	if err := s.insertConversationMessage(ctx, tx, id, count+1, "user", message, at); err != nil {
 		return err
@@ -374,13 +422,128 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 	return nil
 }
 
+// nullablePlanID 将空计划 ID 写成 SQL NULL。
+func nullablePlanID(value sql.NullString) any {
+	if !value.Valid {
+		return nil
+	}
+	return value.String
+}
+
+// continuableConversationState 判断无关联计划时是否可继续对话。
+func continuableConversationState(state ConversationState) bool {
+	switch state {
+	case ConversationClarifying, ConversationAwaitingConfirmation, ConversationAnalysisComplete, ConversationUnsupported, ConversationFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+// terminalPlanStatus 判断关联方案是否已结束。
+func terminalPlanStatus(status PlanStatus) bool {
+	switch status {
+	case PlanCompleted, PlanFailed, PlanInvalidated, PlanRejected, PlanCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// conversationPlanReceipt 从持久化方案生成有界结果回执。
+func conversationPlanReceipt(ctx context.Context, tx *sql.Tx, planID string, status PlanStatus) (string, error) {
+	statusLabel := map[PlanStatus]string{
+		PlanCompleted: "已完成", PlanFailed: "未完成", PlanInvalidated: "已失效",
+		PlanRejected: "已拒绝", PlanCancelled: "已取消",
+	}[status]
+	var total int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM operations WHERE plan_id = ?`, planID).Scan(&total); err != nil {
+		return "", fmt.Errorf("count completed plan operations: %w", err)
+	}
+	var receipt strings.Builder
+	fmt.Fprintf(&receipt, "上一计划%s", statusLabel)
+	if total == 0 {
+		return receipt.String() + "。", nil
+	}
+	receipt.WriteString("；步骤结果：\n")
+	rows, err := tx.QueryContext(ctx, `SELECT action, source_path, target_path, execution_status FROM operations WHERE plan_id = ? ORDER BY ordinal LIMIT 12`, planID)
+	if err != nil {
+		return "", fmt.Errorf("read completed plan operations: %w", err)
+	}
+	defer rows.Close()
+	shown := 0
+	for rows.Next() {
+		var action, source, target, executionStatus string
+		if err := rows.Scan(&action, &source, &target, &executionStatus); err != nil {
+			return "", fmt.Errorf("scan completed plan operation: %w", err)
+		}
+		line := "- " + conversationActionLabel(action)
+		if source != "" {
+			line += "：" + source
+		}
+		if target != "" {
+			line += " → " + target
+		}
+		line += "（" + conversationExecutionLabel(executionStatus) + "）\n"
+		if receipt.Len()+len(line) > 3500 {
+			break
+		}
+		receipt.WriteString(line)
+		shown++
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("iterate completed plan operations: %w", err)
+	}
+	if total > shown {
+		if shown == 0 {
+			fmt.Fprintf(&receipt, "共 %d 项，详情见任务记录。", total)
+		} else {
+			fmt.Fprintf(&receipt, "另有 %d 项，详情见任务记录。", total-shown)
+		}
+	} else if receipt.Len() > 0 && receipt.String()[receipt.Len()-1] == '\n' {
+		value := strings.TrimSuffix(receipt.String(), "\n")
+		return value, nil
+	}
+	return strings.TrimSpace(receipt.String()), nil
+}
+
+// conversationActionLabel 返回简短的操作名称。
+func conversationActionLabel(action string) string {
+	labels := map[string]string{
+		"rename": "重命名", "edit_text": "编辑文本", "create_file": "新建文件", "overwrite_file": "覆盖文件",
+		"create_directory": "新建文件夹", "move_file": "移动文件", "copy_file": "复制文件", "copy_directory": "复制文件夹",
+		"create_symlink": "创建软链接", "create_archive": "创建压缩包", "extract_archive": "解压",
+		"set_permissions": "修改权限", "set_owner": "修改属主", "archive_photo": "归档照片", "archive_photos": "归档照片",
+		"classify_documents": "整理文档", "trash_duplicate": "清理重复文件", "trash": "移入回收站", "permanent_delete": "永久删除", "run_shell": "运行 Shell",
+	}
+	if label, ok := labels[action]; ok {
+		return label
+	}
+	return "执行操作"
+}
+
+// conversationExecutionLabel 返回简短的步骤结果。
+func conversationExecutionLabel(status string) string {
+	labels := map[string]string{
+		"succeeded": "完成", "failed": "失败", "partial": "部分完成", "skipped": "跳过",
+		"cancelled": "取消", "pending": "未执行", "running": "执行中",
+	}
+	if label, ok := labels[status]; ok {
+		return label
+	}
+	return "状态未知"
+}
+
 // FinishConversationTurn 原子保存模型回复和其确认状态。
-func (s *Store) FinishConversationTurn(ctx context.Context, id string, state ConversationState, reply string, card AnalysisCard, errorCode string, at time.Time) error {
+func (s *Store) FinishConversationTurn(ctx context.Context, id string, state ConversationState, reply string, card AnalysisCard, errorCode string, at time.Time, contextSummary ...string) error {
 	if !validConversationState(state) || state == ConversationProcessing || state == ConversationAnalyzing || state == ConversationAwaitingApproval {
 		return errors.New("invalid finished conversation state")
 	}
 	if len(reply) == 0 || len(reply) > 4096 {
 		return errors.New("invalid conversation reply")
+	}
+	if len(contextSummary) > 1 || len(contextSummary) == 1 && !validConversationContextSummary(contextSummary[0]) {
+		return errors.New("invalid conversation context summary")
 	}
 	at = conversationTime(at)
 	atNS := at.UnixNano()
@@ -424,12 +587,17 @@ func (s *Store) FinishConversationTurn(ctx context.Context, id string, state Con
 		}
 		goal, provider, model, destination = card.Goal, card.Provider, card.Model, card.Destination
 	}
+	updateSummary := len(contextSummary) == 1
+	summary := ""
+	if updateSummary {
+		summary = contextSummary[0]
+	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_conversations SET state = ?, analysis_action = ?, goal = ?, file_path = ?, target_path = ?,
-			mode = ?, owner_uid = ?, group_gid = ?,
+			mode = ?, owner_uid = ?, group_gid = ?, context_summary = CASE WHEN ? THEN ? ELSE context_summary END,
 			operations_json = ?, provider = ?, model = ?, destination = ?, error_code = ?, updated_at_ns = ?
 		WHERE id = ? AND state = 'processing'`,
-		state, action, goal, filePath, targetPath, mode, ownerUID, groupGID, operationsJSON, provider, model, destination, errorCode, atNS, id)
+		state, action, goal, filePath, targetPath, mode, ownerUID, groupGID, updateSummary, summary, operationsJSON, provider, model, destination, errorCode, atNS, id)
 	if err != nil {
 		return fmt.Errorf("finish agent conversation turn: %w", err)
 	}
@@ -589,14 +757,18 @@ func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]Con
 		return nil, false, errors.New("invalid conversation list range")
 	}
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.id, c.state, COALESCE(NULLIF(substr(c.goal, 1, 48), ''), CASE c.state
+		SELECT c.id, c.state, COALESCE(NULLIF(substr(c.goal, 1, 48), ''), NULLIF((
+			SELECT substr(m.content, 1, 48) FROM agent_conversation_messages m
+			WHERE m.conversation_id = c.id AND m.role = 'user' ORDER BY m.sequence LIMIT 1
+		), ''), CASE c.state
 			WHEN 'awaiting_confirmation' THEN '待确认分析'
 			WHEN 'awaiting_approval' THEN '待审批方案'
 			WHEN 'unsupported' THEN '暂不支持的任务'
 			WHEN 'failed' THEN '需要处理的任务'
 			ELSE 'Agent 对话' END),
-		COALESCE(c.task_id, ''), COALESCE(c.plan_id, ''), COALESCE(c.duplicate_scan_id, ''), c.updated_at_ns
-		FROM agent_conversations c ORDER BY c.updated_at_ns DESC, c.id DESC LIMIT ? OFFSET ?`, limit+1, offset)
+		COALESCE(c.task_id, ''), COALESCE(t.status, ''), COALESCE(c.plan_id, ''), COALESCE(c.duplicate_scan_id, ''), c.updated_at_ns
+		FROM agent_conversations c LEFT JOIN tasks t ON t.id = c.task_id
+		ORDER BY c.updated_at_ns DESC, c.id DESC LIMIT ? OFFSET ?`, limit+1, offset)
 	if err != nil {
 		return nil, false, fmt.Errorf("list agent conversations: %w", err)
 	}
@@ -605,7 +777,7 @@ func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]Con
 	for rows.Next() {
 		var item ConversationSummary
 		var updated int64
-		if err := rows.Scan(&item.ID, &item.State, &item.Title, &item.TaskID, &item.PlanID, &item.DuplicateScanID, &updated); err != nil {
+		if err := rows.Scan(&item.ID, &item.State, &item.Title, &item.TaskID, &item.TaskStatus, &item.PlanID, &item.DuplicateScanID, &updated); err != nil {
 			return nil, false, fmt.Errorf("scan conversation summary: %w", err)
 		}
 		item.Title = strings.NewReplacer("\r", " ", "\n", " ", "\t", " ").Replace(item.Title)
@@ -974,9 +1146,9 @@ func loadConversation(ctx context.Context, queryer interface {
 	var action, goal, filePath, targetPath, operationsJSON, provider, model, destination string
 	var mode, ownerUID, groupGID sql.NullInt64
 	var taskID, planID, duplicateScanID sql.NullString
-	err := queryer.QueryRowContext(ctx, `SELECT id, state, analysis_action, goal, file_path, target_path, mode, owner_uid, group_gid, operations_json, provider, model, destination, task_id, plan_id, duplicate_scan_id, error_code, created_at_ns, updated_at_ns FROM agent_conversations WHERE id = ?`, id).Scan(
+	err := queryer.QueryRowContext(ctx, `SELECT id, state, analysis_action, goal, file_path, target_path, mode, owner_uid, group_gid, operations_json, provider, model, destination, task_id, plan_id, duplicate_scan_id, error_code, created_at_ns, updated_at_ns, context_summary FROM agent_conversations WHERE id = ?`, id).Scan(
 		&conversation.ID, &conversation.State, &action, &goal, &filePath, &targetPath, &mode, &ownerUID, &groupGID, &operationsJSON, &provider, &model, &destination,
-		&taskID, &planID, &duplicateScanID, &conversation.Error, &createdAt, &updatedAt,
+		&taskID, &planID, &duplicateScanID, &conversation.Error, &createdAt, &updatedAt, &conversation.ContextSummary,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AgentConversation{}, ErrConversationNotFound
@@ -1050,6 +1222,19 @@ func loadConversation(ctx context.Context, queryer interface {
 		return AgentConversation{}, fmt.Errorf("iterate agent conversation messages: %w", err)
 	}
 	return conversation, nil
+}
+
+// validConversationContextSummary 校验模型保存的会话摘要。
+func validConversationContextSummary(value string) bool {
+	if len(value) > MaxConversationSummaryBytes || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) && character != '\n' && character != '\r' && character != '\t' {
+			return false
+		}
+	}
+	return true
 }
 
 func validConversationState(state ConversationState) bool {

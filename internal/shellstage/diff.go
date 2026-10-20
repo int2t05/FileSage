@@ -3,12 +3,13 @@ package shellstage
 
 import (
 	"bytes"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
 
 // FormatTextDiff 返回限长差异及截断标记；二进制只返回提示，不输出原文。
-func FormatTextDiff(before, after []byte, maxBytes int64) (string, bool) {
+func FormatTextDiff(before, after []byte, path string, maxBytes int64) (string, bool) {
 	if maxBytes <= 0 {
 		return "", true
 	}
@@ -22,11 +23,11 @@ func FormatTextDiff(before, after []byte, maxBytes int64) (string, bool) {
 	if afterTruncated {
 		after = after[:int(maxBytes)]
 	}
-	return formatTextDiff(before, after, maxBytes, beforeTruncated, afterTruncated)
+	return formatTextDiff(before, after, path, maxBytes, beforeTruncated, afterTruncated)
 }
 
 // formatTextDiff 生成受单文件预算限制的替换差异。
-func formatTextDiff(before, after []byte, limit int64, beforeTruncated, afterTruncated bool) (string, bool) {
+func formatTextDiff(before, after []byte, path string, limit int64, beforeTruncated, afterTruncated bool) (string, bool) {
 	var output strings.Builder
 	truncated := beforeTruncated || afterTruncated
 	appendPart := func(value string) bool {
@@ -37,7 +38,8 @@ func formatTextDiff(before, after []byte, limit int64, beforeTruncated, afterTru
 		output.WriteString(value)
 		return true
 	}
-	for _, header := range []string{"--- before\n", "+++ after\n", "@@\n"} {
+	path = escapeDiffPath(path)
+	for _, header := range []string{"--- a/" + path + "\n", "+++ b/" + path + "\n"} {
 		if !appendPart(header) {
 			return output.String(), true
 		}
@@ -54,6 +56,23 @@ func formatTextDiff(before, after []byte, limit int64, beforeTruncated, afterTru
 	contextStart := prefix - 3
 	if contextStart < 0 {
 		contextStart = 0
+	}
+	contextAfter := suffix
+	if contextAfter > 3 {
+		contextAfter = 3
+	}
+	oldEnd := len(oldLines) - suffix + contextAfter
+	newEnd := len(newLines) - suffix + contextAfter
+	oldCount, newCount := oldEnd-contextStart, newEnd-contextStart
+	oldStart, newStart := contextStart+1, contextStart+1
+	if oldCount == 0 {
+		oldStart = contextStart
+	}
+	if newCount == 0 {
+		newStart = contextStart
+	}
+	if !appendPart("@@ -" + formatDiffRange(oldStart, oldCount) + " +" + formatDiffRange(newStart, newCount) + " @@\n") {
+		return output.String(), true
 	}
 	for _, line := range oldLines[contextStart:prefix] {
 		if !appendPart(" " + line + "\n") {
@@ -93,6 +112,19 @@ func formatTextDiff(before, after []byte, limit int64, beforeTruncated, afterTru
 		return appendTruncation(output.String(), limit), true
 	}
 	return output.String(), false
+}
+
+// formatDiffRange 使用 unified diff 的省略单行计数格式。
+func formatDiffRange(start, count int) string {
+	if count == 1 {
+		return strconv.Itoa(start)
+	}
+	return strconv.Itoa(start) + "," + strconv.Itoa(count)
+}
+
+// escapeDiffPath 阻止路径中的控制字符伪装成差异头。
+func escapeDiffPath(path string) string {
+	return strings.NewReplacer("\\", "\\\\", "\r", "\\r", "\n", "\\n", "\t", "\\t").Replace(path)
 }
 
 // splitLines 去掉末尾换行产生的空元素，保留空文件语义。

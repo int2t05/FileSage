@@ -99,7 +99,7 @@ func Scan(ctx context.Context, filesystem FileSystem, scopes []string, options O
 	}
 
 	bySize := make(map[int64][]fsroot.Entry)
-	seenInodes := make(map[[2]uint64]struct{})
+	filesByInode := make(map[[2]uint64]fsroot.Entry)
 	treeSnapshot := make(map[string]fsroot.Entry)
 	progress := Progress{Phase: "enumerating"}
 	reportProgress := func() {
@@ -137,15 +137,17 @@ func Scan(ctx context.Context, filesystem FileSystem, scopes []string, options O
 			return ErrUnavailable
 		}
 		identity := [2]uint64{entry.Device, entry.Inode}
-		if _, exists := seenInodes[identity]; exists {
+		if previous, exists := filesByInode[identity]; exists {
+			if entry.Path < previous.Path {
+				filesByInode[identity] = entry
+			}
 			return nil
 		}
-		seenInodes[identity] = struct{}{}
 		progress.CandidateFiles++
 		if progress.CandidateFiles > options.MaxFiles {
 			return ErrLimitExceeded
 		}
-		bySize[entry.Size] = append(bySize[entry.Size], entry)
+		filesByInode[identity] = entry
 		return nil
 	})
 	if err != nil {
@@ -153,6 +155,9 @@ func Scan(ctx context.Context, filesystem FileSystem, scopes []string, options O
 	}
 	if err := validateScopeSnapshot(filesystem, normalizedScopes, treeSnapshot); err != nil {
 		return nil, err
+	}
+	for _, entry := range filesByInode {
+		bySize[entry.Size] = append(bySize[entry.Size], entry)
 	}
 
 	var candidates []candidate
@@ -420,7 +425,7 @@ func hashCandidate(ctx context.Context, filesystem FileSystem, expected fsroot.E
 		return "", 0, fmt.Errorf("open %q: %w", expected.Path, err)
 	}
 	defer reader.Close()
-	if opened.Symlink || opened.Kind != fsroot.KindFile || !opened.IdentityAvailable || opened.Fingerprint() != expected.Fingerprint() {
+	if opened.Symlink || opened.Kind != fsroot.KindFile || !opened.IdentityAvailable || !sameEntrySnapshot(opened, expected) {
 		return "", 0, fmt.Errorf("verify opened %q: %w", expected.Path, ErrFileChanged)
 	}
 
@@ -455,7 +460,7 @@ func hashCandidate(ctx context.Context, filesystem FileSystem, expected fsroot.E
 		return "", total, ErrFileChanged
 	}
 	current, err := filesystem.LstatEntry(expected.Path)
-	if err != nil || current.Symlink || current.Fingerprint() != expected.Fingerprint() {
+	if err != nil || current.Symlink || !sameEntrySnapshot(current, expected) {
 		return "", total, fmt.Errorf("verify after reading %q: %w", expected.Path, ErrFileChanged)
 	}
 	return hex.EncodeToString(hasher.Sum(nil)), total, nil

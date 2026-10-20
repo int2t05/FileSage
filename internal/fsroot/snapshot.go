@@ -68,6 +68,9 @@ func (r *Root) snapshotTree(ctx context.Context, relativePath string, limits *Tr
 	if hasTrashComponent(relativePath) {
 		return TreeSnapshot{}, ErrInvalidPath
 	}
+	if err := r.checkVolumeAvailability(relativePath); err != nil {
+		return TreeSnapshot{}, err
+	}
 	if err := ctx.Err(); err != nil {
 		return TreeSnapshot{}, err
 	}
@@ -94,6 +97,9 @@ func (r *Root) VerifyTreeSnapshot(ctx context.Context, snapshot TreeSnapshot) er
 		return err
 	}
 	if err := validateTreeSnapshot(snapshot); err != nil {
+		return err
+	}
+	if err := r.checkVolumeAvailability(snapshot.RootPath); err != nil {
 		return err
 	}
 	current, err := platformSnapshotTree(ctx, r, snapshot.RootPath, nil)
@@ -216,6 +222,8 @@ func digestTreeSnapshot(rootPath string, entries []TreeSnapshotEntry) string {
 		writeSnapshotUint64(digest, entry.Links)
 		writeSnapshotBool(digest, entry.IdentityAvailable)
 		writeSnapshotBool(digest, entry.Symlink)
+		writeSnapshotBool(digest, entry.MountUnavailable)
+		writeSnapshotBool(digest, entry.ReadOnly)
 		writeSnapshotString(digest, entry.LinkTarget)
 		writeSnapshotUint64(digest, entry.LinkDevice)
 		writeSnapshotUint64(digest, entry.LinkInode)

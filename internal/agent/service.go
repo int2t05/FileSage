@@ -670,6 +670,9 @@ func (s *Service) Decide(ctx context.Context, planID, operationID, decision stri
 	if err != nil {
 		return store.PlanRecord{}, err
 	}
+	if plan.ReviewedAt != nil {
+		return store.PlanRecord{}, ErrConflict
+	}
 	if len(expectedVersion) > 1 || len(expectedVersion) == 1 && expectedVersion[0] != plan.Version {
 		return store.PlanRecord{}, ErrConflict
 	}
@@ -731,6 +734,192 @@ func (s *Service) Decide(ctx context.Context, planID, operationID, decision stri
 	return updated, nil
 }
 
+// RejectPlan 拒绝整份尚未执行的计划，不暴露逐项审批入口。
+func (s *Service) RejectPlan(ctx context.Context, planID string, expectedVersion int) (store.PlanRecord, error) {
+	if expectedVersion < 1 {
+		return store.PlanRecord{}, ErrConflict
+	}
+	plan, err := s.store.Plan(ctx, planID)
+	if err != nil {
+		return store.PlanRecord{}, err
+	}
+	if plan.Version != expectedVersion || plan.Status != store.PlanAwaitingApproval || len(plan.Operations) == 0 {
+		return store.PlanRecord{}, ErrConflict
+	}
+	return s.Decide(ctx, planID, plan.Operations[0].ID, "reject", expectedVersion)
+}
+
+// StartPlan 固定审核时的权限模式，并验证不可恢复删除的明确确认。
+func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string, confirmPermanentDelete bool) (store.PlanRecord, error) {
+	if expectedVersion < 1 || expectedMode != "bypass" && expectedMode != "manual" {
+		return store.PlanRecord{}, ErrConflict
+	}
+	plan, err := s.store.Plan(ctx, planID)
+	if err != nil {
+		return store.PlanRecord{}, err
+	}
+	if plan.Version != expectedVersion || plan.Status != store.PlanAwaitingApproval || plan.ReviewedAt != nil {
+		return store.PlanRecord{}, ErrConflict
+	}
+	if planContainsPermanentDelete(plan) != confirmPermanentDelete {
+		return store.PlanRecord{}, ErrConflict
+	}
+	at := time.Now().UTC()
+	var mode string
+	if isShellParent(plan) {
+		mode, err = s.reviewShellPlan(ctx, plan, expectedVersion, expectedMode, at)
+		if err != nil {
+			return store.PlanRecord{}, err
+		}
+	} else {
+		if len(plan.Operations) == 0 || len(plan.Operations) > maxStoredPlanOperations(plan.Operations) {
+			return store.PlanRecord{}, ErrUnsupported
+		}
+		for _, operation := range plan.Operations {
+			if !supportedAction(operation.Action) || operation.Approval != store.ApprovalPending || operation.Status != store.OperationPending {
+				return store.PlanRecord{}, ErrConflict
+			}
+			release, lockErr := s.lockOperation(ctx, operation)
+			if lockErr != nil {
+				return store.PlanRecord{}, lockErr
+			}
+			snapshotErr := s.validateStoredSnapshot(ctx, plan.ScopePath, operation)
+			release()
+			if snapshotErr != nil {
+				if invalidateErr := s.store.InvalidateAgentOperation(ctx, plan.ID, operation.ID, "审核时文件状态已变化，方案失效", at); invalidateErr != nil {
+					return store.PlanRecord{}, fmt.Errorf("record invalidated plan review: %w", invalidateErr)
+				}
+				updated, readErr := s.store.Plan(ctx, plan.ID)
+				if readErr != nil {
+					return store.PlanRecord{}, readErr
+				}
+				return updated, fmt.Errorf("plan review invalidated: %w (%v)", ErrConflict, snapshotErr)
+			}
+		}
+		mode, err = s.store.ReviewAgentPlan(ctx, planID, expectedVersion, expectedMode, at, confirmPermanentDelete)
+		if err != nil {
+			return store.PlanRecord{}, err
+		}
+	}
+	reviewed, err := s.store.Plan(ctx, planID)
+	if err != nil || mode != "bypass" {
+		return reviewed, err
+	}
+	if isShellParent(reviewed) {
+		return s.executeOperation(ctx, reviewed.ID, reviewed.ScopePath, reviewed.Operations[0])
+	}
+	return s.Execute(ctx, planID, reviewed.Version)
+}
+
+// planContainsPermanentDelete 检查计划是否含不可恢复删除。
+func planContainsPermanentDelete(plan store.PlanRecord) bool {
+	for _, operation := range plan.Operations {
+		if operation.Action == "permanent_delete" {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewShellPlan 锁定并校验快照；返回后释放文件锁，再进入工具执行器。
+func (s *Service) reviewShellPlan(ctx context.Context, plan store.PlanRecord, expectedVersion int, expectedMode string, at time.Time) (string, error) {
+	if s.shellPayloads == nil || s.trash == nil {
+		return "", ErrUnsupported
+	}
+	changes, err := s.shellPlanChanges(ctx, plan.ID)
+	if err != nil {
+		return "", err
+	}
+	if len(changes) == 0 || len(changes) > store.MaxShellChanges {
+		return "", ErrConflict
+	}
+	release, err := s.locks.Lock(ctx, shellChangeLockKeys(plan.ScopePath, changes)...)
+	if err != nil {
+		return "", err
+	}
+	defer release()
+	for _, change := range changes {
+		state, stateErr := decodeShellOriginalState(change)
+		if stateErr != nil {
+			return "", stateErr
+		}
+		if err := s.verifyShellOriginal(ctx, plan.ScopePath, change, state); err != nil {
+			return "", fmt.Errorf("Shell plan changed before review: %w", ErrConflict)
+		}
+		if change.Kind != "deleted" && change.CandidateSHA256 != "" {
+			payload, openErr := s.shellPayloads.open(change.PayloadID, change.CandidateSHA256, change.CandidateSize)
+			if openErr != nil {
+				return "", ErrConflict
+			}
+			if closeErr := payload.Close(); closeErr != nil {
+				return "", closeErr
+			}
+		}
+	}
+	return s.store.ReviewShellPlan(ctx, plan.ID, expectedVersion, expectedMode, at)
+}
+
+// ExecuteStep 按用户确认逐次执行已审核方案中的下一步。
+func (s *Service) ExecuteStep(ctx context.Context, planID, operationID string, expectedVersion int) (store.PlanRecord, error) {
+	if expectedVersion < 1 || operationID == "" {
+		return store.PlanRecord{}, ErrConflict
+	}
+	plan, err := s.store.Plan(ctx, planID)
+	if err != nil {
+		return store.PlanRecord{}, err
+	}
+	if plan.Version != expectedVersion || plan.ExecutionMode != "manual" || plan.ReviewedAt == nil || plan.Status != store.PlanApproved {
+		return store.PlanRecord{}, ErrConflict
+	}
+	if isShellParent(plan) {
+		if len(plan.Operations) != 1 || plan.Operations[0].ID != operationID {
+			return store.PlanRecord{}, ErrConflict
+		}
+		return s.executeOperation(ctx, plan.ID, plan.ScopePath, plan.Operations[0])
+	}
+	operation, err := singleOperation(plan, operationID)
+	if err != nil || operation.Approval != store.ApprovalPending && operation.Approval != store.ApprovalApproved || operation.Status != store.OperationPending {
+		return store.PlanRecord{}, ErrConflict
+	}
+	release, err := s.lockOperation(ctx, operation)
+	if err != nil {
+		return store.PlanRecord{}, err
+	}
+	defer release()
+	if err := s.validateStoredSnapshot(ctx, plan.ScopePath, operation); err != nil {
+		if invalidateErr := s.store.InvalidateAgentOperation(ctx, plan.ID, operation.ID, "执行前文件状态已变化，方案失效", time.Now().UTC()); invalidateErr != nil {
+			return store.PlanRecord{}, fmt.Errorf("record invalidated step: %w", invalidateErr)
+		}
+		updated, readErr := s.store.Plan(ctx, plan.ID)
+		if readErr != nil {
+			return store.PlanRecord{}, readErr
+		}
+		return updated, fmt.Errorf("step invalidated: %w (%v)", ErrConflict, err)
+	}
+	if err := s.store.StartReviewedAgentOperation(ctx, plan.ID, operation.ID, plan.Version, time.Now().UTC()); err != nil {
+		return store.PlanRecord{}, err
+	}
+	latest, err := s.store.Plan(ctx, plan.ID)
+	if err != nil {
+		return store.PlanRecord{}, err
+	}
+	current, err := singleOperation(latest, operation.ID)
+	if err != nil {
+		return store.PlanRecord{}, err
+	}
+	if err := s.validateStoredSnapshot(ctx, latest.ScopePath, current); err != nil {
+		if invalidateErr := s.store.InvalidateAgentOperation(ctx, latest.ID, current.ID, "执行占用后文件状态变化，方案失效", time.Now().UTC()); invalidateErr != nil {
+			return store.PlanRecord{}, fmt.Errorf("record invalidated running step: %w", invalidateErr)
+		}
+		updated, readErr := s.store.Plan(ctx, latest.ID)
+		if readErr != nil {
+			return store.PlanRecord{}, readErr
+		}
+		return updated, fmt.Errorf("step invalidated after claim: %w (%v)", ErrConflict, err)
+	}
+	return s.executeOperation(ctx, latest.ID, latest.ScopePath, current)
+}
+
 // Execute 串行执行全部已批准操作，首个失败后取消后续项。
 func (s *Service) Execute(ctx context.Context, planID string, expectedVersion ...int) (store.PlanRecord, error) {
 	plan, err := s.store.Plan(ctx, planID)
@@ -741,7 +930,13 @@ func (s *Service) Execute(ctx context.Context, planID string, expectedVersion ..
 		return store.PlanRecord{}, ErrConflict
 	}
 	if isShellParent(plan) {
+		if plan.ReviewedAt != nil && plan.ExecutionMode == "manual" {
+			return store.PlanRecord{}, ErrConflict
+		}
 		return s.executeShellPlan(ctx, plan, expectedVersion)
+	}
+	if plan.ReviewedAt != nil && plan.ExecutionMode == "manual" {
+		return store.PlanRecord{}, ErrConflict
 	}
 	if plan.Status != store.PlanApproved || len(plan.Operations) < 1 || len(plan.Operations) > maxStoredPlanOperations(plan.Operations) {
 		return store.PlanRecord{}, ErrConflict
@@ -894,85 +1089,11 @@ func (s *Service) removeCancelledTextPayloads(plan store.PlanRecord) error {
 }
 
 func (s *Service) executeOperation(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
-	if op.Action == "trash" {
-		return s.executeTrash(ctx, planID, op)
+	tool, ok := agentTools()[op.Action]
+	if !ok || tool.execute == nil {
+		return store.PlanRecord{}, ErrUnsupported
 	}
-	if op.Action == "permanent_delete" {
-		return s.executePermanentDelete(ctx, planID, op)
-	}
-	if op.Action == "trash_duplicate" {
-		return s.executeDuplicateTrash(ctx, planID, op)
-	}
-	if op.Action == "archive_photo" {
-		return s.executeArchivePhoto(ctx, planID, scope, op)
-	}
-	if op.Action == "create_archive" {
-		return s.executeArchiveCreate(ctx, planID, scope, op)
-	}
-	if op.Action == "extract_archive" {
-		return s.executeArchiveExtract(ctx, planID, scope, op)
-	}
-	if op.Action == "move_file" {
-		return s.executeMoveFile(ctx, planID, op)
-	}
-	if op.Action == "create_symlink" {
-		return s.executeSymlink(ctx, planID, scope, op)
-	}
-	if op.Action == "copy_file" {
-		return s.executeCopyFile(ctx, planID, op)
-	}
-	if op.Action == "copy_directory" {
-		return s.executeCopyDirectory(ctx, planID, op)
-	}
-	if isMetadataAction(op.Action) {
-		return s.executeMetadata(ctx, planID, op)
-	}
-	if isTextFileWriteAction(op.Action) {
-		return s.executeTextEdit(ctx, planID, op)
-	}
-	if op.Action == "rename" {
-		digest, hashErr := s.hashApprovedFile(op)
-		if hashErr != nil {
-			return s.recordRenameOutcome(ctx, planID, op, "", hashErr)
-		}
-		return s.recordRenameOutcome(ctx, planID, op, digest, s.applyOperation(op))
-	}
-	applyErr := s.applyOperation(op)
-	if applyErr != nil {
-		message := "重命名失败，文件未确认移动"
-		if op.Action == "create_directory" {
-			message = "目录创建失败，未覆盖已有内容"
-		}
-		if errors.Is(applyErr, fsroot.ErrConflict) || errors.Is(applyErr, fs.ErrExist) {
-			message = "目标路径已被占用，未覆盖已有内容"
-		}
-		if finishErr := s.store.FinishAgentOperation(ctx, planID, op.ID, store.OperationFailed, message, time.Now().UTC()); finishErr != nil {
-			return store.PlanRecord{}, fmt.Errorf("record agent operation failure: %w", finishErr)
-		}
-		updated, readErr := s.store.Plan(ctx, planID)
-		if readErr != nil {
-			return store.PlanRecord{}, readErr
-		}
-		return updated, applyErr
-	}
-	message := "文件已重命名"
-	if op.Action == "create_directory" {
-		message = "目录已创建"
-		if err := s.verifyCreatedDirectory(op); err != nil {
-			if finishErr := s.store.FinishAgentOperation(ctx, planID, op.ID, store.OperationPartial, "目录创建后无法确认父目录身份，需人工核查", time.Now().UTC()); finishErr != nil {
-				return store.PlanRecord{}, fmt.Errorf("record partial directory creation: %w", finishErr)
-			}
-			updated, readErr := s.store.Plan(ctx, planID)
-			if readErr != nil {
-				return store.PlanRecord{}, readErr
-			}
-			return updated, err
-		}
-	}
-	if err := s.store.FinishAgentOperation(ctx, planID, op.ID, store.OperationSucceeded, message, time.Now().UTC()); err != nil {
-		return store.PlanRecord{}, fmt.Errorf("agent operation completed but result persistence failed: %w", err)
-	}
-	return s.store.Plan(ctx, planID)
+	return tool.execute(s, ctx, planID, scope, op)
 }
 
 func (s *Service) executeArchiveCreate(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
@@ -1244,22 +1365,26 @@ func (s *Service) executeTextEdit(ctx context.Context, planID string, op store.O
 	}
 	writeErr := s.root.WriteAtomicIfUnchanged(targetPath, expected, content, mode)
 	status, message, resultErr := store.OperationSucceeded, textWriteSuccessMessage(op.Action), writeErr
-	if s.verifyTextEditResult(op) == nil {
+	verifyErr := s.verifyTextEditResult(op)
+	var recovery *fsroot.WriteRecoveryError
+	switch {
+	case writeErr == nil && verifyErr == nil:
 		resultErr = nil
-	} else {
-		current, statErr := s.root.LstatEntry(targetPath)
-		unchanged := op.Action == "create_file" && errors.Is(statErr, fs.ErrNotExist)
-		if op.Action != "create_file" && statErr == nil && !current.Symlink {
-			unchanged = matchesFingerprint(current.Fingerprint(), op.SourceStateJSON)
-		}
-		if unchanged {
-			status, message = store.OperationFailed, "文件未发生变化，写入未完成"
-		} else {
-			status, message = store.OperationPartial, "写入结果无法确认，需人工核查"
-		}
-		if resultErr == nil {
-			resultErr = ErrConflict
-		}
+	case errors.As(writeErr, &recovery):
+		status, message = store.OperationPartial, fmt.Sprintf("待核查文件保留在 %q", recovery.Path)
+	case errors.Is(writeErr, fsroot.ErrPublishedNotDurable):
+		status, message = store.OperationPartial, "文件已写入，但目录状态未能持久确认；需人工核查"
+	case writeErr == nil:
+		status, message, resultErr = store.OperationPartial, "写入后文件状态发生变化；需人工核查", verifyErr
+	default:
+		status, message = store.OperationFailed, "文件状态已变化，未完成写入；请刷新后重新审阅"
+		resultErr = writeErr
+	}
+	if status != store.OperationSucceeded && verifyErr != nil && resultErr == nil {
+		resultErr = verifyErr
+	}
+	if status == store.OperationSucceeded {
+		resultErr = nil
 	}
 	if err := s.store.FinishAgentOperation(ctx, planID, op.ID, status, message, time.Now().UTC()); err != nil {
 		return store.PlanRecord{}, fmt.Errorf("record text edit result: %w", err)
@@ -1697,6 +1822,20 @@ func isFileTargetAction(action string) bool {
 	return action == "move_file" || action == "copy_file"
 }
 
+// fileMoveWording 按源和目标父目录区分重命名与移动文案。
+func fileMoveWording(sourcePath, targetPath string) (string, string) {
+	if parentPath(sourcePath) == parentPath(targetPath) {
+		return "重命名", "文件已重命名"
+	}
+	return "移动", "文件已移动"
+}
+
+// fileMoveReason 让方案理由与同目录重命名或跨目录移动保持一致。
+func fileMoveReason(sourcePath, targetPath string) string {
+	action, _ := fileMoveWording(sourcePath, targetPath)
+	return "按用户确认的目标路径" + action + "文件"
+}
+
 func isArchiveAction(action string) bool {
 	return action == "create_archive" || action == "extract_archive"
 }
@@ -1712,21 +1851,22 @@ func hasSpecialModeBits(mode fs.FileMode) bool {
 
 // recordMoveFileOutcome 将移动结果写入操作状态和审计记录。
 func (s *Service) recordMoveFileOutcome(ctx context.Context, planID string, op store.OperationRecord, outcome fsroot.FileMoveResult, sourceDigest string, moveErr error) (store.PlanRecord, error) {
-	status, message, resultErr := store.OperationSucceeded, "文件已移动", moveErr
+	action, successMessage := fileMoveWording(op.SourcePath, op.TargetPath)
+	status, message, resultErr := store.OperationSucceeded, successMessage, moveErr
 	switch {
 	case outcome.Published && outcome.SourceRemoved && moveErr == nil:
 		if err := s.verifyMovedFile(op, sourceDigest, outcome.SHA256); err != nil {
-			status, message, resultErr = store.OperationPartial, "文件已移动，但目标路径身份无法确认；需人工核查", err
+			status, message, resultErr = store.OperationPartial, successMessage+"，但目标路径身份无法确认；需人工核查", err
 		}
 	case outcome.Published || outcome.SourceRemoved:
-		status, message = store.OperationPartial, "移动结果不完整；请核查源文件和目标文件"
+		status, message = store.OperationPartial, action+"结果不完整；请核查源文件和目标文件"
 		if resultErr == nil {
 			resultErr = ErrConflict
 		}
 	case moveErr != nil:
-		status, message = store.OperationFailed, "文件移动失败，未覆盖目标文件"
+		status, message = store.OperationFailed, "文件"+action+"失败，未覆盖目标文件"
 	default:
-		status, message, resultErr = store.OperationPartial, "无法确认文件移动结果；需人工核查", ErrConflict
+		status, message, resultErr = store.OperationPartial, "无法确认文件"+action+"结果；需人工核查", ErrConflict
 	}
 	if finishErr := s.store.FinishAgentOperation(ctx, planID, op.ID, status, message, time.Now().UTC()); finishErr != nil {
 		return store.PlanRecord{}, fmt.Errorf("record move file outcome: %w", finishErr)
@@ -2182,6 +2322,7 @@ func (s *Service) Recover(ctx context.Context) error {
 				message = "重启后无法证明目录创建结果，需人工核查"
 			}
 		} else if op.Action == "move_file" {
+			action, _ := fileMoveWording(op.SourcePath, op.TargetPath)
 			source, sourceErr := s.root.LstatEntry(op.SourcePath)
 			parent, parentErr := s.directoryParentEntry(parentPath(op.TargetPath))
 			_, targetErr := s.root.LstatEntry(op.TargetPath)
@@ -2189,7 +2330,7 @@ func (s *Service) Recover(ctx context.Context) error {
 				parentErr == nil && matchesDirectoryIdentity(parent.Fingerprint(), op.TargetStateJSON) && errors.Is(targetErr, fs.ErrNotExist) {
 				resolution, message = "retry", "重启核查确认源文件未变且目标空缺；不会自动重放，请重新执行"
 			} else {
-				message = "重启后无法证明文件移动结果，源与目标需人工核查"
+				message = "重启后无法证明文件" + action + "结果，源与目标需人工核查"
 			}
 		} else if op.Action == "copy_file" {
 			source, sourceErr := s.root.LstatEntry(op.SourcePath)
@@ -2451,7 +2592,7 @@ func (s *Service) snapshotArchiveOperation(ctx context.Context, proposal Proposa
 		parentPath = proposal.TargetPath
 		if inspectArchive {
 			manifest, inspectErr := s.root.InspectArchive(ctx, proposal.SourcePath, agentArchiveReadLimits())
-			if inspectErr != nil || manifest.Fingerprint != entry.Fingerprint() || len(manifest.Entries) == 0 {
+			if inspectErr != nil || !sameFileFingerprint(manifest.Fingerprint, entry.Fingerprint()) || len(manifest.Entries) == 0 {
 				return source, input, outputs, ErrConflict
 			}
 			input.ManifestDigest = manifest.Digest
@@ -2465,7 +2606,7 @@ func (s *Service) snapshotArchiveOperation(ctx context.Context, proposal Proposa
 
 	if sourceJSON != nil {
 		var expected archiveSourceState
-		if json.Unmarshal([]byte(*sourceJSON), &expected) != nil || expected.Fingerprint != input.Fingerprint ||
+		if json.Unmarshal([]byte(*sourceJSON), &expected) != nil || !sameFileFingerprint(expected.Fingerprint, input.Fingerprint) ||
 			proposal.Action == "create_archive" && expected.TreeDigest != input.TreeDigest {
 			return source, input, outputs, ErrConflict
 		}
@@ -2888,7 +3029,7 @@ func matchesTargetDirectoryParent(relativePath string, actual fsroot.Entry, expe
 		return matchesDirectoryIdentity(actual.Fingerprint(), expectedJSON)
 	}
 	var expected fsroot.Fingerprint
-	return json.Unmarshal([]byte(expectedJSON), &expected) == nil && expected == actual.Fingerprint()
+	return json.Unmarshal([]byte(expectedJSON), &expected) == nil && sameFileFingerprint(expected, actual.Fingerprint())
 }
 
 // validateCopyDirectorySnapshot 校验目录树快照与复制目标，快照仅保存摘要到审批记录。
@@ -3159,9 +3300,14 @@ func validateProposal(proposal Proposal) error {
 }
 
 func validateOperation(proposal Proposal) error {
-	if !supportedAction(proposal.Action) {
+	tool, ok := agentTools()[proposal.Action]
+	if !ok || tool.validate == nil {
 		return ErrUnsupported
 	}
+	return tool.validate(proposal)
+}
+
+func validateOperationContract(proposal Proposal) error {
 	if len(proposal.Reason) == 0 || len(proposal.Reason) > 1024 || strings.TrimSpace(proposal.Reason) == "" || len(proposal.Evidence) > 2048 {
 		return ErrInvalid
 	}
@@ -3343,7 +3489,8 @@ func maxStoredPlanOperations(operations []store.OperationRecord) int {
 
 // supportedAction 返回当前服务可执行的单项操作。
 func supportedAction(action string) bool {
-	return action == "rename" || isTextFileWriteAction(action) || action == "create_directory" || action == "move_file" || action == "create_symlink" || action == "copy_file" || action == "copy_directory" || action == "create_archive" || action == "extract_archive" || action == "set_permissions" || action == "set_owner" || action == "trash_duplicate" || action == "archive_photo" || action == "trash" || action == "permanent_delete"
+	tool, ok := agentTools()[action]
+	return ok && tool.execute != nil
 }
 
 func isTextFileWriteAction(action string) bool {
