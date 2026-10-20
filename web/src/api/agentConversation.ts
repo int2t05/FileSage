@@ -1,4 +1,6 @@
 // 本文件解析 Agent 对话、确认卡和模型状态接口。
+import { MAX_AGENT_PLAN_OPERATIONS } from './agentPlanLimits.ts';
+
 export type AgentConversationState =
   | 'clarifying'
   | 'awaiting_confirmation'
@@ -508,7 +510,7 @@ function parseAnalysisCard(value: unknown): AgentAnalysisCard | null {
   }
 
   if (value.operations !== undefined) {
-    if (!Array.isArray(value.operations) || value.operations.length === 0) {
+    if (!Array.isArray(value.operations) || value.operations.length === 0 || value.operations.length > MAX_AGENT_PLAN_OPERATIONS) {
       throw new AgentConversationApiError('Agent 服务返回了无效的分析操作清单。');
     }
     if (value.operations.some((operation) => isRecord(operation) && operation.action === 'classify_documents')) {

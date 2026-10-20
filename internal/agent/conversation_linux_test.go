@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -638,6 +639,52 @@ func TestConversationMultiOperationPreflightCreatesNoPartialPlan(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "parent", "one")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight created the valid first target: %v", err)
+	}
+}
+
+func TestConversationAcceptsModelSizedIndependentPlan(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "parent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+
+	operations := make([]store.AnalysisOperation, 21)
+	for index := range operations {
+		operations[index] = store.AnalysisOperation{Action: "create_directory", TargetPath: fmt.Sprintf("parent/category-%02d", index)}
+	}
+	response, err := json.Marshal(struct {
+		State      string                    `json:"state"`
+		Reply      string                    `json:"reply"`
+		Goal       string                    `json:"goal"`
+		Operations []store.AnalysisOperation `json:"operations"`
+	}{State: "ready", Reply: "将按计划整理类别，请确认。", Goal: "整理类别目录", Operations: operations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &scriptedConversationModel{
+		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+		replies: []string{string(response)},
+	}
+	service := &ConversationService{store: metadata, root: root, plans: plans, model: model}
+	conversation, err := service.Create(ctx, "建立 21 个类别文件夹")
+	if err != nil || conversation.State != store.ConversationAwaitingConfirmation || conversation.Analysis == nil || len(conversation.Analysis.Operations) != len(operations) {
+		var operationCount int
+		if conversation.Analysis != nil {
+			operationCount = len(conversation.Analysis.Operations)
+		}
+		t.Fatalf("Create() = (state %q, operations %d, error %v)", conversation.State, operationCount, err)
+	}
+	conversation, err = service.ConfirmAnalysis(ctx, conversation.ID)
+	if err != nil || conversation.State != store.ConversationAwaitingApproval || conversation.PlanID == "" {
+		t.Fatalf("ConfirmAnalysis() = (state %q, plan %q, error %v)", conversation.State, conversation.PlanID, err)
+	}
+	plan, err := plans.Plan(ctx, conversation.PlanID)
+	if err != nil || len(plan.Operations) != len(operations) {
+		t.Fatalf("Plan() = (%d operations, %v), want %d", len(plan.Operations), err, len(operations))
 	}
 }
 

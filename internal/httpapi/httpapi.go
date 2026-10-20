@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -539,11 +540,11 @@ func (api *API) reviseAgentPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request agentPlanRevisionRequest
-	if !decodeRequestJSON(w, r, &request) {
+	if !decodeRequestJSONLimit(w, r, &request, 4<<20) {
 		return
 	}
 	planID := r.PathValue("planId")
-	if !validTaskID(planID) || request.ExpectedPlanVersion < 1 || len(request.Operations) < 1 || len(request.Operations) > 20 {
+	if !validTaskID(planID) || request.ExpectedPlanVersion < 1 || len(request.Operations) < 1 || len(request.Operations) > store.MaxAgentPlanOperations {
 		writeError(w, http.StatusBadRequest, "invalid plan revision")
 		return
 	}
@@ -1919,6 +1920,10 @@ func writeFileError(w http.ResponseWriter, err error) {
 		return
 	}
 	switch {
+	case errors.Is(err, syscall.EROFS):
+		writeError(w, http.StatusForbidden, "管理卷为只读状态，无法修改文件")
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		writeError(w, http.StatusInsufficientStorage, "管理卷空间不足，无法完成文件操作")
 	case errors.Is(err, fsroot.ErrVolumeUnavailable):
 		writeError(w, http.StatusServiceUnavailable, "管理卷暂不可用，请确认磁盘已挂载后重试")
 	case errors.Is(err, fs.ErrNotExist):

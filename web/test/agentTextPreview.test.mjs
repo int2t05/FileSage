@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+import { MAX_AGENT_PLAN_OPERATIONS } from '../src/api/agentPlanLimits.ts';
 
 const apiSource = await readFile(new URL('../src/api/agent.ts', import.meta.url), 'utf8');
 const apiFile = ts.createSourceFile('agent.ts', apiSource, ts.ScriptTarget.Latest, true);
@@ -13,7 +14,7 @@ const helperNames = new Set([
 const declarations = apiFile.statements.filter((statement) =>
   (ts.isFunctionDeclaration(statement) && helperNames.has(statement.name?.text ?? ''))
   || (ts.isClassDeclaration(statement) && statement.name?.text === 'AgentApiError'));
-const compiledApi = ts.transpileModule(`${declarations.map((statement) => statement.getText(apiFile)).join('\n')}\nexport { AgentApiError, getAgentOperationPreview, reviseAgentOperationContent };`, {
+const compiledApi = ts.transpileModule(`const MAX_AGENT_PLAN_OPERATIONS = ${MAX_AGENT_PLAN_OPERATIONS};\n${declarations.map((statement) => statement.getText(apiFile)).join('\n')}\nexport { AgentApiError, getAgentOperationPreview, reviseAgentOperationContent };`, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
 const api = await import(`data:text/javascript;base64,${Buffer.from(compiledApi.outputText).toString('base64')}`);

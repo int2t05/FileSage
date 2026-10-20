@@ -100,6 +100,21 @@ func TestAgentToolCatalogRequiresExplicitBoundedCapabilities(t *testing.T) {
 	}
 }
 
+func TestPlanOperationLimitsKeepOneGlobalBoundAndToolSpecificCaps(t *testing.T) {
+	if got := maxProposalOperations([]Proposal{{Action: "create_directory"}}); got != store.MaxAgentPlanOperations {
+		t.Fatalf("general proposal limit = %d, want %d", got, store.MaxAgentPlanOperations)
+	}
+	if got := maxProposalOperations([]Proposal{{Action: "create_archive"}}); got != 1 {
+		t.Fatalf("archive proposal limit = %d, want 1", got)
+	}
+	if got := maxProposalOperations([]Proposal{{Action: "archive_photo", ConversationID: "conversation"}}); got != store.MaxAgentPlanOperations {
+		t.Fatalf("conversation photo archive limit = %d, want %d", got, store.MaxAgentPlanOperations)
+	}
+	if got := maxStoredPlanOperations([]store.OperationRecord{{Action: "create_directory"}}); got != store.MaxAgentPlanOperations {
+		t.Fatalf("stored general plan limit = %d, want %d", got, store.MaxAgentPlanOperations)
+	}
+}
+
 func TestManualPlanRunsOnlyTheConfirmedNextStep(t *testing.T) {
 	ctx := context.Background()
 	metadata, root, service := permissionFixture(t)

@@ -40,6 +40,31 @@ func TestRegisteredMountForPathUsesDeepestComponentMatch(t *testing.T) {
 	}
 }
 
+func TestReadOnlyPolicyUsesDeepestMountedVolume(t *testing.T) {
+	root := &Root{
+		rootReadOnly: true,
+		registeredMounts: []registeredMount{
+			{path: "writable", id: 10, readOnly: false},
+			{path: "readonly", id: 20, readOnly: true},
+		},
+	}
+	for _, test := range []struct {
+		path string
+		want bool
+	}{
+		{path: "", want: true},
+		{path: "writable/file.txt", want: false},
+		{path: "readonly/file.txt", want: true},
+		{path: "other/file.txt", want: true},
+	} {
+		entry := Entry{}
+		root.applyReadOnly(&entry, test.path)
+		if entry.ReadOnly != test.want {
+			t.Errorf("read-only for %q = %t, want %t", test.path, entry.ReadOnly, test.want)
+		}
+	}
+}
+
 func TestUnavailableRegisteredMountStaysVisibleAndRejectsAccess(t *testing.T) {
 	rootPath := t.TempDir()
 	volumePath := filepath.Join(rootPath, "volume")

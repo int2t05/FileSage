@@ -88,7 +88,7 @@ func (m *duplicateScanManager) run(ctx context.Context, id, scopePath string, jo
 		m.mu.Unlock()
 	}()
 	if err := m.store.StartDuplicateScan(ctx, id, time.Now().UTC()); err != nil {
-		slog.Error("cannot start duplicate scan", "scan_id", id, "error", err)
+		logDuplicateScanStartFailure(slog.Default(), id, err)
 		progress := duplicates.Progress{Phase: "enumerating"}
 		status, errorCode := string(store.DuplicateScanFailed), "scan_start_failed"
 		if errors.Is(err, context.Canceled) || errors.Is(ctx.Err(), context.Canceled) || errors.Is(err, store.ErrDuplicateScanCancelled) {
@@ -139,6 +139,16 @@ func (m *duplicateScanManager) run(ctx context.Context, id, scopePath string, jo
 	if err := m.store.FinishDuplicateScan(context.Background(), id, status, errorCode, toStoreDuplicateProgress(progress), results, reply, time.Now().UTC()); err != nil {
 		slog.Error("cannot finish duplicate scan", "scan_id", id, "error", err)
 	}
+}
+
+// logDuplicateScanStartFailure 将预期取消与真实存储故障分开记录。
+func logDuplicateScanStartFailure(logger *slog.Logger, id string, err error) {
+	level, reason := slog.LevelError, "scan_start_failed"
+	if errors.Is(err, context.Canceled) || errors.Is(err, store.ErrDuplicateScanCancelled) {
+		level, reason = slog.LevelInfo, "cancelled"
+	}
+	logger.LogAttrs(context.Background(), level, "duplicate scan start failed",
+		slog.String("scan_id", id), slog.String("reason", reason))
 }
 
 func (m *duplicateScanManager) saveProgress(ctx context.Context, id string, job *duplicateScanJob, progress duplicates.Progress) {

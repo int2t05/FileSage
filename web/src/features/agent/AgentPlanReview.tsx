@@ -16,6 +16,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { AgentApiError, getAgentOperationPreview, type AgentOperation, type AgentOperationPreview, type AgentPlan, type AgentPlanEditOperation, type AgentTextCandidateAction } from '../../api/agent';
+import { MAX_AGENT_PLAN_OPERATIONS } from '../../api/agentPlanLimits.ts';
 import { ShellChangeReview } from './ShellChangeReview';
 import { ShellToolCall } from './ShellToolCall';
 import { isSameDirectoryPath } from './pathSemantics';
@@ -191,7 +192,7 @@ export function canEditPlan(plan: AgentPlan, editable: boolean): boolean {
     && ['conversation', 'model-analysis', 'user-edit'].includes(plan.proposalSource)
     && plan.status === 'awaiting_approval'
     && plan.operations.length > 0
-    && plan.operations.length <= 20
+    && plan.operations.length <= MAX_AGENT_PLAN_OPERATIONS
     && plan.operations.every((operation) => operation.action !== 'archive_photo')
     && plan.operations.every((operation) => Object.hasOwn(EDIT_ACTION_LABELS, operation.action)
       && operation.executionStatus === 'pending');
@@ -657,7 +658,7 @@ export function AgentPlanReview({
   }
 
   async function saveRevision() {
-    if (!plan || !canEditPlan(plan, editable) || actionBusy || editOperations.length < 1 || editOperations.length > 20) return;
+    if (!plan || !canEditPlan(plan, editable) || actionBusy || editOperations.length < 1 || editOperations.length > MAX_AGENT_PLAN_OPERATIONS) return;
     if (editOperations.some((operation) => !operation.reason.trim())) {
       setEditError('每项操作都需要填写理由。');
       return;
@@ -709,7 +710,7 @@ export function AgentPlanReview({
             <div className="agent-plan-editor" aria-label="编辑操作清单">
               <div className="agent-plan-editor-heading">
                 <div><strong>修改操作清单</strong><p>保存后生成新版本，所有项目需要重新审核。</p></div>
-                <button className="agent-text-button" type="button" onClick={() => setEditOperations((current) => current.length >= 20 ? current : [...current, { action: 'create_directory', sourcePath: '', targetPath: '', reason: '', evidence: '' }])} disabled={editOperations.length >= 20 || Boolean(actionBusy)}>
+                <button className="agent-text-button" type="button" onClick={() => setEditOperations((current) => current.length >= MAX_AGENT_PLAN_OPERATIONS ? current : [...current, { action: 'create_directory', sourcePath: '', targetPath: '', reason: '', evidence: '' }])} disabled={editOperations.length >= MAX_AGENT_PLAN_OPERATIONS || Boolean(actionBusy)}>
                   <Plus size={14} aria-hidden="true" />新增操作
                 </button>
               </div>
@@ -768,7 +769,7 @@ export function AgentPlanReview({
               {editError && <p className="agent-composer-error" role="alert">{editError}</p>}
               <div className="agent-plan-editor-actions">
                 <button className="agent-secondary-button" type="button" onClick={cancelEditing} disabled={Boolean(actionBusy || conversationBusy)}><X size={15} aria-hidden="true" />取消</button>
-                <button className="agent-primary-button" type="button" onClick={() => { void saveRevision(); }} disabled={Boolean(actionBusy || conversationBusy || editOperations.length < 1 || editOperations.length > 20)}>
+                <button className="agent-primary-button" type="button" onClick={() => { void saveRevision(); }} disabled={Boolean(actionBusy || conversationBusy || editOperations.length < 1 || editOperations.length > MAX_AGENT_PLAN_OPERATIONS)}>
                   {actionBusy === 'revise' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <Check size={15} aria-hidden="true" />}保存并重新审核
                 </button>
               </div>

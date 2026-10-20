@@ -48,13 +48,18 @@ async function answerModel(request, response) {
   try {
     const body = JSON.parse(await readBody(request));
     const userMessage = body.messages?.findLast((message) => message.role === 'user')?.content;
-    const isFollowup = typeof userMessage === 'string' && userMessage.includes(followupName);
-    const isSeparateConversation = typeof userMessage === 'string' && userMessage.includes(separateConversationName);
-    const target = isFollowup ? followupName : isSeparateConversation ? separateConversationName : targetName;
+    const matchedTarget = typeof userMessage === 'string'
+      ? userMessage.match(/agent-e2e-(?:reviewed|followup|separate-session)(?:-\d+)?/)?.[0]
+      : undefined;
+    const target = matchedTarget || targetName;
+    const isFollowup = target.startsWith(followupName);
+    const isSeparateConversation = target.startsWith(separateConversationName);
     const hasMemory = body.messages?.some((message) => message.role === 'user'
       && message.content.includes('用户希望在同一会话持续处理文件。'));
+    const hasToolResult = body.messages?.some((message) => message.role === 'assistant'
+      && message.content.includes('目录已创建'));
     if (body.model !== 'filesage-e2e' || typeof userMessage !== 'string'
-      || !userMessage.includes(target) || isFollowup && !hasMemory) {
+      || !userMessage.includes(target) || isFollowup && (!hasMemory || !hasToolResult)) {
       response.writeHead(422, { 'Content-Type': 'application/json' }).end('{"error":"unexpected test prompt"}');
       return;
     }
