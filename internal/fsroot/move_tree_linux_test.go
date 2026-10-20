@@ -158,6 +158,204 @@ func TestMoveTreeNoReplaceCopiesThenRemovesAcrossMounts(t *testing.T) {
 	}
 }
 
+// TestMoveTreeNoReplaceDetectsMutationDuringCrossMountCopy 验证跨挂载复制期间的来源变化不会发布目标。
+func TestMoveTreeNoReplaceDetectsMutationDuringCrossMountCopy(t *testing.T) {
+	root, sourceBase, destinationBase := openCrossMountMoveRoots(t)
+	defer root.Close()
+	sourcePath := filepath.Join(sourceBase, "source")
+	if err := os.Mkdir(sourcePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(sourcePath, "file")
+	if err := os.WriteFile(sourceFile, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destination := strings.TrimPrefix(filepath.ToSlash(filepath.Join(destinationBase, "moved")), "/")
+	snapshot, err := root.SnapshotTree(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &treeCopyHookContext{Context: context.Background(), parent: destinationBase, triggerAt: 4, hook: func() error {
+		return os.WriteFile(sourceFile, []byte("mutated!"), 0o600)
+	}}
+	result, err := root.MoveTreeNoReplace(ctx, source, destination, snapshot)
+	if !ctx.triggered || !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-mount move after source mutation = (%+v, %v), want triggered conflict", result, err)
+	}
+	if result.Published || result.SourceRemoved {
+		t.Fatalf("conflicted move result = %+v, want no published target or source removal", result)
+	}
+	assertMoveFileContents(t, sourceFile, "mutated!")
+	if _, err := os.Lstat(filepath.Join(destinationBase, "moved")); !os.IsNotExist(err) {
+		t.Fatalf("conflicted move published a target: %v", err)
+	}
+	assertNoTreeCopyTemps(t, destinationBase)
+}
+
+// TestMoveTreeNoReplacePreservesMutationAfterCopy 验证发布副本后来源变化时保留两份文件。
+func TestMoveTreeNoReplacePreservesMutationAfterCopy(t *testing.T) {
+	root, sourceBase, destinationBase := openCrossMountMoveRoots(t)
+	defer root.Close()
+	sourcePath := filepath.Join(sourceBase, "source")
+	if err := os.Mkdir(sourcePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(sourcePath, "file")
+	if err := os.WriteFile(sourceFile, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destinationPath := filepath.Join(destinationBase, "moved")
+	destination := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
+	snapshot, err := root.SnapshotTree(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &moveTreePublicationHookContext{Context: context.Background(), destination: destinationPath, hook: func() error {
+		return os.WriteFile(sourceFile, []byte("mutated!"), 0o600)
+	}}
+	result, err := root.MoveTreeNoReplace(ctx, source, destination, snapshot)
+	if !ctx.triggered || !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-mount move after publication = (%+v, %v), want triggered conflict", result, err)
+	}
+	if !result.Published || result.SourceRemoved {
+		t.Fatalf("conflicted move result = %+v, want published copy and retained source", result)
+	}
+	assertMoveFileContents(t, sourceFile, "mutated!")
+	assertMoveFileContents(t, filepath.Join(destinationPath, "file"), "original")
+}
+
+// TestMoveTreeNoReplaceRestoresMutationDuringQuarantineCheck 验证隔离复核发现来源变化后恢复来源路径。
+func TestMoveTreeNoReplaceRestoresMutationDuringQuarantineCheck(t *testing.T) {
+	root, sourceBase, destinationBase := openCrossMountMoveRoots(t)
+	defer root.Close()
+	sourcePath := filepath.Join(sourceBase, "source")
+	if err := os.Mkdir(sourcePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(sourcePath, "file")
+	if err := os.WriteFile(sourceFile, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destinationPath := filepath.Join(destinationBase, "moved")
+	destination := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
+	snapshot, err := root.SnapshotTree(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &moveTreeQuarantineHookContext{Context: context.Background(), source: sourcePath, parent: sourceBase, hook: func(quarantine string) error {
+		return os.WriteFile(filepath.Join(quarantine, "file"), []byte("mutated!"), 0o600)
+	}}
+	result, err := root.MoveTreeNoReplace(ctx, source, destination, snapshot)
+	if !ctx.triggered || !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-mount move after quarantine mutation = (%+v, %v), want triggered conflict", result, err)
+	}
+	if !result.Published || result.SourceRemoved || result.SourceRetained != "" {
+		t.Fatalf("conflicted move result = %+v, want published copy and restored source", result)
+	}
+	assertMoveFileContents(t, sourceFile, "mutated!")
+	assertMoveFileContents(t, filepath.Join(destinationPath, "file"), "original")
+	entries, err := os.ReadDir(sourceBase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".filesage-move-quarantine-") {
+			t.Fatalf("quarantine path remains after conflict recovery: %q", entry.Name())
+		}
+	}
+}
+
+// openCrossMountMoveRoots 在 /tmp 与 /dev/shm 创建真实跨挂载测试目录。
+func openCrossMountMoveRoots(t *testing.T) (*Root, string, string) {
+	t.Helper()
+	root, err := Open("/")
+	if err != nil {
+		t.Skipf("open filesystem root: %v", err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	sourceBase, err := os.MkdirTemp("/tmp", "filesage-tree-move-source-")
+	if err != nil {
+		t.Skipf("create source fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sourceBase) })
+	destinationBase, err := os.MkdirTemp("/dev/shm", "filesage-tree-move-target-")
+	if err != nil {
+		t.Skipf("create destination fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(destinationBase) })
+	sourceMountID, err := root.MountID(strings.TrimPrefix(filepath.ToSlash(sourceBase), "/"))
+	if err != nil {
+		t.Skipf("read source mount identity: %v", err)
+	}
+	destinationMountID, err := root.MountID(strings.TrimPrefix(filepath.ToSlash(destinationBase), "/"))
+	if err != nil {
+		t.Skipf("read destination mount identity: %v", err)
+	}
+	if sourceMountID == destinationMountID {
+		t.Skip("/tmp and /dev/shm are on the same mount")
+	}
+	return root, sourceBase, destinationBase
+}
+
+// moveTreePublicationHookContext 在跨挂载副本发布后触发来源变化。
+type moveTreePublicationHookContext struct {
+	context.Context
+	destination string
+	hook        func() error
+	triggered   bool
+}
+
+// Err 在公开目标出现后执行竞态钩子。
+func (ctx *moveTreePublicationHookContext) Err() error {
+	if !ctx.triggered {
+		if _, err := os.Lstat(ctx.destination); err == nil {
+			ctx.triggered = true
+			if err := ctx.hook(); err != nil {
+				return err
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return ctx.Context.Err()
+}
+
+// moveTreeQuarantineHookContext 在来源被隔离后触发内容变化。
+type moveTreeQuarantineHookContext struct {
+	context.Context
+	source    string
+	parent    string
+	hook      func(string) error
+	triggered bool
+}
+
+// Err 在隔离目录出现后执行竞态钩子。
+func (ctx *moveTreeQuarantineHookContext) Err() error {
+	if !ctx.triggered {
+		if _, err := os.Lstat(ctx.source); os.IsNotExist(err) {
+			entries, readErr := os.ReadDir(ctx.parent)
+			if readErr != nil {
+				return readErr
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".filesage-move-quarantine-") {
+					ctx.triggered = true
+					if err := ctx.hook(filepath.Join(ctx.parent, entry.Name())); err != nil {
+						return err
+					}
+					break
+				}
+			}
+		} else if err != nil {
+			return err
+		}
+	}
+	return ctx.Context.Err()
+}
+
 // assertMoveFileContents 核对移动后文件的实际内容。
 func assertMoveFileContents(t *testing.T, name, want string) {
 	t.Helper()
