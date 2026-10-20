@@ -41,6 +41,8 @@ const maxClassificationCategories = 50
 const maxConcurrentClassificationAnalyses = 2
 const maxOCRDocumentsPerAnalysis = 2
 
+const conversationResponseCorrectionPrompt = `上一条响应未通过 FileSage 服务端的严格 JSON 契约校验。请依据首条 system 指令和原用户目标重新生成完整 JSON；不得增加字段、改变目标、放宽路径校验或审批要求，也不要解释。`
+
 var classificationAnalysisSlots = make(chan struct{}, maxConcurrentClassificationAnalyses)
 
 type textEditConversationModel interface {
@@ -192,19 +194,30 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 		return store.AgentConversation{}, err
 	}
 	messages := conversationPromptMessages(conversation)
-	content, err := s.model.complete(ctx, messages)
-	if err != nil {
-		slog.Warn("agent model request failed", "conversation_id", id, "message_count", len(messages), "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "provider_error")
-		return s.finishTurnFailure(ctx, id, "模型暂时无法处理本轮对话，请稍后重试。", "provider_error", err)
-	}
 	var result conversationTurnResult
-	if err := decodeStrictModelJSON(content, &result); err != nil {
-		slog.Warn("agent model response rejected", "conversation_id", id, "message_count", len(messages), "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "invalid_json")
-		return s.finishTurnFailure(ctx, id, "模型返回的对话方案无效，请调整描述后重试。", "invalid_model_response", err)
-	}
-	if err := validateTurnResult(&result); err != nil {
-		slog.Warn("agent model response rejected", "conversation_id", id, "message_count", len(messages), "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "invalid_result")
-		return s.finishTurnFailure(ctx, id, "模型返回的对话方案无效，请调整描述后重试。", "invalid_model_response", err)
+	modelAttempts := 0
+	for modelAttempts = 1; modelAttempts <= 2; modelAttempts++ {
+		content, completionErr := s.model.complete(ctx, messages)
+		if completionErr != nil {
+			slog.Warn("agent model request failed", "conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "provider_error")
+			return s.finishTurnFailure(ctx, id, "模型暂时无法处理本轮对话，请稍后重试。", "provider_error", completionErr)
+		}
+		result = conversationTurnResult{}
+		responseErr := decodeStrictModelJSON(content, &result)
+		reason := "invalid_json"
+		if responseErr == nil {
+			responseErr = validateTurnResult(&result)
+			reason = "invalid_result"
+		}
+		if responseErr == nil {
+			break
+		}
+		willRetry := modelAttempts == 1
+		slog.Warn("agent model response rejected", "conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "retry", willRetry, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", reason)
+		if !willRetry {
+			return s.finishTurnFailure(ctx, id, "模型返回的对话方案无效，请调整描述后重试。", "invalid_model_response", responseErr)
+		}
+		messages = append(messages, ChatMessage{Role: "system", Content: conversationResponseCorrectionPrompt})
 	}
 	state := store.ConversationState(result.State)
 	card := store.AnalysisCard{}
@@ -248,7 +261,7 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 	if err := s.store.FinishConversationTurn(ctx, id, state, result.Reply, card, "", time.Now().UTC(), contextSummary...); err != nil {
 		return store.AgentConversation{}, err
 	}
-	slog.Info("agent conversation turn completed", "conversation_id", id, "state", state, "operation_count", len(card.Operations), "duration_ms", time.Since(startedAt).Milliseconds())
+	slog.Info("agent conversation turn completed", "conversation_id", id, "state", state, "operation_count", len(card.Operations), "model_attempts", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds())
 	return s.store.Conversation(ctx, id)
 }
 

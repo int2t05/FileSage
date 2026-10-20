@@ -61,6 +61,49 @@ func (m *scriptedConversationModel) callCount() int {
 	return len(m.requests)
 }
 
+func TestConversationRetriesInvalidModelResponseOnce(t *testing.T) {
+	invalid := `{"state":"ready","reply":"","goal":"建立并列目录","operations":[{"action":"create_directory","filePath":"","targetPath":"qa-a"},{"action":"create_directory","filePath":"","targetPath":"qa-b"}]}`
+	valid := `{"state":"ready","reply":"我会创建两个并列文件夹，请确认。","goal":"建立并列目录","operations":[{"action":"create_directory","filePath":"","targetPath":"qa-a"},{"action":"create_directory","filePath":"","targetPath":"qa-b"}]}`
+	for _, test := range []struct {
+		name      string
+		replies   []string
+		wantState store.ConversationState
+		wantOps   int
+	}{
+		{name: "修正后接受", replies: []string{invalid, valid}, wantState: store.ConversationAwaitingConfirmation, wantOps: 2},
+		{name: "重试次数有界", replies: []string{invalid, invalid}, wantState: store.ConversationFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			rootPath := t.TempDir()
+			metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+			defer root.Close()
+			defer func() { _ = metadata.Close() }()
+			model := &scriptedConversationModel{
+				status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+				replies: test.replies,
+			}
+			service := &ConversationService{store: metadata, root: root, plans: plans, model: model}
+			conversation, err := service.Create(ctx, "在管理根目录建立两个并列目录")
+			operationCount := 0
+			if conversation.Analysis != nil {
+				operationCount = len(conversation.Analysis.Operations)
+			}
+			errValid := err == nil && test.wantState == store.ConversationAwaitingConfirmation || errors.Is(err, ErrModelResponse) && test.wantState == store.ConversationFailed
+			if !errValid || conversation.State != test.wantState || operationCount != test.wantOps || model.callCount() != 2 {
+				t.Fatalf("Create() state=%q operations=%d calls=%d err=%v", conversation.State, operationCount, model.callCount(), err)
+			}
+			model.mu.Lock()
+			retryMessages := model.requests[1]
+			model.mu.Unlock()
+			last := retryMessages[len(retryMessages)-1]
+			if last.Role != "system" || !strings.Contains(last.Content, "严格 JSON 契约校验") {
+				t.Fatalf("retry did not include a bounded correction prompt: %#v", last)
+			}
+		})
+	}
+}
+
 func TestConfirmedAnalysisPersistsBoundPlanAndReusesApprovalFlow(t *testing.T) {
 	ctx := context.Background()
 	rootPath := t.TempDir()

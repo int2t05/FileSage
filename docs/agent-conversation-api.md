@@ -41,7 +41,7 @@
 {"message":"请根据 report.txt 内容给它改一个清晰的名称"}
 ```
 
-返回 `201` 和会话对象。模型可以继续澄清（`state: "clarifying"`）、给出待确认分析卡（`state: "awaiting_confirmation"`），或明确说明暂不支持（`state: "unsupported"`）。模型暂时不可用时，会话仍会保存为 `failed`；只要会话保存成功，接口仍返回 `201`，响应不包含上游正文或密钥。
+返回 `201` 和会话对象。模型可以继续澄清（`state: "clarifying"`）、给出待确认分析卡（`state: "awaiting_confirmation"`），或明确说明暂不支持（`state: "unsupported"`）。模型暂时不可用时，会话仍会保存为 `failed`；只要会话保存成功，接口仍返回 `201`，响应不包含上游正文或密钥。模型响应未通过严格 JSON 契约时，服务端最多作一次结构纠正重试；重试仍无效则保存为 `failed`，不持久化无效响应，也不放宽路径、审批或操作校验。
 
 ### `GET /agent/conversations/{id}`
 
