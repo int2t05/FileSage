@@ -38,3 +38,17 @@ test('核心页面统一导航并适配桌面与手机', async ({ page }) => {
     await expectNoHorizontalOverflow(page);
   }
 });
+
+test('文件排序只展示常见的名称、修改时间和大小规则', async ({ page }) => {
+  await page.goto('/#files');
+  const sort = page.getByRole('combobox', { name: '排序方式' });
+  await expect(sort).toHaveValue('name-asc');
+  await expect(sort.locator('option')).toHaveText([
+    '名称升序',
+    '名称降序',
+    '修改时间（最新优先）',
+    '修改时间（最早优先）',
+    '文件大小（大到小）',
+    '文件大小（小到大）',
+  ]);
+});

@@ -55,9 +55,10 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentStyles, /\.agent-chat-composer-footer > div\s*\{[^}]*margin-left: auto/);
     assert.match(agentStyles, /\.agent-workspace\s*\{[^}]*border: 1px solid var\(--color-line\)[^}]*background: var\(--color-surface\)/);
     assert.match(agentStyles, /\.agent-session-sidebar\s*\{[^}]*border-right: 1px solid var\(--color-line\)/);
-    assert.match(agentStyles, /\.agent-chat-panel\s*\{[^}]*border: 0[^}]*background: #fbfcfa/);
+    assert.match(agentStyles, /\.agent-chat-panel\s*\{[^}]*border: 0[^}]*background: var\(--color-surface-subtle\)/);
     assert.match(agentStyles, /\.agent-session-item\s*\{[^}]*display: flex[^}]*align-items: center/);
     assert.match(agentStyles, /\.agent-session-item\.is-active \.agent-session-state\s*\{[^}]*display: none/);
+    assert.match(agentStyles, /@media \(max-width: 760px\)[\s\S]*?\.agent-chat-composer\s*\{[^}]*position: sticky[^}]*bottom: calc\(var\(--mobile-nav-height\) \+ env\(safe-area-inset-bottom\)\)/);
   });
 
   it('首条消息创建会话后，在历史列表同步前保留当前会话', () => {

@@ -37,10 +37,19 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  --content-width-wide: 1440px;
+  --content-width-agent: 1320px;
+  --content-width-settings: 760px;
+  --page-gutter-desktop: 32px;
+  --page-gutter-mobile: 16px;
+  --mobile-content-clearance: 24px;
+
   --radius-sm: 6px;
   --radius-md: 8px;
   --radius-lg: 12px;
   --radius-xl: 16px;
+  --nav-desktop-width: 224px;
+  --mobile-nav-height: 63px;
   --shadow-panel: 0 16px 40px rgb(26 38 29 / 8%);
   --shadow-raised: 0 6px 20px rgb(26 38 29 / 7%);
 }

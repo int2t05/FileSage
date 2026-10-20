@@ -1,6 +1,6 @@
 /* Agent 对话、审批状态和移动端布局。 */
 .agent-page {
-  width: min(100%, 1320px);
+  width: min(100%, var(--content-width-agent));
   margin: 0 auto;
   padding-bottom: 0;
 }
@@ -97,7 +97,7 @@
   padding: 0 clamp(18px, 3vw, 36px) 18px;
   border: 0;
   border-radius: 0;
-  background: #fbfcfa;
+  background: var(--color-surface-subtle);
 }
 
 .agent-chat-header {
@@ -140,7 +140,7 @@
   border: 0;
   border-right: 1px solid var(--color-line);
   border-radius: 0;
-  background: #fafbf9;
+  background: var(--color-surface-subtle);
 }
 
 .agent-session-heading {
@@ -1759,6 +1759,16 @@
 
   .agent-composer-keyboard-hint {
     display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .agent-chat-composer {
+    position: sticky;
+    z-index: 10;
+    bottom: calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));
+    background: var(--color-surface);
+    box-shadow: 0 -4px 16px rgb(26 38 29 / 5%);
   }
 }
 

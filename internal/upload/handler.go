@@ -339,12 +339,12 @@ func (server *Server) CompletedUploads() ([]Event, error) {
 			if err == nil {
 				err = errors.New("staged upload info is not a regular file")
 			}
-			slog.Warn("skipping invalid staged upload info", "upload_id", uploadID, "error", err)
+			slog.Warn("skipping invalid staged upload info", "upload_id", uploadID, "reason", "invalid_metadata_file")
 			continue
 		}
 		event, err := server.TransferStatus(uploadID)
 		if err != nil {
-			slog.Warn("skipping staged upload with invalid tus state", "upload_id", uploadID, "error", err)
+			slog.Warn("skipping staged upload with invalid tus state", "upload_id", uploadID, "reason", "invalid_transfer_state")
 			continue
 		}
 		if event.Kind != UploadCompleted {
@@ -352,11 +352,11 @@ func (server *Server) CompletedUploads() ([]Event, error) {
 		}
 		reader, _, _, err := server.OpenCompleted(event)
 		if err != nil {
-			slog.Warn("skipping staged upload that failed validation", "upload_id", uploadID, "error", err)
+			slog.Warn("skipping staged upload that failed validation", "upload_id", uploadID, "reason", "staged_upload_invalid")
 			continue
 		}
 		if err := reader.Close(); err != nil {
-			slog.Warn("cannot close validated staged upload", "upload_id", uploadID, "error", err)
+			slog.Warn("cannot close validated staged upload", "upload_id", uploadID, "reason", "staging_io_failure")
 			continue
 		}
 		events = append(events, event)
@@ -415,7 +415,7 @@ func (server *Server) forwardEvent(ctx context.Context, kind EventKind, raw tusd
 			err = errors.New("tusd emitted an incomplete upload event")
 		}
 		// 元数据在创建前已校验；此处再次校验后才向调用方转发。
-		slog.Error("discarding invalid tusd upload event", "kind", kind, "error", err)
+		slog.Error("discarding invalid tusd upload event", "kind", kind, "reason", "invalid_upload_event")
 		return
 	}
 	select {

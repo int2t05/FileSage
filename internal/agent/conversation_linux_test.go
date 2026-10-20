@@ -104,6 +104,62 @@ func TestConversationRetriesInvalidModelResponseOnce(t *testing.T) {
 	}
 }
 
+func TestConversationSummarizesCompletedToolReceiptWithoutCreatingAnotherPlan(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+
+	model := &scriptedConversationModel{
+		status: ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+		replies: []string{
+			`{"state":"ready","reply":"我会建立合同文件夹，请确认。","contextSummary":"","goal":"建立合同文件夹","operations":[{"action":"create_directory","filePath":"","targetPath":"合同"}]}`,
+			`{"state":"clarifying","reply":"上一计划已完成，已创建“合同”文件夹。","contextSummary":"用户已确认创建合同文件夹，计划已完成。"}`,
+		},
+	}
+	conversationService := &ConversationService{store: metadata, root: root, plans: plans, model: model}
+	conversation, err := conversationService.Create(ctx, "创建合同文件夹")
+	if err != nil || conversation.State != store.ConversationAwaitingConfirmation || conversation.Analysis == nil {
+		t.Fatalf("Create() = (%#v, %v)", conversation, err)
+	}
+	conversation, err = conversationService.ConfirmAnalysis(ctx, conversation.ID)
+	if err != nil || conversation.State != store.ConversationAwaitingApproval || conversation.PlanID == "" {
+		t.Fatalf("ConfirmAnalysis() = (%#v, %v)", conversation, err)
+	}
+	plan, err := plans.Plan(ctx, conversation.PlanID)
+	if err != nil || len(plan.Operations) != 1 {
+		t.Fatalf("Plan() = (%#v, %v)", plan, err)
+	}
+	approved, err := plans.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if err != nil {
+		t.Fatalf("Decide() = %v", err)
+	}
+	completed, err := plans.Execute(ctx, plan.ID, approved.Version)
+	if err != nil || completed.Status != store.PlanCompleted || completed.Operations[0].Status != store.OperationSucceeded {
+		t.Fatalf("Execute() = (%#v, %v)", completed, err)
+	}
+
+	conversation, err = conversationService.AddMessage(ctx, conversation.ID, "只总结上一轮结果，不要继续操作")
+	if err != nil || conversation.State != store.ConversationClarifying || conversation.PlanID != "" || conversation.Analysis != nil {
+		t.Fatalf("AddMessage() created a plan or failed to answer: (%#v, %v)", conversation, err)
+	}
+	model.mu.Lock()
+	followupRequest := marshalMessages(t, model.requests[1])
+	callCount := len(model.requests)
+	model.mu.Unlock()
+	if !strings.Contains(followupRequest, "上一计划已完成") || !strings.Contains(followupRequest, "合同") || !strings.Contains(followupRequest, "已创建文件夹") {
+		t.Fatalf("follow-up did not receive the actual tool receipt: %s", followupRequest)
+	}
+	if callCount != 2 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Content, "已创建“合同”文件夹") {
+		t.Fatalf("reply-only turn was not completed cleanly: calls=%d messages=%#v", callCount, conversation.Messages)
+	}
+	tasks, err := metadata.ListTasks(ctx, store.TaskListQuery{Limit: 10})
+	if err != nil || len(tasks.Tasks) != 1 {
+		t.Fatalf("follow-up created another task: tasks=%#v err=%v", tasks.Tasks, err)
+	}
+}
+
 func TestConfirmedAnalysisPersistsBoundPlanAndReusesApprovalFlow(t *testing.T) {
 	ctx := context.Background()
 	rootPath := t.TempDir()
