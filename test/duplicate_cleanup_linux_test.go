@@ -133,7 +133,7 @@ func TestDuplicateCleanupHTTPFlowRequiresReviewAndCanRestore(t *testing.T) {
 		t.Fatalf("approval moved a file before execution: %v", err)
 	}
 	requestJSON(t, server.Client(), http.MethodPost, server.URL+"/api/v1/agent/plans/"+plan.PlanID+"/start", server.URL,
-		map[string]any{"expectedPlanVersion": plan.PlanVersion, "expectedExecutionMode": "bypass"}, http.StatusOK, &plan)
+		map[string]any{"expectedPlanVersion": plan.PlanVersion, "expectedExecutionMode": "bypass", "confirmPermanentDelete": false}, http.StatusOK, &plan)
 	if plan.Status != string(store.PlanCompleted) {
 		t.Fatalf("review and execution status = %q", plan.Status)
 	}

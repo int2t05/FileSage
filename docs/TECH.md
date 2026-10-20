@@ -89,6 +89,8 @@ Office 两条路径都需真实样本验证：浏览器解析可保持工作表�
 
 Agent 以稳定 ID 的类型化工具步骤表示计划。每个内置工具声明用途、输入校验、读写范围、执行器和结果状态；模型不能访问文件服务账户、任意路径或数据库，模型返回的路径、命令、文本和解析内容全部视为不可信数据。服务端统一校验根目录、权限、冲突、方案状态和审计记录。新增工具复用同一计划／步骤协议并由代码显式注册，不动态加载任意插件，也不另造一套权限流程。复杂度由模型判断：简单任务简短呈现，复杂任务拆成可独立预检、顺序执行的步骤；首期不支持模型在执行中动态追加依赖步骤，无法预先安全确定的任务继续澄清或拒绝执行。执行时显示当前步骤目的、状态和结果，命令、路径、差异按需展开。服务端持久化每份计划审计时采用的权限模式，设置更改不影响已开始的计划。交互参考主流 Agent 的多会话和权限模式选择，产品约束及工具边界仍以 FileSage 根目录和审计规则为准。[Claude Code 桌面会话与权限模式](https://code.claude.com/docs/en/desktop)。
 
+会话在 SQLite 中保留完整消息和一段最多 4 KiB 的模型摘要；每轮模型请求都会以普通上下文消息发送该摘要及最近 24 条消息（历史文本最多 60 KiB），包括尚未确认分析任务时的澄清对话。摘要不作为系统指令或授权；提示词只用于引导模型，真正的操作边界由服务端路径与状态校验、用户计划审核及不可恢复操作确认强制。该边界符合 OWASP 对提示注入与过度代理权限的建议（[LLM01](https://genai.owasp.org/llmrisk/llm01-prompt-injection/)、[LLM06](https://genai.owasp.org/llmrisk/llm062025-excessive-agency/)）。澄清阶段不读取文件正文；只有用户确认分析卡后，服务端才按卡片列明范围读取并发送相关正文。计划到达终态后，服务器把已持久化的步骤路径和结果写成简短回执，再允许当前会话继续。摘要只帮助恢复目标、偏好、已确认决定和未解决问题，不具备授权效力，也不代表文件现状；生成新方案时仍使用当前索引并重新核验文件。会话／摘要设计参考 Claude Code 的可恢复会话、摘要压缩与按需上下文模式，不采用其私有存储格式或自动加载仓库文件的行为。[会话恢复](https://code.claude.com/docs/en/sessions)、[项目记忆](https://code.claude.com/docs/en/memory)、[上下文窗口](https://code.claude.com/docs/en/context-window)。
+
 当前文档、图片和 OCR 约束：分类支持文本、PDF、DOCX 与 PPTX；PDF 使用 Bubblewrap 隔离的 Poppler，DOCX／PPTX 复用隔离 LibreOffice 转 PDF；每份最多前 20 页、PDF／Office 单件 16 MiB、单件正文 64 KiB、整批正文 256 KiB。扫描件 OCR 默认关闭；用户在分类确认卡主动选择后，每批最多处理 2 份 PDF／Office，仅对整份无文字层文档识别前 20 页，使用系统 Tesseract（chi_sim+eng）与 Poppler。Agent 分类分析最多并发 2 批，并在读取正文前占用处理槽。每页先渲染、识别和清理，单页图像限 4 MiB、累计渲染限 64 MiB、总时限 60 秒，并在 1 GiB 地址空间、Bubblewrap 无网络沙箱内运行；混合文字与扫描页暂不逐页补识别。建议本地模型先兼容 Ollama 常用 API，远程端点由用户配置；模型适配器需把提供商的工具调用转换为相同 JSON 操作格式，不让特定模型 SDK 成为文件权限层。[Ollama 本地项目](https://github.com/ollama/ollama/blob/8e4dad49f9f527762610fd419ee2ae39207f67a4/README.md)、[llama.cpp 服务参考](https://github.com/ggml-org/llama.cpp/blob/3e390af18de1131dda27913c00511725b4274c8a/README.md)、[文档抽取／OCR 参考](../reference/technical-coverage.md)。
 
 Shell 仍是高风险操作。命令在 Bubblewrap／prlimit 隔离命名空间中运行，范围以外路径不可见；工作区不继承宿主环境或网络，命令进程加入 systemd 委托的 cgroup v2，并受 CPU、内存、进程、时间、输出和暂存空间限制。生成计划时先比较暂存副本并展示新增／修改／删除影响；用户审计并启动计划后，这些变化作为 Shell 一步由协调器统一提交。默认 bypass 自动执行后续步骤；关闭后用户逐步执行。每次写回仍复核源状态、目标冲突和差异完整性，无法建立隔离或校验时拒绝执行；不在 Agent 主流程中为每个差异文件重复要求审批。Bubblewrap 不保证任意命令本身安全，也不承担 FileSage 的计划审批逻辑。[Bubblewrap 参考](https://github.com/containers/bubblewrap/blob/1fb0aa26d3eb66254f7742e704add7f82f41a582/README.md)、[Linux Landlock 参考](https://man7.org/linux/man-pages/man7/landlock.7.html)。
@@ -117,14 +119,14 @@ Shell 暂存方案在计划审计中提供真实文件差异；直接修改原�
 | ID | 选择 | 当前证据 | 剩余验证 |
 | --- | --- | --- | --- |
 | ADR-0001 | Go 模块化单体；格式工具使用受限子进程 | GitHub CI 的 Linux 构建、全量测试、`vet` 和 `govulncheck` 通过；Linux 服务已部署。 | 整机重启与不同发行版安装仍待验。 |
-| ADR-0002 | 服务本机 SQLite WAL；目录索引可重建 | 持久实例已迁移到 schema v27，完整性检查通过且无外键违规。 | 备份恢复、真实规模和容量基准。 |
+| ADR-0002 | 服务本机 SQLite WAL；目录索引可重建 | 持久实例当前为 schema v27，既有完整性与外键检查通过；隔离恢复的 v27 备份已由当前候选升级至 v28，持久实例尚未部署 v28。 | 真实数据恢复、真实规模和容量基准。 |
 | ADR-0003 | 文件系统为权威数据；限制软／硬链接写语义 | Linux 路径与并发测试通过；两卷复制、移动在非 root 服务下实测通过。 | 外部进程竞争、卸载及只读卷故障恢复。 |
 | ADR-0004 | tus 续传至私有暂存，校验后发布 | 浏览器续传、服务重启恢复及文件校验已有 E2E 记录。 | 大规模负载和浏览器断网选择器恢复。 |
 | ADR-0005 | 浏览器专用解析；Office 由隔离 LibreOffice 静态转 PDF | 基础 Office、PDF、表格、EPUB 与归档合成样本通过；解析输入受大小、时间和并发限制。 | 复杂真实文件、相机样本及完整浏览器兼容矩阵。 |
 | ADR-0006 | Bubblewrap 暂存 Shell、差异审阅与统一提交；能力不足时拒绝执行 | Linux systemd 服务已启用资源委托；隔离执行、计划审阅、bypass 写回和审计有 E2E 记录。 | 当前部署版本的完整浏览器审批流程及主机重启恢复。 |
 | ADR-0007 | React、TypeScript、Vite、Radix Primitives、Lucide | 生产构建与 320／360／390 CSS px 页面检查通过。 | 实体手机、键盘和完整无障碍验收。 |
 | ADR-0008 | Agent 文本编辑先生成私有候选，再审批与写回 | Linux 集成测试覆盖候选、冲突和清理边界。 | 真实业务文档的编辑流程。 |
-| ADR-0009 | 持久会话、类型化工具步骤；默认 `bypasspermission` | 多会话、计划审阅、逐步执行和 Shell 输出隐私有 Go／React 测试；持久数据库已完成 v27 迁移。 | 当前部署版本上所有关键 Agent 动作的完整浏览器验收。 |
+| ADR-0009 | 持久会话、类型化工具步骤；默认 `bypasspermission` | 多会话、终态计划续聊、会话摘要、计划审阅、逐步执行和 Shell 输出隐私有 Go／React 测试及窄屏双轮 Chromium E2E；SQLite 迁移脚本升级至 v28。 | 当前部署版本上所有关键 Agent 动作的完整浏览器验收。 |
 | AUD-01 | 默认回环；局域网须显式绑定可信私有地址 | 配置、Host／Origin 防护测试通过；当前实例绑定私有局域网接口并通过健康检查。 | 防火墙及路由器规则由部署者核验；服务不提供认证或 HTTPS。 |
 | AUD-02 | 专用非 root 服务账户，按需访问管理卷 | `filesage` 用户和 systemd 服务已核验；第二块 ext4 卷的挂载及文件操作通过。 | 主机重启、卸载和权限变化后的恢复。 |
 | AUD-03 | 以真实基线而非预设性能宣传验收 | 已定义索引、上传、阅读和故障恢复的测量方法。 | 10 万文件索引、20 GB 上传、并发与资源基线均未测量。 |

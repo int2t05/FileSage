@@ -110,7 +110,7 @@ func (s *Store) LatestPlanForTask(ctx context.Context, taskID string) (PlanRecor
 }
 
 // ReviewAgentPlan 记录人工计划审核，并按审核时固定的模式准备执行。
-func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string, at time.Time) (string, error) {
+func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVersion int, expectedMode string, at time.Time, confirmPermanentDelete bool) (string, error) {
 	if planID == "" || expectedVersion < 1 || expectedMode != "bypass" && expectedMode != "manual" {
 		return "", ErrConflict
 	}
@@ -147,12 +147,14 @@ func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVers
 	if mode != expectedMode {
 		return "", ErrConflict
 	}
-	var total, pending int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN approval_state = 'pending' AND execution_status = 'pending' THEN 1 ELSE 0 END), 0)
-		FROM operations WHERE plan_id = ? AND action <> 'run_shell'`, planID).Scan(&total, &pending); err != nil {
+	var total, pending, permanentDeletes int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*),
+		COALESCE(SUM(CASE WHEN approval_state = 'pending' AND execution_status = 'pending' THEN 1 ELSE 0 END), 0),
+		COALESCE(SUM(CASE WHEN action = 'permanent_delete' THEN 1 ELSE 0 END), 0)
+		FROM operations WHERE plan_id = ? AND action <> 'run_shell'`, planID).Scan(&total, &pending, &permanentDeletes); err != nil {
 		return "", err
 	}
-	if total < 1 || total != pending {
+	if total < 1 || total != pending || (permanentDeletes > 0) != confirmPermanentDelete {
 		return "", ErrConflict
 	}
 	if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'approved', execution_mode = ?, reviewed_at_ns = ?, updated_at_ns = ?
@@ -164,15 +166,15 @@ func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVers
 		return "", ErrConflict
 	}
 	if mode == "bypass" {
-		rows, err := tx.QueryContext(ctx, `SELECT id, source_path, target_path FROM operations WHERE plan_id = ? AND execution_status = 'pending' ORDER BY ordinal`, planID)
+		rows, err := tx.QueryContext(ctx, `SELECT id, action, source_path, target_path FROM operations WHERE plan_id = ? AND execution_status = 'pending' ORDER BY ordinal`, planID)
 		if err != nil {
 			return "", err
 		}
-		type operationAudit struct{ id, source, target string }
+		type operationAudit struct{ id, action, source, target string }
 		operations := make([]operationAudit, 0, total)
 		for rows.Next() {
 			var operation operationAudit
-			if err := rows.Scan(&operation.id, &operation.source, &operation.target); err != nil {
+			if err := rows.Scan(&operation.id, &operation.action, &operation.source, &operation.target); err != nil {
 				_ = rows.Close()
 				return "", err
 			}
@@ -194,10 +196,14 @@ func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVers
 			return "", ErrConflict
 		}
 		for _, operation := range operations {
+			message := "用户审核整份方案并允许自动执行"
+			if operation.action == "permanent_delete" {
+				message = "用户确认不可恢复删除并允许自动执行"
+			}
 			if _, err := appendAuditRecord(ctx, tx, AuditRecord{
 				TaskID: taskID, PlanID: planID, OperationID: operation.id,
 				EventType: "operation_approved", Actor: "user", Outcome: "approved",
-				Message: "用户审核整份方案并允许自动执行", SourcePath: operation.source, TargetPath: operation.target, CreatedAt: at,
+				Message: message, SourcePath: operation.source, TargetPath: operation.target, CreatedAt: at,
 			}); err != nil {
 				return "", err
 			}
@@ -206,6 +212,9 @@ func (s *Store) ReviewAgentPlan(ctx context.Context, planID string, expectedVers
 	outcome, message := "manual", "用户审核计划；后续每一步需单独确认"
 	if mode == "bypass" {
 		outcome, message = "bypass", "用户审核计划；后续步骤按 bypass 模式顺序运行"
+	}
+	if confirmPermanentDelete {
+		message += "；已确认计划中的永久删除不可恢复"
 	}
 	if _, err := appendAuditRecord(ctx, tx, AuditRecord{
 		TaskID: taskID, PlanID: planID, EventType: "plan_reviewed", Actor: "user", Outcome: outcome,

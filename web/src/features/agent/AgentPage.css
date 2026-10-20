@@ -511,14 +511,6 @@
   box-shadow: 0 4px 16px rgb(29 49 36 / 5%);
 }
 
-.agent-chat-composer-state {
-  margin: 0;
-  padding: 8px 4px 0;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  text-align: right;
-}
-
 .agent-chat-composer:focus-within {
   border-color: #a9c2b1;
   box-shadow: 0 0 0 3px rgb(69 125 91 / 10%);
@@ -580,6 +572,11 @@
   color: var(--color-text-muted);
   font-size: 10px;
   text-align: right;
+}
+
+.agent-composer-privacy-hint {
+  font-size: 11px;
+  text-align: left;
 }
 
 .agent-chat-composer .agent-primary-button {

@@ -23,9 +23,9 @@ MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验�
 - 支持续传、原件下载，以及常见压缩包的浏览、预览、创建和解压。
 - 在浏览器阅读常见图片、音视频、PDF、文本、Markdown、Office、表格、EPUB
   和压缩包；不支持或过于复杂的文件仍可下载。
-- 与 OpenAI-compatible 模型对话以澄清范围，审阅整份计划后执行。默认开启
-  `bypasspermission` 并按序运行；在设置中关闭后逐步启动。可展开步骤查看命令、
-  退出码和文件差异；Shell 原始输出不会保存或返回。
+- 与 OpenAI-compatible 模型对话以澄清任务，审阅整份计划后执行。同一会话可继续处理
+  后续任务，刷新后也可从历史恢复。默认开启 `bypasspermission` 并按序运行；在设置中
+  关闭后逐步启动。可展开步骤查看命令、退出码和文件差异；Shell 原始输出不会保存或返回。
 - 使用 SQLite 保存任务和搜索元数据，数据目录与管理文件分开；文件系统始终是事实来源。
 
 ## 快速开始
@@ -64,9 +64,11 @@ npm ci
 npm test
 npm run typecheck
 npm run build
+npx playwright install chromium
+npm run e2e
 ```
 
-[GitHub Actions](.github/workflows/ci.yml) 会运行相同检查。
+端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 会运行相同检查。
 
 ## 项目文档
 
@@ -86,8 +88,8 @@ npm run build
 ## 安全边界
 
 FileSage 面向可信个人网络，不提供用户认证、HTTPS 终止或公网防护。仅在本机或可信局域网
-使用，并配置防火墙。Agent 只会在用户确认任务和数据范围后，把相应提示词或文件正文发送给
-已配置模型；具体边界见 [Agent API 说明](docs/agent-conversation-api.md)。
+使用，并配置防火墙。Agent 对话消息会随每轮交流发送给已配置模型；文件正文仅在你确认分析卡后
+读取并发送。确认前请查看卡片列出的数据范围，具体边界见 [Agent API 说明](docs/agent-conversation-api.md)。
 
 ## 许可证
 

@@ -44,7 +44,8 @@ describe('Agent 会话与设置界面', () => {
 
   it('把聊天放在主视区并收起次要任务历史', () => {
     assert.match(agentPage, /<header className="agent-chat-header">/);
-    assert.match(agentPage, /<h2>\{selectedTaskId \? '任务记录' : selectedConversationId \? '对话' : '新对话'\}<\/h2>/);
+    assert.match(agentPage, /selectedConversationLabel = selectedConversationSummary \? conversationTitle\(selectedConversationSummary\) : '对话'/);
+    assert.match(agentPage, /<h2>\{selectedTaskId \? '任务记录' : selectedConversationId \? selectedConversationLabel : '新对话'\}<\/h2>/);
     assert.match(agentPage, /currentConversation && !currentConversation\.planId && <span className="agent-conversation-status">/);
     assert.doesNotMatch(agentPage, /activeConversationTitle/);
     assert.match(agentPage, /<details className="agent-task-history" open=\{Boolean\(selectedTaskId\)\}>/);
@@ -79,7 +80,14 @@ describe('Agent 会话与设置界面', () => {
     assert.match(settingsPage, /关闭后每一步都需确认/);
   });
 
-  it('Shell 工具结果只在步骤卡展示，不重复追加到对话', () => {
+  it('在输入框附近说明对话消息和文件正文的模型发送边界', () => {
+    assert.match(agentPage, /agent-privacy-hint/);
+    assert.match(agentPage, /对话消息会发送到当前模型；文件正文仅在你确认分析后发送/);
+    assert.match(agentPage, /'agent-privacy-hint'/);
+    assert.match(agentStyles, /\.agent-composer-privacy-hint\s*\{[^}]*font-size: 11px[^}]*text-align: left/);
+  });
+
+  it('计划结束后保留同一会话输入，并按当前计划状态启用发送', () => {
     const conversation = {
       planId: 'shell-plan',
       messages: [
@@ -92,8 +100,11 @@ describe('Agent 会话与设置界面', () => {
     assert.deepEqual(conversationMessagesForDisplay(conversation, shellPlan), conversation.messages.slice(0, 2));
     assert.deepEqual(conversationMessagesForDisplay(conversation, { ...shellPlan, planId: 'other' }), conversation.messages);
     assert.match(agentPage, /conversationMessagesForDisplay\(currentConversation, displayedPlan\)/);
-    assert.match(agentPage, /currentConversation\?\.planId \? \([\s\S]*?agent-chat-composer-state/);
-    assert.match(agentPage, /本轮已进入执行计划；新任务请新建对话/);
+    assert.match(agentPage, /<form className="agent-chat-composer"/);
+    assert.match(agentPage, /currentConversationCanSend/);
+    assert.match(agentPage, /任务已结束，继续描述下一步/);
+    assert.match(agentPage, /本会话消息接近上限，请新建对话继续/);
+    assert.doesNotMatch(agentPage, /本轮已进入执行计划；新任务请新建对话/);
   });
 
   it('待确认卡片作为操作回执时隐藏重复的助手复述', () => {

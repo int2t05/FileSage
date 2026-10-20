@@ -689,6 +689,19 @@ describe('Agent 对话 API 解析', () => {
     for (const state of ['processing', 'analyzing', 'awaiting_approval']) {
       assert.equal(canSendAgentMessage(state), false, state);
     }
+    for (const status of ['completed', 'failed', 'invalidated', 'rejected', 'cancelled']) {
+      assert.equal(canSendAgentMessage('awaiting_approval', status, 0, true), true, `linked ${status}`);
+    }
+    for (const status of ['awaiting_approval', 'approved', 'executing']) {
+      assert.equal(canSendAgentMessage('awaiting_approval', status), false, status);
+      assert.equal(canSendAgentMessage('failed', status, 0, true), false, `linked failed ${status}`);
+    }
+    assert.equal(canSendAgentMessage('failed', 'completed', 0, true), true);
+    assert.equal(canSendAgentMessage('clarifying', 'completed', 0, true), false);
+    assert.equal(canSendAgentMessage('clarifying', undefined, 97), true);
+    assert.equal(canSendAgentMessage('clarifying', undefined, 98), false);
+    assert.equal(canSendAgentMessage('awaiting_approval', 'completed', 96, true), true);
+    assert.equal(canSendAgentMessage('awaiting_approval', 'completed', 97, true), false);
     assert.equal(canConfirmAgentAnalysis(parseAgentConversation(conversation())), true);
     assert.equal(canConfirmAgentAnalysis(parseAgentConversation(conversation({ analysisCard: null }))), false);
     assert.equal(canConfirmAgentAnalysis(parseAgentConversation(conversation({ state: 'clarifying' }))), false);

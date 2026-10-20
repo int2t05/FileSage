@@ -39,7 +39,17 @@ func TestStartPlanUsesPersistedDefaultBypassAfterReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completed, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass")
+	if _, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass", true); !errors.Is(err, ErrConflict) {
+		t.Fatalf("non-delete plan with irreversible-delete confirmation = %v, want conflict", err)
+	}
+	pending, err := service.store.Plan(ctx, plan.ID)
+	if err != nil || pending.Status != store.PlanAwaitingApproval || pending.ReviewedAt != nil {
+		t.Fatalf("mismatched confirmation changed plan: (%#v, %v)", pending, err)
+	}
+	if _, err := root.LstatEntry("archive"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("mismatched confirmation executed plan: %v", err)
+	}
+	completed, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass", false)
 	if err != nil || completed.Status != store.PlanCompleted || completed.ExecutionMode != "bypass" || completed.ReviewedAt == nil {
 		t.Fatalf("bypass start = (%#v, %v)", completed, err)
 	}
@@ -61,7 +71,7 @@ func TestStartPlanRejectsBypassWhenPermissionIsDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass"); !errors.Is(err, store.ErrConflict) {
+	if _, err := service.StartPlan(ctx, plan.ID, plan.Version, "bypass", false); !errors.Is(err, store.ErrConflict) {
 		t.Fatalf("bypass with permission disabled = %v, want conflict", err)
 	}
 	current, err := metadata.Plan(ctx, plan.ID)
@@ -103,7 +113,7 @@ func TestManualPlanRunsOnlyTheConfirmedNextStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approved, err := service.StartPlan(ctx, plan.ID, plan.Version, "manual")
+	approved, err := service.StartPlan(ctx, plan.ID, plan.Version, "manual", false)
 	if err != nil || approved.Status != store.PlanApproved || approved.ExecutionMode != "manual" || approved.ReviewedAt == nil {
 		t.Fatalf("manual plan review = (%#v, %v)", approved, err)
 	}

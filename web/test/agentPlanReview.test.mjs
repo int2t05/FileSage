@@ -28,10 +28,10 @@ const helpers = await import(`data:text/javascript;base64,${Buffer.from(outputTe
 describe('Agent 计划与步骤展示', () => {
   it('使用计划级开始与手动逐步执行回调，不展示逐项批准入口', () => {
     assert.match(source, /executionMode: ExecutionMode/);
-    assert.match(source, /onStartPlan: \(\) => void/);
+    assert.match(source, /onStartPlan: \(confirmPermanentDelete: boolean\) => void/);
     assert.match(source, /onResumePlan: \(\) => void/);
     assert.match(source, /onRunStep: \(operationId: string\) => void/);
-    assert.match(source, /onClick=\{onStartPlan\}/);
+    assert.match(source, /onClick=\{\(\) => onStartPlan\(permanentDeleteCount > 0 && permanentDeleteConfirmed\)\}/);
     assert.match(source, /onClick=\{\(\) => onRunStep\(operation\.id\)\}/);
     assert.match(source, /<ol className="agent-step-list" aria-label="执行步骤">/);
     assert.doesNotMatch(source, /onDecision|onShellChangeDecision|批准此项/);

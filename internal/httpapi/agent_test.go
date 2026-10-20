@@ -33,17 +33,19 @@ type agentServiceStub struct {
 
 type agentExecutionServiceStub struct {
 	*agentServiceStub
-	starts  int
-	steps   int
-	stepID  string
-	version int
-	mode    string
+	starts                 int
+	steps                  int
+	stepID                 string
+	version                int
+	mode                   string
+	confirmPermanentDelete bool
 }
 
-func (stub *agentExecutionServiceStub) StartPlan(_ context.Context, _ string, version int, mode string) (store.PlanRecord, error) {
+func (stub *agentExecutionServiceStub) StartPlan(_ context.Context, _ string, version int, mode string, confirmPermanentDelete bool) (store.PlanRecord, error) {
 	stub.starts++
 	stub.version = version
 	stub.mode = mode
+	stub.confirmPermanentDelete = confirmPermanentDelete
 	return stub.plan, stub.err
 }
 
@@ -366,15 +368,23 @@ func TestAgentPlanStartAndStepRoutesForwardVersionAndReturnReviewMode(t *testing
 	stub := &agentExecutionServiceStub{agentServiceStub: &agentServiceStub{plan: store.PlanRecord{
 		ID: "plan-1", TaskID: "task-1", Version: 3, Status: store.PlanApproved,
 		ExecutionMode: "manual", ReviewedAt: func() *time.Time { value, _ := time.Parse(time.RFC3339, reviewedAt); return &value }(),
-		Operations: []store.OperationRecord{{ID: "op-1", Ordinal: 0, Action: "create_directory", TargetPath: "archive", Approval: store.ApprovalPending, Status: store.OperationPending}},
+		Operations: []store.OperationRecord{{ID: "op-1", Ordinal: 0, Action: "permanent_delete", SourcePath: "archive/old.txt", Approval: store.ApprovalPending, Status: store.OperationPending}},
 	}}}
 	handler := NewWithAgent(nil, nil, nil, stub, nil, nil)
+
+	request := httptest.NewRequest(http.MethodPost, "http://filesage.local/api/v1/agent/plans/plan-1/start", strings.NewReader(`{"expectedPlanVersion":3,"expectedExecutionMode":"manual"}`))
+	request.Header.Set("Origin", "http://filesage.local")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || stub.starts != 0 {
+		t.Fatalf("missing irreversible-delete confirmation status=%d starts=%d body=%s", response.Code, stub.starts, response.Body.String())
+	}
 
 	for _, test := range []struct {
 		path string
 		body string
 	}{
-		{path: "/api/v1/agent/plans/plan-1/start", body: `{"expectedPlanVersion":3,"expectedExecutionMode":"manual"}`},
+		{path: "/api/v1/agent/plans/plan-1/start", body: `{"expectedPlanVersion":3,"expectedExecutionMode":"manual","confirmPermanentDelete":true}`},
 		{path: "/api/v1/agent/plans/plan-1/steps/op-1/execute", body: `{"expectedPlanVersion":3}`},
 	} {
 		request := httptest.NewRequest(http.MethodPost, "http://filesage.local"+test.path, strings.NewReader(test.body))
@@ -392,8 +402,8 @@ func TestAgentPlanStartAndStepRoutesForwardVersionAndReturnReviewMode(t *testing
 			t.Fatalf("route %s response=%s err=%v", test.path, response.Body.String(), err)
 		}
 	}
-	if stub.starts != 1 || stub.steps != 1 || stub.version != 3 || stub.stepID != "op-1" || stub.mode != "manual" {
-		t.Fatalf("execution calls=(%d,%d), step=%q version=%d mode=%q", stub.starts, stub.steps, stub.stepID, stub.version, stub.mode)
+	if stub.starts != 1 || stub.steps != 1 || stub.version != 3 || stub.stepID != "op-1" || stub.mode != "manual" || !stub.confirmPermanentDelete {
+		t.Fatalf("execution calls=(%d,%d), step=%q version=%d mode=%q irreversible confirmation=%t", stub.starts, stub.steps, stub.stepID, stub.version, stub.mode, stub.confirmPermanentDelete)
 	}
 }
 

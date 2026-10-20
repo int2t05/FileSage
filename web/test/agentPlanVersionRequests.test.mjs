@@ -98,10 +98,10 @@ describe('Agent 方案版本请求', () => {
       }), { status: 200 });
     };
 
-    const result = await api.startAgentPlan('plan/1', 4, 'bypass');
+    const result = await api.startAgentPlan('plan/1', 4, 'bypass', true);
     assert.equal(request.url, '/api/v1/agent/plans/plan%2F1/start');
     assert.equal(request.init.method, 'POST');
-    assert.deepEqual(JSON.parse(request.init.body), { expectedPlanVersion: 4, expectedExecutionMode: 'bypass' });
+    assert.deepEqual(JSON.parse(request.init.body), { expectedPlanVersion: 4, expectedExecutionMode: 'bypass', confirmPermanentDelete: true });
     assert.equal(result.executionMode, 'bypass');
     assert.equal(result.reviewedAt, '2026-10-18T01:00:00Z');
   });

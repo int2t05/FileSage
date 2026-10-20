@@ -13,6 +13,8 @@ const repoDir = path.resolve(webDir, '..');
 const port = Number(process.env.FILESAGE_E2E_PORT || 4179);
 const stateFile = path.join(os.tmpdir(), `filesage-agent-e2e-${port}.json`);
 const targetName = 'agent-e2e-reviewed';
+const followupName = 'agent-e2e-followup';
+const separateConversationName = 'agent-e2e-separate-session';
 
 // 用参数数组启动命令，避免在 Shell 中拼接测试路径。
 function run(command, args, cwd) {
@@ -46,17 +48,24 @@ async function answerModel(request, response) {
   try {
     const body = JSON.parse(await readBody(request));
     const userMessage = body.messages?.findLast((message) => message.role === 'user')?.content;
-    if (body.model !== 'filesage-e2e' || typeof userMessage !== 'string' || !userMessage.includes(targetName)) {
+    const isFollowup = typeof userMessage === 'string' && userMessage.includes(followupName);
+    const isSeparateConversation = typeof userMessage === 'string' && userMessage.includes(separateConversationName);
+    const target = isFollowup ? followupName : isSeparateConversation ? separateConversationName : targetName;
+    const hasMemory = body.messages?.some((message) => message.role === 'user'
+      && message.content.includes('用户希望在同一会话持续处理文件。'));
+    if (body.model !== 'filesage-e2e' || typeof userMessage !== 'string'
+      || !userMessage.includes(target) || isFollowup && !hasMemory) {
       response.writeHead(422, { 'Content-Type': 'application/json' }).end('{"error":"unexpected test prompt"}');
       return;
     }
     const content = JSON.stringify({
       state: 'ready',
-      reply: `将在管理根目录新建文件夹 ${targetName}，请确认。`,
-      goal: '创建浏览器端到端验收文件夹',
+      reply: `将在管理根目录新建文件夹 ${target}，请确认。`,
+      contextSummary: '用户希望在同一会话持续处理文件。',
+      goal: isFollowup ? '继续处理后续文件整理' : isSeparateConversation ? '新会话创建验收文件夹' : '创建浏览器端到端验收文件夹',
       action: 'create_directory',
       filePath: '',
-      targetPath: targetName,
+      targetPath: target,
     });
     response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
   } catch {

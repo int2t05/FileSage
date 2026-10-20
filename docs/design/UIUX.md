@@ -1,6 +1,6 @@
 # FileSage UI/UX 设计基线
 
-更新：2026-10-19。状态：**设计基线已定；Agent 对话、会话切换、计划审阅和两种执行模式已实现；隔离环境中的真实模型 Shell 新建文件流程通过端到端复验**。用户指定 React，并授权其余设计按建议定稿。Agent 以自然语言对话为入口；对话、计划和执行结果在同一会话区呈现。bypass 默认开启，审阅计划后自动执行；关闭后一次只执行一步。Shell 变化以行级 Diff 直接呈现，完整命令与输出折叠在同一工具步骤中。文件、照片、Agent 和任务页的窄屏浏览器视口已检查；实体手机触控与软键盘验收由设备持有人后续完成。持久服务 `:8080` 的 Go 后端尚未切换到本次工作树版本；隔离 QA `:18081` 已更新 React 静态构建。具体能力与未验边界见 [README](../../README.md)、[ADR-0009](adr/0009-agent-tool-steps.md) 和[实施路线](../IMPLEMENTATION_PLAN.md)。
+**设计状态：** React 页面按本基线实现；窄屏浏览器检查已通过，实体手机触控与软键盘验收仍待完成。具体实现和未验边界见[验收记录](../ACCEPTANCE.md)、[ADR-0009](adr/0009-agent-tool-steps.md)和[实施路线](../IMPLEMENTATION_PLAN.md)。
 
 ## 设计方向
 
@@ -27,7 +27,7 @@ FileSage 应像一个目录优先的文件工作台：真实目录是导航和�
 
 **上传：**选择文件／文件夹 → 检查目标目录、文件数与同名项 → 进入队列 → 查看单项／总体进度、速率及暂停状态 → 完成后打开目标目录。网络中断或刷新后从任务列表恢复；若浏览器要求重新选文件，清楚说明待续传项和匹配条件。
 
-**Agent 文件操作：**选择或新建会话 → 用自然语言描述目标 → Agent 澄清 → 用户确认任务、文件范围与数据使用 → 展示按复杂度组织的计划 → 用户审阅并启动计划 → 默认连续执行；手动模式每次只启动当前步骤 → 展示当前步骤、状态与结果。待确认卡片承担结构化回执，不在聊天中重复方案；卡片以路径和实际发送的数据为主，具体模型标识等配置细节默认折叠。过长的历史助手回复默认折叠，用户可展开原文。Bash 步骤直接显示命令摘要和需要注意的结果；步骤状态只出现一次，成功写入不再重复通用结果句。统一 Diff 直接展示文件名、行号及增删内容；完整命令、范围和多行输出收在“命令与结果”中。任务历史沿用同一张工具卡，不重复展示任务状态。目录、二进制和已提交修改／删除的旧正文说明为何无法生成 Diff，不伪造旧内容。永久删除在计划级确认时明确标记不可恢复。计划中的工具步骤均由服务端校验，当前首期不在执行中动态追加依赖步骤。
+**Agent 文件操作：**选择或新建会话 → 用自然语言描述目标 → Agent 澄清 → 用户确认任务、文件范围与数据使用 → 展示按复杂度组织的计划 → 用户审阅并启动计划 → 默认连续执行；手动模式每次只启动当前步骤 → 展示当前步骤、状态与结果。任务进入终态后同一会话恢复输入并显示结果回执；待审批或执行中保持锁定。待确认卡片承担结构化回执，不在聊天中重复方案；卡片以路径和实际发送的数据为主，具体模型标识等配置细节默认折叠。过长的历史助手回复默认折叠，用户可展开原文。Bash 步骤直接显示命令摘要和需要注意的结果；步骤状态只出现一次，成功写入不再重复通用结果句。统一 Diff 直接展示文件名、行号及增删内容；完整命令、范围和多行输出收在“命令与结果”中。任务历史沿用同一张工具卡，不重复展示任务状态。目录、二进制和已提交修改／删除的旧正文说明为何无法生成 Diff，不伪造旧内容。永久删除在计划级确认时明确标记不可恢复。计划中的工具步骤均由服务端校验，当前首期不在执行中动态追加依赖步骤。
 
 **阅读与并发编辑：**文件详情打开阅读页或独立标签页，允许同时阅读多个文件。Agent 或外部工具改动正在阅读的文件时，旧内容明确标记为旧版本并提供重新加载；用户编辑中的草稿不丢弃，保存发现变化时进入“重新加载／另存为”冲突处理，不静默覆盖。
 
@@ -73,30 +73,17 @@ Agent 手机：单栏对话 | 横向会话切换 | 任务确认 | 步骤与当�
 
 设计令牌：间距按 4 px 递增，卡片圆角 8 px，主要操作高度 40 px（手机触控区至少 44 px），正文 14–16 px、辅助信息不低于 12 px；强调色为松绿，危险色仅用于删除／冲突等状态。CSS 变量集中维护颜色、间距、圆角与阴影，避免组件自行定义色值。
 
-## 调研依据与证据边界
+## 参考依据与边界
 
-### Agent 新对话视觉复核（2026-10-19）
+- **文件浏览：**参考 [Google Drive](https://support.google.com/drive/answer/2375177?hl=zh-Hans)、[Nextcloud Files](https://docs.nextcloud.com/server/stable/user_manual/en/files/access_webgui.html)和 [Dropbox Quick View](https://help.dropbox.com/view-edit/preview)的路径导航、列表／网格、就近排序、行操作和预览布局。
+- **Agent：**参考 [Claude Code 计划审阅流程](https://code.claude.com/docs/en/common-workflows#plan-before-editing)和 [GitHub Copilot Agent Sessions](https://docs.github.com/en/copilot/how-tos/github-copilot-app/agent-sessions)的持久会话、计划先于执行和会话导航；FileSage 的文件根目录与人工门禁仍由自身规则决定。
+- **组件与图标：**采用 [Radix Primitives](https://www.radix-ui.com/primitives/docs/overview/accessibility)管理基础交互，以 [Lucide](https://lucide.dev/guide/)作为统一图标库。其他候选与许可证见[前端和图标参考索引](../../reference/catalog.md)。
+- **产品对照：**参考范围覆盖 Nextcloud Files、File Browser、Filestash、Copyparty、Immich、PhotoPrism、PiGallery2、Paperless-ngx 和 Stirling-PDF。公开仓库仅保留结论、来源与哈希，不分发上游原文；资料清单见[参考目录](../../reference/README.md)及[官方页面来源](../../reference/official/manifest.json)。
 
-实测新对话空态后，发现主聊天区留白过大、引导内容靠近输入框，会话栏和聊天区的表面层次不足。调整为空态垂直居中、文件语义图标、简短流程说明与三条常见任务示例；点击示例只填入输入框，不会自动提交。聊天区使用浅底、输入框保持白底；窄屏与平板改为单列会话切换，手机小屏收起示例以留出输入空间。参考 Codex 官方工作区截图中的会话列表、新对话和快捷提示，以及 GitHub Copilot 的 Agent 会话导航和计划模式；仅借鉴结构，不复制视觉风格：[Codex App 工作区截图](https://developers.openai.com/images/blog/long-horizon-4.jpeg)、[Codex 会话工作流](https://openai.com/index/introducing-the-codex-app/)、[GitHub Copilot Agent Sessions](https://docs.github.com/en/copilot/how-tos/github-copilot-app/agent-sessions)。
-
-### 本轮布局复核（2026-10-19）
-
-在 1280 px 浏览器视口复查 FileSage 后，桌面文件页的目录栏只显示“全部文件”，却挤占列表宽度；搜索、排序／视图、筛选分散在多行。桌面改为目录内容通栏，保留路径面包屑、列表／网格、排序和按需筛选；较窄窗口继续用目录抽屉浏览子文件夹。Agent 改为占满可用视口的会话工作区，让长对话和计划在对话区内滚动；助手回复以正文呈现，用户消息、审批卡片保留清晰区分。
-
-本轮对本机开发页进行第二次视觉复核。文件页把列表选择并入列表表头，减少独立控制行；提高文件名、路径、大小、修改时间等主要信息的字号。网格视图保留独立全选入口。Agent 空会话增加清晰标题与一句流程说明，保留输入区和配置状态，让页面留白有明确起点。Google Drive 官方说明列表为默认视图，并将排序和列表／网格控制放在文件列表上下文中；Nextcloud 手册以路径面包屑、文件行操作和按需详情组织目录浏览；Dropbox 的 Quick View 说明展示文件时仍可保留列表与导航。FileSage 仅借鉴这些信息组织方式，不复刻其品牌、配色或装饰。来源：[Google Drive 列表与排序](https://support.google.com/drive/answer/2375177?hl=EN)、[Nextcloud 文件界面](https://docs.nextcloud.com/server/stable/user_manual/en/files/access_webgui.html)、[Dropbox 快速预览](https://help.dropbox.com/view-edit/preview)。
-
-Agent 对话页复核发现，原界面重复显示首条用户消息、主聊天区缺少视觉边界，会话状态也挤占历史列表空间。调整后由会话侧栏和有轻边界的聊天区组成：标题留在历史列表，聊天栏只显示“对话”与当前状态；会话行压缩为标题、时间和状态两层，正文与输入文字提高到 14 px，消息、审批卡和计划共用居中阅读宽度，输入框固定在同一列底部。历史任务默认折叠，查看任务时自动展开；新会话提供一句引导和三条仅预填的任务示例，手机收起示例。窄屏保留横向切换会话，聊天和输入区改为单列；短高手机进一步压缩顶部会话栏、空态与输入框，确保发送按钮位于手机导航上方。Claude Code 将计划审阅置于编辑前；GitHub Copilot App 将会话放在侧栏，并允许用户选择交互、计划或自动执行模式。这里只借鉴对话、计划、执行的顺序和会话导航，不复制品牌视觉或未核验的像素细节：[Claude Code 工作流](https://code.claude.com/docs/en/common-workflows#plan-before-editing)、[Copilot App Agent Sessions](https://docs.github.com/en/copilot/how-tos/github-copilot-app/agent-sessions)。
-
-取舍参考 [Nextcloud 文件界面手册](https://docs.nextcloud.com/server/stable/user_manual/en/files/access_webgui.html) 的面包屑、列表／网格、行操作和按需详情，以及 [Google Drive 列表与排序说明](https://support.google.com/drive/answer/2375177?hl=en) 的列表／网格切换与就近排序控制。Agent 的计划审批流程参考 [Claude Code 工作流文档](https://code.claude.com/docs/en/common-workflows#plan-before-editing)；这些资料用于交互模式对照，本轮未将文档文字或仓库 README 当作竞品的像素级视觉证据，也不复刻品牌风格。
-
-真实产品参考集中在文件管理、照片和文档管理：Nextcloud Files、File Browser、Filestash、Copyparty、Immich、PhotoPrism、PiGallery2、Paperless-ngx 和 Stirling-PDF。它们分别覆盖目录导航、批量管理、照片时间线、文档元数据过滤和预览工作流；这些是产品类别匹配与公开文档／代码结构观察，不表示已在本地部署做可用性测试。对 Paperless-ngx 和 Nextcloud 的公开截图只取得了搜索结果描述，未直接核验像素级视觉细节，因此本稿不把具体视觉细节作为设计证据。
-
-新增前端参考为 8 个 GitHub 仓库；[前端与图标仓库索引](../../reference/catalog.md)链接至固定提交和上游资料。公开仓库只保留研究结论、来源及哈希清单，不分发上游原文；官方页面来源见 [reference/official](../../reference/official/manifest.json)。资料检索与本地完整性验证方法见 [reference README](../../reference/README.md)。组件候选的官方材料包括 [Radix 无障碍说明](https://www.radix-ui.com/primitives/docs/overview/accessibility)、[Radix 组件介绍](https://www.radix-ui.com/primitives/docs/overview/introduction)、[Tabler 许可](https://tabler.io/license)、[Lucide 指南](https://lucide.dev/guide/)、[Phosphor](https://phosphoricons.com/)、[shadcn/ui 文档](https://ui.shadcn.com/docs)和 [PrimeVue](https://primevue.org/)。
-
-来源是设计取舍的线索，不是对当前版本、长期维护、安全性、可访问性或 FileSage 性能的背书。正式实现后仍需检查键盘、触屏、长目录、窄屏、依赖体积和许可证，并在真实手机浏览器验收。
+这些来源用于比较交互模式，不代表 FileSage 对其视觉、性能、安全性或可访问性作出背书。设计通过浏览器的窄屏检查；键盘、触屏和真实手机验收仍以[验收记录](../ACCEPTANCE.md)为准。
 
 ## 交付与边界
 
 [React 交互原型](prototype/README.md)覆盖文件、照片、Agent 审批和任务页面，并提供手机视图切换，用于检查布局与关键状态。原型中的上传、文件操作和审批只演示前端状态，不会访问或修改真实文件。生产页面已覆盖主要信息架构；未通过真实浏览器或服务器验证的功能继续按实施路线标注。
 
-目录优先、通用文件默认列表、照片默认网格、浅色主题、五项手机底栏、React + TypeScript + Vite、Radix 基础交互组件和 Lucide 图标构成本次设计基线。桌面重复面包屑与重复产品说明已移除；服务状态在桌面侧栏、手机顶部各显示一次。文件、上传、任务、Agent 与主要阅读流程已有实现；具体格式、操作和部署验收状态见 [PRD](../PRD.md)、[TECH](../TECH.md) 与[实施路线](../IMPLEMENTATION_PLAN.md)。窄屏浏览器视口已检查，真实手机触控验收仍由用户完成。
+目录优先、通用文件默认列表、照片默认网格、浅色主题、五项手机底栏、React + TypeScript + Vite、Radix 基础交互组件和 Lucide 图标构成设计基线。桌面侧栏和手机顶部各显示一次服务状态。产品范围和技术边界见 [PRD](../PRD.md) 与 [TECH](../TECH.md)。

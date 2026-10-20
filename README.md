@@ -25,11 +25,13 @@ remaining checks.
 - Read common image, audio, video, PDF, text, Markdown, Office, spreadsheet,
   EPUB and archive formats in the browser. Unsupported or complex files remain
   available for download.
-- Ask an OpenAI-compatible model to analyze an explicitly confirmed scope.
-  Review the complete plan once. `bypasspermission` is on by default and runs
-  steps in order; turn it off in Agent settings to run one step at a time.
-  Expand a step to inspect its command, exit code and file diff, then check the
-  audit history. Raw Shell output is discarded rather than stored or returned.
+- Ask an OpenAI-compatible model to clarify a task, then review the complete
+  plan before it runs. Continue with follow-up tasks in the same saved
+  conversation, including after a refresh. `bypasspermission` is on by default
+  and runs steps in order; turn it off in Agent settings to run one step at a
+  time. Expand a step to inspect its command, exit code and file diff, then
+  check the audit history. Raw Shell output is discarded rather than stored or
+  returned.
 - Keep SQLite task and search metadata outside the managed files. The filesystem remains the source of truth.
 
 ## Quick start
@@ -97,9 +99,10 @@ the [security reporting guide](SECURITY.md) for private reports.
 
 FileSage is intended for a trusted personal network. It does not authenticate
 users, provide HTTPS termination or protect an internet-facing deployment. Keep
-it on loopback or a trusted LAN behind a firewall. Agent prompts and file
-contents are sent to the configured model only after the user confirms the
-relevant task and data scope; see the [Agent API notes](docs/agent-conversation-api.md).
+it on loopback or a trusted LAN behind a firewall. Agent chat messages are sent
+to the configured model as you converse. File contents are read and sent only
+after you confirm an analysis card; review its listed data types first. See the
+[Agent API notes](docs/agent-conversation-api.md).
 
 ## License
 

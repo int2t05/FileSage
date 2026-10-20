@@ -553,6 +553,15 @@ export function AgentPage({
   }
 
   const currentConversation = conversation?.id === selectedConversationId ? conversation : null;
+  const selectedConversationSummary = conversationHistory.find((item) => item.id === selectedConversationId) ?? null;
+  const selectedConversationLabel = selectedConversationSummary ? conversationTitle(selectedConversationSummary) : '对话';
+  const currentPlanStatus = currentConversation?.planId && plan?.planId === currentConversation.planId ? plan.status : undefined;
+  const currentMessageCount = currentConversation?.messages.length ?? 0;
+  const currentHasLinkedPlan = Boolean(currentConversation?.planId);
+  const currentConversationCanSend = canSendAgentMessage(currentConversation?.state ?? null, currentPlanStatus, currentMessageCount, currentHasLinkedPlan);
+  const conversationMessageLimitReached = Boolean(currentConversation
+    && canSendAgentMessage(currentConversation.state, currentPlanStatus, 0, currentHasLinkedPlan)
+    && !currentConversationCanSend);
   const needsAnalysisConfirmation = currentConversation?.state === 'awaiting_confirmation';
   const analysisCard = currentConversation?.state === 'awaiting_confirmation' ? currentConversation.analysisCard : null;
   const analysisCardView = analysisCard
@@ -793,7 +802,7 @@ export function AgentPage({
     event.preventDefault();
     const message = draft.trim();
     if (!message || !modelStatus?.available || conversationBusy || actionBusy) return;
-    if (!canSendAgentMessage(currentConversation?.state ?? null)) return;
+    if (!currentConversationCanSend) return;
     const initialMessage = !selectedConversationId && activeLaunchContext
       ? messageWithLaunchContext(message, activeLaunchContext)
       : message;
@@ -1001,8 +1010,10 @@ export function AgentPage({
     }
   }
 
-  async function runPlan() {
+  async function runPlan(confirmPermanentDelete: boolean) {
     if (!plan || !canStartPlanReview(plan) || actionBusy || agentSettingsLoading || agentSettingsError) return;
+    const containsPermanentDelete = plan.operations.some((operation) => operation.action === 'permanent_delete');
+    if (containsPermanentDelete !== confirmPermanentDelete) return;
     const planId = plan.planId;
     const planVersion = plan.planVersion;
     const expectedMode = bypassPermission ? 'bypass' : 'manual';
@@ -1013,7 +1024,7 @@ export function AgentPage({
       if (latestMode !== expectedMode) {
         throw new AgentApiError('Agent 执行模式刚刚发生变化，请重新核对后再确认计划。');
       }
-      return startAgentPlan(planId, planVersion, expectedMode);
+      return startAgentPlan(planId, planVersion, expectedMode, confirmPermanentDelete);
     });
   }
 
@@ -1132,7 +1143,7 @@ export function AgentPage({
   const taskHistory = history.filter((item) => !conversationTaskIds.has(item.id));
   const composerLocked = Boolean(conversationBusy || actionBusy
     || (selectedConversationId && currentConversation === null)
-    || !canSendAgentMessage(currentConversation?.state ?? null));
+    || !currentConversationCanSend);
   const composerCanSend = modelStatus?.available === true
     && !modelStatusLoading
     && !modelStatusError
@@ -1230,7 +1241,7 @@ export function AgentPage({
         </aside>
         <section className="agent-chat-panel" aria-label="与整理助手对话">
           <header className="agent-chat-header">
-            <h2>{selectedTaskId ? '任务记录' : selectedConversationId ? '对话' : '新对话'}</h2>
+            <h2>{selectedTaskId ? '任务记录' : selectedConversationId ? selectedConversationLabel : '新对话'}</h2>
             {currentConversation && !currentConversation.planId && <span className="agent-conversation-status">{conversationStatusLabel(currentConversation.state)}</span>}
           </header>
           <div className={`agent-conversation-flow${isNewConversation ? ' is-empty' : ''}`}>
@@ -1451,7 +1462,7 @@ export function AgentPage({
                 executionModeError={agentSettingsLoading ? '正在读取 Agent 执行设置，暂不能开始计划。' : agentSettingsError}
                 onRetry={() => setPlanRefreshKey((current) => current + 1)}
                 onRefresh={() => { void refreshCurrentPlan(); }}
-                onStartPlan={() => { void runPlan(); }}
+                onStartPlan={(confirmPermanentDelete) => { void runPlan(confirmPermanentDelete); }}
                 onResumePlan={() => { void resumePlan(); }}
                 onRunStep={(operationId) => { void runStep(operationId); }}
                 editable={Boolean(selectedConversationId)}
@@ -1464,9 +1475,6 @@ export function AgentPage({
             )}
           </div>
 
-          {currentConversation?.planId ? (
-            <p className="agent-chat-composer-state" role="status">本轮已进入执行计划；新任务请新建对话。</p>
-          ) : (
           <form className="agent-chat-composer" onSubmit={(event) => { void submitMessage(event); }}>
             <label className="agent-visually-hidden" htmlFor="agent-chat-input">整理需求消息</label>
             {activeLaunchContext && !selectedConversationId && !selectedTaskId && (
@@ -1490,12 +1498,17 @@ export function AgentPage({
               }}
               placeholder={conversationLoading || conversationBusy ? '请稍候…'
                   : conversationError ? '恢复对话后继续'
-                    : displayedPlan?.status === 'completed' ? '任务已完成，可新建对话'
+                  : conversationMessageLimitReached ? '本会话消息接近上限，请新建对话继续'
+                  : displayedPlan && canSendAgentMessage('awaiting_approval', displayedPlan.status, 0, true) ? '任务已结束，继续描述下一步…'
                       : currentConversation?.state === 'awaiting_confirmation' ? '有补充要求可以继续说…'
                         : currentConversation?.state === 'awaiting_approval' ? '请先审核方案'
                           : selectedConversationId ? '回复或补充整理要求…' : '描述你想完成的文件整理…'}
               disabled={composerLocked}
-              aria-describedby={composerError ? 'agent-composer-error' : showModelUnavailable ? 'agent-model-message' : undefined}
+              aria-describedby={[
+                composerError ? 'agent-composer-error' : '',
+                showModelUnavailable ? 'agent-model-message' : '',
+                'agent-privacy-hint',
+              ].filter(Boolean).join(' ') || undefined}
             />
             <div className="agent-chat-composer-footer">
               {showModelUnavailable ? (
@@ -1512,10 +1525,10 @@ export function AgentPage({
                 </button>
               </div>
             </div>
+            <p className="agent-composer-hint agent-composer-privacy-hint" id="agent-privacy-hint">对话消息会发送到当前模型；文件正文仅在你确认分析后发送。</p>
             <p className="agent-composer-hint agent-composer-keyboard-hint">{composerCanSend ? 'Enter 发送 · Shift + Enter 换行' : 'Shift + Enter 换行'}</p>
             {composerError && <p className="agent-composer-error" id="agent-composer-error" role="alert">{composerError}</p>}
           </form>
-          )}
         </section>
 
       </div>
