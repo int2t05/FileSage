@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -1089,11 +1090,57 @@ func (s *Service) removeCancelledTextPayloads(plan store.PlanRecord) error {
 }
 
 func (s *Service) executeOperation(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
+	startedAt := time.Now()
+	slog.Info("agent tool step started", "plan_id", planID, "operation_id", op.ID, "action", op.Action)
 	tool, ok := agentTools()[op.Action]
 	if !ok || tool.execute == nil {
+		slog.Warn("agent tool step rejected", "plan_id", planID, "operation_id", op.ID, "action", op.Action, "reason", "tool_not_registered")
 		return store.PlanRecord{}, ErrUnsupported
 	}
-	return tool.execute(s, ctx, planID, scope, op)
+	plan, err := tool.execute(s, ctx, planID, scope, op)
+	status := "unknown"
+	for _, current := range plan.Operations {
+		if current.ID == op.ID {
+			status = string(current.Status)
+			break
+		}
+	}
+	level := slog.LevelInfo
+	if err != nil || status != string(store.OperationSucceeded) {
+		level = slog.LevelWarn
+	}
+	attributes := []slog.Attr{
+		slog.String("plan_id", planID),
+		slog.String("operation_id", op.ID),
+		slog.String("action", op.Action),
+		slog.String("status", status),
+		slog.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
+	}
+	if err != nil {
+		attributes = append(attributes, slog.String("reason", agentOperationLogReason(err)))
+	}
+	slog.LogAttrs(ctx, level, "agent tool step completed", attributes...)
+	return plan, err
+}
+
+// agentOperationLogReason 用稳定错误类别关联日志，避免把用户路径写入系统日志。
+func agentOperationLogReason(err error) string {
+	switch {
+	case err == nil:
+		return "unknown"
+	case errors.Is(err, ErrConflict), errors.Is(err, store.ErrConflict), errors.Is(err, fsroot.ErrConflict), errors.Is(err, fsroot.ErrPathChanged):
+		return "conflict"
+	case errors.Is(err, ErrInvalid):
+		return "invalid_input"
+	case errors.Is(err, ErrUnsupported):
+		return "unsupported"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "execution_failed"
+	}
 }
 
 func (s *Service) executeArchiveCreate(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {

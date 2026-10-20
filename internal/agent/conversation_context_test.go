@@ -53,3 +53,28 @@ func TestConversationTurnResultValidatesSummary(t *testing.T) {
 		t.Fatalf("validateTurnResult(omitted summary) = %v", err)
 	}
 }
+
+func TestConversationAllowsReplyOnlySummaryFromToolReceipt(t *testing.T) {
+	contextSummary := "已按用户确认创建合同文件夹。"
+	result := conversationTurnResult{
+		State:          "clarifying",
+		Reply:          "上一计划已完成，已创建“合同”文件夹。",
+		ContextSummary: &contextSummary,
+	}
+	if err := validateTurnResult(&result); err != nil {
+		t.Fatalf("validateTurnResult(reply-only summary) = %v", err)
+	}
+
+	conversation := store.AgentConversation{Messages: []store.ConversationMessage{
+		{Role: "user", Content: "创建合同文件夹"},
+		{Role: "assistant", Content: "上一计划已完成；步骤结果：\n- 新建文件夹：合同（完成）：已创建文件夹"},
+		{Role: "user", Content: "只总结上一轮结果，不要继续操作"},
+	}}
+	messages := conversationPromptMessages(conversation)
+	if !strings.Contains(messages[0].Content, "只要求解释或总结既有计划结果") ||
+		!strings.Contains(messages[0].Content, "步骤回执提供实际执行状态、结果和失败边界") ||
+		!strings.Contains(messages[len(messages)-2].Content, "已创建文件夹") ||
+		!strings.Contains(messages[len(messages)-1].Content, "只总结上一轮结果") {
+		t.Fatalf("reply-only turn did not receive the execution receipt and guidance: %#v", messages)
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -36,6 +37,34 @@ type uploadIntegration struct {
 	server      *httptest.Server
 	cancel      context.CancelFunc
 	managerDone chan error
+}
+
+func TestUploadFailureLogOmitsManagedPaths(t *testing.T) {
+	previousLogger := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	metadata, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	manager := newPublicationManager(nil, nil, nil, metadata)
+	const privatePath = "private-upload-path-token"
+	event := upload.Event{
+		Kind: upload.UploadCompleted, UploadID: "0123456789abcdef0123456789abcdef", Size: 12, Offset: 12,
+		Metadata: upload.Metadata{FileName: "secret.txt", Target: "private", RelativePath: privatePath},
+	}
+	manager.finishFailure(event, newPublicationResult(event), &os.PathError{Op: "write", Path: privatePath, Err: syscall.ENOSPC}, context.Background())
+
+	logs := output.String()
+	if !strings.Contains(logs, "upload publication failed") || !strings.Contains(logs, "reason=storage_full") {
+		t.Fatalf("failure log omitted useful status: %s", logs)
+	}
+	if strings.Contains(logs, privatePath) || strings.Contains(logs, "private/"+privatePath) || strings.Contains(logs, "secret.txt") {
+		t.Fatalf("upload failure log exposed managed file details: %s", logs)
+	}
 }
 
 func newUploadIntegration(t *testing.T) *uploadIntegration {

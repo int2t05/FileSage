@@ -49,7 +49,7 @@
 
 .files-button-secondary:hover {
   border-color: #cbd4cb;
-  background: #fbfcfa;
+  background: var(--color-surface-subtle);
 }
 
 .files-button-primary {
@@ -315,7 +315,7 @@
   padding: 12px;
   border: 1px solid var(--color-line);
   border-radius: var(--radius-md);
-  background: #fbfcfa;
+  background: var(--color-surface-subtle);
 }
 
 .files-filter-grid {
@@ -796,7 +796,7 @@
   min-height: 42px;
   padding: 0 8px;
   border-bottom: 1px solid var(--color-line);
-  background: #fafbf9;
+  background: var(--color-surface-subtle);
   color: #858d83;
   font-size: 12px;
 }
@@ -1097,7 +1097,7 @@
   padding: 46px 20px 42px;
   border: 1px dashed #d9dfd7;
   border-radius: var(--radius-lg);
-  background: #fbfcfa;
+  background: var(--color-surface-subtle);
   text-align: center;
 }
 
@@ -1353,7 +1353,7 @@
   min-height: 44px;
   border: 1px solid #dce5dc;
   border-radius: var(--radius-md);
-  background: #fbfcfa;
+  background: var(--color-surface-subtle);
   color: #4e7057;
   font-size: 11px;
   font-weight: 600;
