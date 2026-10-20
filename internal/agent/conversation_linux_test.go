@@ -97,7 +97,7 @@ func TestConversationRetriesInvalidModelResponseOnce(t *testing.T) {
 			retryMessages := model.requests[1]
 			model.mu.Unlock()
 			last := retryMessages[len(retryMessages)-1]
-			if last.Role != "system" || !strings.Contains(last.Content, "严格 JSON 契约校验") {
+			if last.Role != "system" || !strings.Contains(last.Content, "可见工具回执") || !strings.Contains(last.Content, "不得改变用户目标") {
 				t.Fatalf("retry did not include a bounded correction prompt: %#v", last)
 			}
 		})
@@ -145,11 +145,20 @@ func TestConversationSummarizesCompletedToolReceiptWithoutCreatingAnotherPlan(t 
 		t.Fatalf("AddMessage() created a plan or failed to answer: (%#v, %v)", conversation, err)
 	}
 	model.mu.Lock()
-	followupRequest := marshalMessages(t, model.requests[1])
+	followupMessages := append([]ChatMessage(nil), model.requests[1]...)
 	callCount := len(model.requests)
 	model.mu.Unlock()
-	if !strings.Contains(followupRequest, "上一计划已完成") || !strings.Contains(followupRequest, "合同") || !strings.Contains(followupRequest, "已创建文件夹") {
-		t.Fatalf("follow-up did not receive the actual tool receipt: %s", followupRequest)
+	hasReceipt, hasUserRequest := false, false
+	for _, message := range followupMessages {
+		if message.Role == "assistant" && strings.Contains(message.Content, "上一计划已完成") && strings.Contains(message.Content, "合同") && strings.Contains(message.Content, "目录已创建") {
+			hasReceipt = true
+		}
+		if message.Role == "user" && message.Content == "只总结上一轮结果，不要继续操作" {
+			hasUserRequest = true
+		}
+	}
+	if !hasReceipt || !hasUserRequest {
+		t.Fatalf("follow-up omitted the persisted tool receipt or user request: receipt=%t request=%t", hasReceipt, hasUserRequest)
 	}
 	if callCount != 2 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Content, "已创建“合同”文件夹") {
 		t.Fatalf("reply-only turn was not completed cleanly: calls=%d messages=%#v", callCount, conversation.Messages)
