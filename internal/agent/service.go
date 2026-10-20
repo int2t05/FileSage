@@ -1312,6 +1312,9 @@ func (s *Service) executeArchivePhoto(ctx context.Context, planID, scope string,
 	default:
 		status, message, resultErr = store.OperationPartial, "无法确认照片归档结果，需人工核查", ErrConflict
 	}
+	if outcome.SourceRetained != "" {
+		message = fmt.Sprintf("照片副本已发布；来源文件已隔离保留在 %q，请核对后处理。", outcome.SourceRetained)
+	}
 	return s.finishArchivePhoto(ctx, planID, op, status, message, resultErr)
 }
 
@@ -1907,6 +1910,9 @@ func (s *Service) recordMoveFileOutcome(ctx context.Context, planID string, op s
 		}
 	case outcome.Published || outcome.SourceRemoved:
 		status, message = store.OperationPartial, action+"结果不完整；请核查源文件和目标文件"
+		if outcome.SourceRetained != "" {
+			message = fmt.Sprintf("目标副本已发布；来源文件已隔离保留在 %q，请核对后处理。", outcome.SourceRetained)
+		}
 		if resultErr == nil {
 			resultErr = ErrConflict
 		}

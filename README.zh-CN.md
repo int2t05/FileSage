@@ -30,7 +30,7 @@ MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验�
 
 ## 快速开始
 
-需要 Linux、Go 1.27.2 或更新版本、Node.js 24 和 npm。Office 转换、OCR、
+需要 Linux、Go 1.27.3 或更新版本、Node.js 24 和 npm。Office 转换、OCR、
 视频海报、7-Zip 归档等能力需要额外系统工具，详见[部署说明](docs/DEPLOYMENT.md)。
 
 ```sh

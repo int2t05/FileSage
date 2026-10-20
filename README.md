@@ -36,7 +36,7 @@ remaining checks.
 
 ## Quick start
 
-Requirements: Linux, Go 1.27.2 or newer, Node.js 24 and npm. Optional system
+Requirements: Linux, Go 1.27.3 or newer, Node.js 24 and npm. Optional system
 tools enable formats and operations such as Office conversion, OCR, video
 posters and 7-Zip archives; see [deployment](docs/DEPLOYMENT.md).
 

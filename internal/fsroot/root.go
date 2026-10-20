@@ -48,6 +48,8 @@ var (
 	ErrNoReplaceUnsupported = errors.New("no-replace rename unsupported")
 	// ErrAtomicWriteUnsupported 表示平台不能提供原子替换语义。
 	ErrAtomicWriteUnsupported = errors.New("atomic write unsupported")
+	// ErrMoveRecoveryUnavailable 表示跨卷移动缺少持久恢复日志。
+	ErrMoveRecoveryUnavailable = errors.New("move recovery journal unavailable")
 	// ErrSizeMismatch 表示流的实际长度与声明长度不符。
 	ErrSizeMismatch = errors.New("stream size does not match expected size")
 	// ErrPublishedNotDurable 表示目标已发布，但父目录同步失败。
@@ -162,6 +164,7 @@ func (e Entry) Fingerprint() Fingerprint {
 // Root 持有根目录句柄，并将文件操作限制在其目录树内。
 type Root struct {
 	root             *os.Root
+	moveRecoveryRoot *os.Root
 	rootPath         string
 	registeredMounts []registeredMount
 	rootReadOnly     bool
@@ -226,7 +229,11 @@ func (r *Root) Close() error {
 	if r == nil || r.root == nil {
 		return nil
 	}
-	return r.root.Close()
+	var closeErr error
+	if r.moveRecoveryRoot != nil {
+		closeErr = errors.Join(closeErr, r.moveRecoveryRoot.Close())
+	}
+	return errors.Join(closeErr, r.root.Close())
 }
 
 // List 返回 rel 的直接子项；空路径表示根目录，越界软链接不会被跟随。

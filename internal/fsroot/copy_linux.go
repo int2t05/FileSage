@@ -141,42 +141,372 @@ func platformCopyFileNoReplace(ctx context.Context, root *Root, source, destinat
 	return result, nil
 }
 
-// platformRemoveFileIfUnchanged 仅在来源快照仍匹配时删除目录项。
-func platformRemoveFileIfUnchanged(root *Root, relativePath string, expected Fingerprint) (bool, error) {
+// platformMoveFileSameMountNoReplace 同卷移动后复核目录项，发现竞态则尝试恢复来源。
+func platformMoveFileSameMountNoReplace(ctx context.Context, root *Root, source, destination string, expected Fingerprint) (FileMoveResult, error) {
+	sourceParent, sourceName, err := openRenameParent(root, source)
+	if err != nil {
+		return FileMoveResult{}, fmt.Errorf("open move source parent: %w", err)
+	}
+	defer sourceParent.Close()
+	destinationParent, destinationName, err := openRenameParent(root, destination)
+	if err != nil {
+		return FileMoveResult{}, fmt.Errorf("open move destination parent: %w", err)
+	}
+	defer destinationParent.Close()
+	sourceParentPath := parentPathForOperation(source)
+	destinationParentPath := parentPathForOperation(destination)
+	if err := verifyOpenedDirectory(root, sourceParentPath, sourceParent); err != nil {
+		return FileMoveResult{}, err
+	}
+	if err := verifyOpenedDirectory(root, destinationParentPath, destinationParent); err != nil {
+		return FileMoveResult{}, err
+	}
+
+	sourceFD, err := unix.Openat(int(sourceParent.Fd()), sourceName, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return FileMoveResult{}, ErrNotRegularFile
+		}
+		return FileMoveResult{}, fmt.Errorf("open move source: %w", err)
+	}
+	sourceFile := os.NewFile(uintptr(sourceFD), sourceName)
+	defer sourceFile.Close()
+	sourceInfo, err := sourceFile.Stat()
+	if err != nil {
+		return FileMoveResult{}, fmt.Errorf("inspect move source: %w", err)
+	}
+	if !sourceInfo.Mode().IsRegular() || !sameFingerprint(fingerprintFromInfo(sourceInfo), expected) {
+		return FileMoveResult{}, conflictError("move", source, nil)
+	}
+	if err := ctx.Err(); err != nil {
+		return FileMoveResult{}, err
+	}
+	if err := verifyOpenedDirectory(root, sourceParentPath, sourceParent); err != nil {
+		return FileMoveResult{}, err
+	}
+	if err := verifyOpenedDirectory(root, destinationParentPath, destinationParent); err != nil {
+		return FileMoveResult{}, err
+	}
+	if err := unix.Renameat2(int(sourceParent.Fd()), sourceName, int(destinationParent.Fd()), destinationName, unix.RENAME_NOREPLACE); err != nil {
+		if errors.Is(err, unix.EEXIST) {
+			return FileMoveResult{}, conflictError("move", destination, fs.ErrExist)
+		}
+		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) {
+			return FileMoveResult{}, fmt.Errorf("%w: %w", ErrNoReplaceUnsupported, err)
+		}
+		return FileMoveResult{}, fmt.Errorf("move file: %w", err)
+	}
+	result := FileMoveResult{Published: true, SourceRemoved: true}
+
+	movedFD, err := unix.Openat(int(destinationParent.Fd()), destinationName, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, nil, fmt.Errorf("inspect moved destination: %w", err))
+	}
+	movedFile := os.NewFile(uintptr(movedFD), destinationName)
+	defer movedFile.Close()
+	movedInfo, err := movedFile.Stat()
+	if err != nil {
+		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, fmt.Errorf("inspect moved destination: %w", err))
+	}
+	if !movedInfo.Mode().IsRegular() || !sameFingerprintAfterRename(fingerprintFromInfo(movedInfo), expected) {
+		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, conflictError("move", source, nil))
+	}
+	if err := verifyOpenedDirectory(root, sourceParentPath, sourceParent); err != nil {
+		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, err)
+	}
+	if err := verifyOpenedDirectory(root, destinationParentPath, destinationParent); err != nil {
+		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, err)
+	}
+	if err := syncMoveParents(root, source, destination); err != nil {
+		return result, fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
+	}
+	return result, nil
+}
+
+// restoreSameMountFileMove 在提交版本不符时无覆盖地恢复移动项。
+func restoreSameMountFileMove(root *Root, source, destination, sourceParentPath, destinationParentPath string, sourceParent *os.File, sourceName string, destinationParent *os.File, destinationName string, movedFile *os.File, cause error) (FileMoveResult, error) {
+	retained := func(err error) (FileMoveResult, error) {
+		return FileMoveResult{Published: true, SourceRemoved: true, SourceRetained: destination}, errors.Join(cause, fmt.Errorf("restore moved source: %w", err))
+	}
+	if movedFile == nil {
+		return retained(ErrPathChanged)
+	}
+	if err := verifyOpenedDirectory(root, sourceParentPath, sourceParent); err != nil {
+		return retained(err)
+	}
+	if err := verifyOpenedDirectory(root, destinationParentPath, destinationParent); err != nil {
+		return retained(err)
+	}
+	currentFD, err := unix.Openat(int(destinationParent.Fd()), destinationName, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return retained(err)
+	}
+	current := os.NewFile(uintptr(currentFD), destinationName)
+	defer current.Close()
+	movedInfo, err := movedFile.Stat()
+	if err != nil {
+		return retained(err)
+	}
+	currentInfo, err := current.Stat()
+	if err != nil {
+		return retained(err)
+	}
+	if !os.SameFile(movedInfo, currentInfo) {
+		return retained(ErrPathChanged)
+	}
+	if err := unix.Renameat2(int(destinationParent.Fd()), destinationName, int(sourceParent.Fd()), sourceName, unix.RENAME_NOREPLACE); err != nil {
+		return retained(err)
+	}
+	if err := syncMoveParents(root, source, destination); err != nil {
+		return FileMoveResult{}, errors.Join(cause, fmt.Errorf("%w: restore source: %w", ErrPublishedNotDurable, err))
+	}
+	return FileMoveResult{}, cause
+}
+
+// platformRemoveFileIfUnchanged 隔离来源后复核身份与内容，再删除副本。
+func platformRemoveFileIfUnchanged(ctx context.Context, root *Root, relativePath, destination string, expected Fingerprint, expectedSHA256 string) (bool, string, error) {
 	parent, name, err := openRenameParent(root, relativePath)
 	if err != nil {
-		return false, fmt.Errorf("open source parent before removal: %w", err)
+		return false, "", fmt.Errorf("open source parent before removal: %w", err)
 	}
 	defer parent.Close()
-	if err := verifyOpenedDirectory(root, parentPathForOperation(relativePath), parent); err != nil {
-		return false, err
+	parentPath := parentPathForOperation(relativePath)
+	if err := verifyOpenedDirectory(root, parentPath, parent); err != nil {
+		return false, "", err
 	}
 	fd, err := unix.Openat(int(parent.Fd()), name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if errors.Is(err, unix.ELOOP) {
-			return false, ErrNotRegularFile
+			return false, "", ErrNotRegularFile
 		}
-		return false, fmt.Errorf("inspect source before removal: %w", err)
+		return false, "", fmt.Errorf("inspect source before removal: %w", err)
 	}
 	file := os.NewFile(uintptr(fd), name)
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return false, fmt.Errorf("stat source before removal: %w", err)
+		return false, "", fmt.Errorf("stat source before removal: %w", err)
 	}
 	if !info.Mode().IsRegular() {
-		return false, ErrNotRegularFile
+		return false, "", ErrNotRegularFile
 	}
 	if !sameFingerprint(fingerprintFromInfo(info), expected) {
-		return false, conflictError("move", relativePath, nil)
+		return false, "", conflictError("move", relativePath, nil)
 	}
-	if err := unix.Unlinkat(int(parent.Fd()), name, 0); err != nil {
-		return false, fmt.Errorf("remove moved source: %w", err)
+	destinationEntry, err := root.LstatEntry(destination)
+	if err != nil {
+		return false, "", fmt.Errorf("inspect published move target: %w", err)
+	}
+	if destinationEntry.Kind != KindFile || destinationEntry.Symlink {
+		return false, "", conflictError("move", destination, nil)
+	}
+	if !destinationEntry.IdentityAvailable {
+		return false, "", ErrIdentityUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return false, "", err
+	}
+	quarantinePath, quarantine, err := createFileMoveQuarantine(parent, relativePath)
+	if err != nil {
+		return false, "", fmt.Errorf("create source quarantine: %w", err)
+	}
+	defer quarantine.Close()
+	quarantineName := path.Base(quarantinePath)
+	if err := ctx.Err(); err != nil {
+		return false, "", errors.Join(err, removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine))
+	}
+	quarantineStat, err := statxFD(int(quarantine.Fd()))
+	if err != nil {
+		return false, "", errors.Join(err, removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine))
+	}
+	record := moveRecoveryRecord{
+		Version: 1, ID: moveRecoveryID(quarantinePath), Kind: moveRecoveryFile,
+		SourcePath: relativePath, QuarantinePath: quarantinePath,
+		DestinationPath:        destination,
+		SourceIdentity:         moveObjectIdentity{Device: expected.Device, Inode: expected.Inode},
+		QuarantineIdentity:     moveObjectIdentity{Device: statxDevice(quarantineStat), Inode: quarantineStat.Ino},
+		DestinationIdentity:    moveObjectIdentity{Device: destinationEntry.Device, Inode: destinationEntry.Inode},
+		DestinationFingerprint: destinationEntry.Fingerprint(), DestinationDigest: expectedSHA256,
+	}
+	if err := root.writeMoveRecoveryRecord(record); err != nil {
+		cleanupErr := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine)
+		return false, "", errors.Join(fmt.Errorf("record interrupted file move: %w", err), cleanupErr)
+	}
+	if err := ctx.Err(); err != nil {
+		cleanupErr := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine)
+		journalErr := root.removeMoveRecoveryRecord(record.ID)
+		return false, "", errors.Join(err, cleanupErr, journalErr)
+	}
+	if err := unix.Renameat2(int(parent.Fd()), name, int(quarantine.Fd()), "source", unix.RENAME_NOREPLACE); err != nil {
+		cleanupErr := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine)
+		journalErr := root.removeMoveRecoveryRecord(record.ID)
+		if errors.Is(err, unix.EEXIST) {
+			err = conflictError("move", relativePath, fs.ErrExist)
+		}
+		return false, "", errors.Join(fmt.Errorf("isolate moved source: %w", err), cleanupErr, journalErr)
+	}
+	if err := quarantine.Sync(); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, fmt.Errorf("sync isolated source: %w", err))
 	}
 	if err := parent.Sync(); err != nil {
-		return true, fmt.Errorf("source was removed but directory sync failed: %w", err)
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, fmt.Errorf("sync source parent after isolation: %w", err))
 	}
-	return true, nil
+	if err := verifyOpenedDirectory(root, parentPath, parent); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := verifyMoveQuarantineDirectory(parent, quarantineName, quarantine); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := verifyQuarantinedMoveFile(ctx, quarantine, quarantinePath, expected, expectedSHA256); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := verifyOpenedDirectory(root, parentPath, parent); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := verifyMoveQuarantineDirectory(parent, quarantineName, quarantine); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := unix.Unlinkat(int(quarantine.Fd()), "source", 0); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, fmt.Errorf("remove isolated source: %w", err))
+	}
+	var durabilityErr error
+	if err := quarantine.Sync(); err != nil {
+		durabilityErr = errors.Join(durabilityErr, err)
+	}
+	if err := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine); err != nil {
+		durabilityErr = errors.Join(durabilityErr, err)
+	}
+	if err := parent.Sync(); err != nil {
+		durabilityErr = errors.Join(durabilityErr, err)
+	}
+	if durabilityErr != nil {
+		return true, "", fmt.Errorf("%w: source was removed but quarantine cleanup was not confirmed: %w", ErrPublishedNotDurable, durabilityErr)
+	}
+	if err := root.removeMoveRecoveryRecord(record.ID); err != nil {
+		return true, "", fmt.Errorf("%w: clear completed file move record: %w", ErrPublishedNotDurable, err)
+	}
+	return true, "", nil
+}
+
+// createFileMoveQuarantine 建立只允许服务用户访问的同卷临时目录。
+func createFileMoveQuarantine(parent *os.File, source string) (string, *os.File, error) {
+	for range 8 {
+		quarantinePath, err := createMoveQuarantinePath(source)
+		if err != nil {
+			return "", nil, err
+		}
+		name := path.Base(quarantinePath)
+		if err := unix.Mkdirat(int(parent.Fd()), name, 0o700); err != nil {
+			if errors.Is(err, unix.EEXIST) {
+				continue
+			}
+			return "", nil, err
+		}
+		fd, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			_ = unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR)
+			return "", nil, err
+		}
+		directory := os.NewFile(uintptr(fd), name)
+		if err := unix.Fchmod(fd, 0o700); err != nil {
+			_ = unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR)
+			_ = directory.Close()
+			return "", nil, err
+		}
+		if err := verifyMoveQuarantineDirectory(parent, name, directory); err != nil {
+			_ = unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR)
+			_ = directory.Close()
+			return "", nil, err
+		}
+		return quarantinePath, directory, nil
+	}
+	return "", nil, fs.ErrExist
+}
+
+// verifyMoveQuarantineDirectory 确认临时目录仍是本服务独占的真实目录。
+func verifyMoveQuarantineDirectory(parent *os.File, name string, directory *os.File) error {
+	opened, err := statxFD(int(directory.Fd()))
+	if err != nil {
+		return err
+	}
+	current, err := statxAt(int(parent.Fd()), name, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
+	if opened.Mode&unix.S_IFMT != unix.S_IFDIR || opened.Mode&0o777 != 0o700 || opened.Uid != uint32(unix.Geteuid()) || !sameSnapshotObject(opened, current) {
+		return ErrPathChanged
+	}
+	return nil
+}
+
+// verifyQuarantinedMoveFile 核验隔离文件身份、大小、元数据和复制摘要。
+func verifyQuarantinedMoveFile(ctx context.Context, quarantine *os.File, quarantinePath string, expected Fingerprint, expectedSHA256 string) error {
+	fd, err := unix.Openat(int(quarantine.Fd()), "source", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return ErrNotRegularFile
+		}
+		return err
+	}
+	file := os.NewFile(uintptr(fd), "source")
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || !sameFingerprintAfterRename(fingerprintFromInfo(info), expected) {
+		return conflictError("move", quarantinePath, nil)
+	}
+	digest, err := hex.DecodeString(expectedSHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return ErrConflict
+	}
+	actualDigest := sha256.New()
+	count, err := io.Copy(actualDigest, contextReader{ctx: ctx, reader: file})
+	if err != nil {
+		return err
+	}
+	if count != expected.Size || !sameFingerprintAfterRename(fingerprintFromInfoAfterRead(file), expected) || subtle.ConstantTimeCompare(actualDigest.Sum(nil), digest) != 1 {
+		return conflictError("move", quarantinePath, nil)
+	}
+	return nil
+}
+
+// restoreFileMoveQuarantine 恢复来源；无法恢复时返回实际保留路径。
+func restoreFileMoveQuarantine(root *Root, parent *os.File, sourceName, quarantineName string, quarantine *os.File, quarantinePath, recoveryID string, cause error) (bool, string, error) {
+	if err := unix.Renameat2(int(quarantine.Fd()), "source", int(parent.Fd()), sourceName, unix.RENAME_NOREPLACE); err != nil {
+		return false, path.Join(quarantinePath, "source"), errors.Join(cause, fmt.Errorf("restore isolated source: %w", err))
+	}
+	var restoreErr error
+	if err := quarantine.Sync(); err != nil {
+		restoreErr = errors.Join(restoreErr, err)
+	}
+	if err := parent.Sync(); err != nil {
+		restoreErr = errors.Join(restoreErr, err)
+	}
+	if err := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine); err != nil {
+		restoreErr = errors.Join(restoreErr, err)
+	}
+	if restoreErr == nil {
+		if err := root.removeMoveRecoveryRecord(recoveryID); err != nil {
+			restoreErr = errors.Join(restoreErr, err)
+		}
+	}
+	return false, "", errors.Join(cause, restoreErr)
+}
+
+// removeEmptyFileMoveQuarantine 只移除身份仍匹配的空临时目录。
+func removeEmptyFileMoveQuarantine(parent *os.File, name string, directory *os.File) error {
+	if err := verifyMoveQuarantineDirectory(parent, name, directory); err != nil {
+		return err
+	}
+	return unix.Unlinkat(int(parent.Fd()), name, unix.AT_REMOVEDIR)
 }
 
 // verifyOpenedDirectory 确认已打开目录仍对应管理根内的原路径。
