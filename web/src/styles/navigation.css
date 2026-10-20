@@ -1,10 +1,276 @@
-/* 桌面设置项与五项移动导航的状态。 */
-.settings-link[aria-current='page'] {
-  background: var(--color-accent-soft);
-  color: var(--color-accent-strong);
-  font-weight: 600;
+.app-shell {
+  display: grid;
+  min-height: 100vh;
+  grid-template-columns: 224px minmax(0, 1fr);
 }
 
-.settings-link[aria-current='page']:hover {
+.sidebar {
+  position: sticky;
+  z-index: 4;
+  top: 0;
+  display: flex;
+  height: 100vh;
+  height: 100dvh;
+  flex-direction: column;
+  padding: 22px 13px 15px;
+  border-right: 1px solid var(--color-line);
+  background: #fcfdfb;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 7px 31px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.brand-mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--color-accent-strong);
+  color: #fff;
+}
+
+.brand strong,
+.brand small {
+  display: block;
+}
+
+.brand strong {
+  font-size: 15px;
+  font-weight: 680;
+  letter-spacing: -.2px;
+}
+
+.brand small {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.nav-label {
+  margin: 0 11px 8px;
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.side-nav {
+  display: grid;
+  gap: 3px;
+}
+
+.nav-item,
+.settings-link {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 11px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: #606a60;
+  text-align: left;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.nav-item:hover:not(.active),
+.settings-link:hover:not(:disabled):not([aria-current='page']) {
+  background: var(--color-surface-muted);
+  color: var(--color-text);
+}
+
+.nav-item.active,
+.settings-link[aria-current='page'] {
+  border-color: #dce8de;
   background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+  font-weight: 620;
+}
+
+.nav-item span:nth-child(2) {
+  flex: 1;
+}
+
+.volume-card {
+  margin: 25px 3px 0;
+  padding: 12px 11px;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.volume-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.volume-title .status-dot {
+  margin-left: auto;
+}
+
+.volume-card strong,
+.volume-card small {
+  display: block;
+}
+
+.volume-card strong {
+  margin-top: 10px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.volume-card small {
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #a2aaa1;
+}
+
+.status-dot:not(.is-offline) {
+  background: var(--color-success);
+}
+
+.status-dot.is-offline {
+  background: var(--color-danger);
+}
+
+.settings-link {
+  min-height: 42px;
+  margin-top: auto;
+  color: var(--color-text-muted);
+}
+
+.settings-link:disabled {
+  opacity: .62;
+}
+
+.main-panel {
+  min-width: 0;
+}
+
+.topbar {
+  display: none;
+}
+
+.service-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.mobile-brand,
+.mobile-nav {
+  display: none;
+}
+
+.page-content {
+  width: min(100%, 1440px);
+  min-width: 0;
+  margin: 0 auto;
+  padding: 30px 32px 42px;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    display: block;
+    min-height: 100dvh;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .topbar {
+    position: sticky;
+    z-index: 20;
+    top: 0;
+    display: flex;
+    height: 56px;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 16px;
+    border-bottom: 1px solid var(--color-line);
+    background: rgb(255 255 255 / 94%);
+    backdrop-filter: blur(14px);
+  }
+
+  .mobile-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .mobile-brand .brand-mark {
+    width: 29px;
+    height: 29px;
+    border-radius: 8px;
+  }
+
+  .service-indicator {
+    font-size: 10px;
+  }
+
+  .page-content {
+    padding: 22px 16px calc(92px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-nav {
+    position: fixed;
+    z-index: 30;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-line);
+    background: rgb(255 255 255 / 96%);
+    backdrop-filter: blur(14px);
+  }
+
+  .mobile-nav-item {
+    position: relative;
+    display: flex;
+    min-width: 44px;
+    min-height: 50px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    cursor: pointer;
+  }
+
+  .mobile-nav-item.active {
+    color: var(--color-accent-strong);
+    font-weight: 620;
+  }
 }

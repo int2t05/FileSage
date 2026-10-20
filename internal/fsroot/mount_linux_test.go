@@ -16,6 +16,21 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+func TestMountOptionsReadOnly(t *testing.T) {
+	for _, test := range []struct {
+		options string
+		want    bool
+	}{
+		{options: "rw,nosuid,nodev", want: false},
+		{options: "ro,nosuid,nodev", want: true},
+		{options: "errors=remount-ro,rw", want: false},
+	} {
+		if got := mountOptionsReadOnly(test.options); got != test.want {
+			t.Errorf("mountOptionsReadOnly(%q) = %t, want %t", test.options, got, test.want)
+		}
+	}
+}
+
 func TestNestedMountDisappearanceFailsClosed(t *testing.T) {
 	done := make(chan struct{})
 	go func() {

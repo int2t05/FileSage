@@ -164,11 +164,13 @@ type Root struct {
 	root             *os.Root
 	rootPath         string
 	registeredMounts []registeredMount
+	rootReadOnly     bool
 }
 
 type registeredMount struct {
-	path string
-	id   uint64
+	path     string
+	id       uint64
+	readOnly bool
 }
 
 const maxSymlinkHops = 128
@@ -211,7 +213,12 @@ func Open(rootPath string) (*Root, error) {
 		_ = root.Close()
 		return nil, fmt.Errorf("inspect mounted volumes: %w", err)
 	}
-	return &Root{root: root, rootPath: canonicalRoot, registeredMounts: registeredMounts}, nil
+	rootReadOnly, err := platformRootReadOnly(canonicalRoot)
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("inspect filesystem root permissions: %w", err)
+	}
+	return &Root{root: root, rootPath: canonicalRoot, registeredMounts: registeredMounts, rootReadOnly: rootReadOnly}, nil
 }
 
 // Close 释放根目录句柄。
@@ -416,6 +423,7 @@ func (r *Root) OpenRead(rel string) (io.ReadCloser, Entry, error) {
 	}
 
 	entry := entryFromInfo(path.Base(rel), rel, openedInfo)
+	r.applyReadOnly(&entry, rel)
 	if linkInfo.Mode()&os.ModeSymlink != 0 {
 		target, targetErr := r.root.Readlink(rel)
 		if targetErr != nil {
@@ -559,6 +567,15 @@ func (r *Root) checkRegisteredMount(mount registeredMount) error {
 	return nil
 }
 
+// applyReadOnly 标记当前路径所在文件系统是否只读。
+func (r *Root) applyReadOnly(entry *Entry, rel string) {
+	if mount, ok := registeredMountForPath(r.registeredMounts, rel); ok {
+		entry.ReadOnly = mount.readOnly
+		return
+	}
+	entry.ReadOnly = r.rootReadOnly
+}
+
 func markUnavailableVolume(entry *Entry) {
 	entry.MountUnavailable = true
 	entry.ReadOnly = true
@@ -580,6 +597,7 @@ func relativeParent(rel string) string {
 
 func (r *Root) entry(name, rel string, info fs.FileInfo) Entry {
 	entry := entryFromInfo(name, rel, info)
+	r.applyReadOnly(&entry, rel)
 	if info.Mode()&os.ModeSymlink == 0 {
 		return entry
 	}
@@ -599,6 +617,7 @@ func (r *Root) entry(name, rel string, info fs.FileInfo) Entry {
 		return entry
 	}
 	entry = entryFromInfo(name, rel, resolved.info)
+	r.applyReadOnly(&entry, rel)
 	entry.Symlink = true
 	entry.LinkStatus = LinkStatusInternal
 	entry.LinkTarget = resolved.linkTarget

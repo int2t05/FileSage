@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,6 +120,31 @@ func TestMultiOperationApprovalsAndExecution(t *testing.T) {
 		if info, err := os.Stat(filepath.Join(rootPath, filepath.FromSlash(operation.TargetPath))); err != nil || !info.IsDir() {
 			t.Fatalf("target %q = (%v, %v)", operation.TargetPath, info, err)
 		}
+	}
+}
+
+func TestMultiOperationPlanSupportsMoreThanLegacyLimit(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "parent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+
+	names := make([]string, 21)
+	for index := range names {
+		names[index] = fmt.Sprintf("category-%02d", index)
+	}
+	plan := proposeDirectories(t, ctx, service, "parent", names...)
+	if len(plan.Operations) != len(names) || plan.Status != store.PlanAwaitingApproval {
+		t.Fatalf("plan with %d independent steps = (%d, %s)", len(names), len(plan.Operations), plan.Status)
+	}
+	approveAllOperations(t, ctx, service, plan)
+	completed, err := service.Execute(ctx, plan.ID, plan.Version)
+	if err != nil || completed.Status != store.PlanCompleted || len(completed.Operations) != len(names) {
+		t.Fatalf("execute %d-step plan = (%d operations, %s, %v)", len(names), len(completed.Operations), completed.Status, err)
 	}
 }
 

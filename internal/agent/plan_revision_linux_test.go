@@ -102,12 +102,12 @@ func TestRevisePlanRejectsStaleApprovalStateTargetConflictsAndLimits(t *testing.
 	if err != nil || unchanged.Status != store.PlanAwaitingApproval || unchanged.Operations[0].Approval != store.ApprovalPending {
 		t.Fatalf("failed edit changed old plan: (%#v, %v)", unchanged, err)
 	}
-	tooMany := make([]Proposal, 21)
+	tooMany := make([]Proposal, store.MaxAgentPlanOperations+1)
 	for index := range tooMany {
 		tooMany[index] = Proposal{Action: "create_directory", SourcePath: "parent", TargetPath: filepath.ToSlash(filepath.Join("parent", fmt.Sprintf("new-%02d", index))), Reason: "数量上限验证"}
 	}
 	if _, err := service.RevisePlan(ctx, previous.ID, previous.Version, tooMany); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("21-operation revision = %v, want invalid", err)
+		t.Fatalf("%d-operation revision = %v, want invalid", len(tooMany), err)
 	}
 	if _, err := service.Decide(ctx, previous.ID, previous.Operations[0].ID, "approve", previous.Version); err != nil {
 		t.Fatal(err)

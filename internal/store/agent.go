@@ -56,17 +56,31 @@ func validInitialAgentOperations(operations []OperationRecord) bool {
 	if len(operations) < 1 || len(operations) > MaxAgentPlanOperations {
 		return false
 	}
-	archivePlan := true
-	archiveOperation := len(operations) == 1 && (operations[0].Action == "create_archive" || operations[0].Action == "extract_archive")
+	hasPhotoArchive := false
+	allPhotoArchive := true
+	hasSingleArchive := false
 	for index, operation := range operations {
-		archivePlan = archivePlan && operation.Action == "archive_photo"
+		if operation.Action == "archive_photo" {
+			hasPhotoArchive = true
+		} else {
+			allPhotoArchive = false
+		}
+		if operation.Action == "create_archive" || operation.Action == "extract_archive" {
+			hasSingleArchive = true
+		}
 		if operation.Ordinal != index || !supportedAgentAction(operation.Action) ||
 			operation.Approval != ApprovalPending || operation.Status != OperationPending ||
 			operation.TargetConflictPolicy != "" && operation.TargetConflictPolicy != "fail" || operation.RequiresExplicitConfirmation {
 			return false
 		}
 	}
-	return archivePlan || archiveOperation || len(operations) <= 20
+	if hasPhotoArchive {
+		return allPhotoArchive
+	}
+	if hasSingleArchive {
+		return len(operations) == 1
+	}
+	return true
 }
 
 func operationPlanCreatedAudit(base AuditRecord, operation OperationRecord) AuditRecord {

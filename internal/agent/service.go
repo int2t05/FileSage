@@ -539,7 +539,7 @@ func (s *Service) RevisePlan(ctx context.Context, planID string, expectedVersion
 	if err != nil {
 		return store.PlanRecord{}, err
 	}
-	if len(proposals) < 1 || len(proposals) > 20 {
+	if len(proposals) < 1 || len(proposals) > maxProposalOperations(proposals) {
 		return store.PlanRecord{}, ErrInvalid
 	}
 	if previous.Version != expectedVersion || previous.Status != store.PlanAwaitingApproval {
@@ -2742,13 +2742,13 @@ func agentArchiveReadLimits() fsroot.ArchiveReadLimits {
 
 func maxProposalOperations(proposals []Proposal) int {
 	if len(proposals) == 0 {
-		return 20
+		return store.MaxAgentPlanOperations
 	}
 	for _, proposal := range proposals {
 		if isArchiveAction(proposal.Action) {
 			return 1
 		}
-		if proposal.Action != "archive_photo" || proposal.ConversationID == "" {
+		if proposal.Action == "archive_photo" && proposal.ConversationID == "" {
 			return 20
 		}
 	}
@@ -3474,14 +3474,11 @@ func singleOperation(plan store.PlanRecord, operationID string) (store.Operation
 
 func maxStoredPlanOperations(operations []store.OperationRecord) int {
 	if len(operations) == 0 {
-		return 20
+		return store.MaxAgentPlanOperations
 	}
 	for _, operation := range operations {
 		if isArchiveAction(operation.Action) {
 			return 1
-		}
-		if operation.Action != "archive_photo" {
-			return 20
 		}
 	}
 	return store.MaxAgentPlanOperations

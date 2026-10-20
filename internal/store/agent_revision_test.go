@@ -120,8 +120,8 @@ func TestReviseAgentPlanRejectsStaleApprovedAndInvalidReplacement(t *testing.T) 
 	t.Run("operation limit", func(t *testing.T) {
 		metadata, previous := revisionFixture(t, 1)
 		defer metadata.Close()
-		if err := metadata.ReviseAgentPlan(ctx, previous.ID, previous.Version, revisedFixturePlan(previous, 21), time.Now()); err == nil {
-			t.Fatal("21-operation plan revision succeeded")
+		if err := metadata.ReviseAgentPlan(ctx, previous.ID, previous.Version, revisedFixturePlan(previous, MaxAgentPlanOperations+1), time.Now()); err == nil {
+			t.Fatalf("%d-operation plan revision succeeded", MaxAgentPlanOperations+1)
 		}
 		old, err := metadata.Plan(ctx, previous.ID)
 		if err != nil || old.Status != PlanAwaitingApproval {

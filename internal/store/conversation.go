@@ -95,7 +95,7 @@ type AnalysisOperation struct {
 
 // ValidAnalysisOperations 校验分析卡中的操作数量与目标参数。
 func ValidAnalysisOperations(operations []AnalysisOperation) bool {
-	if len(operations) < 1 || len(operations) > 20 {
+	if len(operations) < 1 || len(operations) > MaxAgentPlanOperations {
 		return false
 	}
 	if len(operations) > 1 {
@@ -465,16 +465,52 @@ func conversationPlanReceipt(ctx context.Context, tx *sql.Tx, planID string, sta
 	if total == 0 {
 		return receipt.String() + "。", nil
 	}
+	statusRows, err := tx.QueryContext(ctx, `SELECT execution_status, COUNT(*) FROM operations WHERE plan_id = ? GROUP BY execution_status`, planID)
+	if err != nil {
+		return "", fmt.Errorf("summarize completed plan operations: %w", err)
+	}
+	statusCounts := make(map[string]int)
+	for statusRows.Next() {
+		var executionStatus string
+		var count int
+		if err := statusRows.Scan(&executionStatus, &count); err != nil {
+			_ = statusRows.Close()
+			return "", fmt.Errorf("scan completed plan summary: %w", err)
+		}
+		statusCounts[executionStatus] = count
+	}
+	if err := statusRows.Err(); err != nil {
+		_ = statusRows.Close()
+		return "", fmt.Errorf("iterate completed plan summary: %w", err)
+	}
+	if err := statusRows.Close(); err != nil {
+		return "", fmt.Errorf("close completed plan summary: %w", err)
+	}
+	var statusSummary []string
+	counted := 0
+	for _, status := range []struct{ value, label string }{
+		{"succeeded", "完成"}, {"failed", "失败"}, {"partial", "部分完成"},
+		{"skipped", "跳过"}, {"cancelled", "取消"}, {"pending", "未执行"}, {"running", "执行中"},
+	} {
+		if count := statusCounts[status.value]; count > 0 {
+			statusSummary = append(statusSummary, fmt.Sprintf("%s %d", status.label, count))
+			counted += count
+		}
+	}
+	if unknown := total - counted; unknown > 0 {
+		statusSummary = append(statusSummary, fmt.Sprintf("状态未知 %d", unknown))
+	}
+	fmt.Fprintf(&receipt, "；共 %d 项：%s。", total, strings.Join(statusSummary, "，"))
 	receipt.WriteString("；步骤结果：\n")
-	rows, err := tx.QueryContext(ctx, `SELECT action, source_path, target_path, execution_status FROM operations WHERE plan_id = ? ORDER BY ordinal LIMIT 12`, planID)
+	rows, err := tx.QueryContext(ctx, `SELECT action, source_path, target_path, execution_status, result_message FROM operations WHERE plan_id = ? ORDER BY ordinal LIMIT 12`, planID)
 	if err != nil {
 		return "", fmt.Errorf("read completed plan operations: %w", err)
 	}
 	defer rows.Close()
 	shown := 0
 	for rows.Next() {
-		var action, source, target, executionStatus string
-		if err := rows.Scan(&action, &source, &target, &executionStatus); err != nil {
+		var action, source, target, executionStatus, resultMessage string
+		if err := rows.Scan(&action, &source, &target, &executionStatus, &resultMessage); err != nil {
 			return "", fmt.Errorf("scan completed plan operation: %w", err)
 		}
 		line := "- " + conversationActionLabel(action)
@@ -484,7 +520,11 @@ func conversationPlanReceipt(ctx context.Context, tx *sql.Tx, planID string, sta
 		if target != "" {
 			line += " → " + target
 		}
-		line += "（" + conversationExecutionLabel(executionStatus) + "）\n"
+		line += "（" + conversationExecutionLabel(executionStatus) + "）"
+		if result := boundedToolResult(resultMessage, 320); result != "" {
+			line += "：" + result
+		}
+		line += "\n"
 		if receipt.Len()+len(line) > 3500 {
 			break
 		}
@@ -496,15 +536,28 @@ func conversationPlanReceipt(ctx context.Context, tx *sql.Tx, planID string, sta
 	}
 	if total > shown {
 		if shown == 0 {
-			fmt.Fprintf(&receipt, "共 %d 项，详情见任务记录。", total)
+			fmt.Fprintf(&receipt, "%d 项未附详细回执，详情见任务记录。", total)
 		} else {
-			fmt.Fprintf(&receipt, "另有 %d 项，详情见任务记录。", total-shown)
+			fmt.Fprintf(&receipt, "另有 %d 项未附详细回执，详情见任务记录。", total-shown)
 		}
 	} else if receipt.Len() > 0 && receipt.String()[receipt.Len()-1] == '\n' {
 		value := strings.TrimSuffix(receipt.String(), "\n")
 		return value, nil
 	}
 	return strings.TrimSpace(receipt.String()), nil
+}
+
+// boundedToolResult 将服务端工具回执压成单行，避免长结果挤占后续对话上下文。
+func boundedToolResult(value string, maximum int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if maximum < 1 || len(value) <= maximum {
+		return value
+	}
+	value = value[:maximum]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return strings.TrimSpace(value) + "…"
 }
 
 // conversationActionLabel 返回简短的操作名称。

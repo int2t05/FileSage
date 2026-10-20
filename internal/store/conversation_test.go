@@ -4,6 +4,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -277,6 +278,29 @@ func TestCreateSymlinkIsLimitedToOneAnalysisOperation(t *testing.T) {
 	}
 	if ValidAnalysisOperations([]AnalysisOperation{symlink, {Action: "create_symlink", FilePath: "source.txt", TargetPath: "other-link"}}) {
 		t.Fatal("multiple create_symlink operations should be rejected")
+	}
+}
+
+func TestAnalysisOperationsUseBoundedPlanLimit(t *testing.T) {
+	operations := make([]AnalysisOperation, MaxAgentPlanOperations)
+	records := make([]OperationRecord, MaxAgentPlanOperations)
+	for index := range operations {
+		operations[index] = AnalysisOperation{Action: "create_directory", TargetPath: "整理/类别-" + strconv.Itoa(index)}
+		records[index] = OperationRecord{ID: "operation-" + strconv.Itoa(index), Ordinal: index, Action: "create_directory", Approval: ApprovalPending, Status: OperationPending}
+	}
+	if !ValidAnalysisOperations(operations) {
+		t.Fatalf("%d independent operations should fit the bounded plan", len(operations))
+	}
+	if !validInitialAgentOperations(records) {
+		t.Fatalf("%d independent operations should fit a persisted plan", len(records))
+	}
+	operations = append(operations, AnalysisOperation{Action: "create_directory", TargetPath: "整理/类别-extra"})
+	if ValidAnalysisOperations(operations) {
+		t.Fatalf("%d operations should exceed the bounded plan limit", len(operations))
+	}
+	records = append(records, OperationRecord{ID: "operation-extra", Ordinal: MaxAgentPlanOperations, Action: "create_directory", Approval: ApprovalPending, Status: OperationPending})
+	if validInitialAgentOperations(records) {
+		t.Fatalf("%d operations should exceed the persisted plan limit", len(records))
 	}
 }
 
