@@ -59,6 +59,13 @@ func platformMoveTreeNoReplace(ctx context.Context, root *Root, source, destinat
 		}
 		if err := root.RenameNoReplace(source, destination); err == nil {
 			result := TreeMoveResult{Published: true, SourceRemoved: true, Atomic: true}
+			actual, verifyErr := root.SnapshotTree(ctx, destination)
+			if verifyErr != nil || !sameRelocatedTreeSnapshot(expected, actual, source, destination) {
+				if verifyErr == nil {
+					verifyErr = ErrConflict
+				}
+				return restoreSameMountTree(root, source, destination, expected, result, verifyErr)
+			}
 			if err := syncMoveParents(root, source, destination); err != nil {
 				return result, fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
 			}
@@ -67,7 +74,30 @@ func platformMoveTreeNoReplace(ctx context.Context, root *Root, source, destinat
 			return TreeMoveResult{}, err
 		}
 	}
+	if err := platformRequireMoveRecovery(root); err != nil {
+		return TreeMoveResult{}, err
+	}
 	return copyThenRemoveTree(ctx, root, source, destination, expected, sourceMountID)
+}
+
+// restoreSameMountTree 在同卷改名后的快照不符时恢复来源。
+func restoreSameMountTree(root *Root, source, destination string, expected TreeSnapshot, result TreeMoveResult, cause error) (TreeMoveResult, error) {
+	current, err := root.LstatEntry(destination)
+	if err != nil || current.Kind != KindDirectory || !current.IdentityAvailable || current.Device != expected.Entries[0].Entry.Device || current.Inode != expected.Entries[0].Entry.Inode {
+		result.SourceRetained = destination
+		return result, errors.Join(cause, fmt.Errorf("restore moved directory: %w", errors.Join(ErrPathChanged, err)))
+	}
+	if err := root.RenameNoReplace(destination, source); err != nil {
+		result.SourceRetained = destination
+		return result, errors.Join(cause, fmt.Errorf("restore moved directory: %w", err))
+	}
+	result.Published = false
+	result.SourceRemoved = false
+	result.SourceRetained = ""
+	if err := syncMoveParents(root, source, destination); err != nil {
+		return result, errors.Join(cause, fmt.Errorf("%w: restore directory source: %w", ErrPublishedNotDurable, err))
+	}
+	return result, cause
 }
 
 // copyThenRemoveTree 先验证并发布副本，再隔离源目录、复核快照并安全删除。
@@ -80,6 +110,17 @@ func copyThenRemoveTree(ctx context.Context, root *Root, source, destination str
 	if !copyResult.Published {
 		return result, errors.New("directory copy did not confirm publication")
 	}
+	destinationSnapshot, err := root.SnapshotTree(ctx, destination)
+	if err != nil {
+		return result, err
+	}
+	if len(destinationSnapshot.Entries) == 0 {
+		return result, ErrConflict
+	}
+	destinationRoot := destinationSnapshot.Entries[0].Entry
+	if destinationRoot.Kind != KindDirectory || !destinationRoot.IdentityAvailable {
+		return result, ErrIdentityUnavailable
+	}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
@@ -87,14 +128,38 @@ func copyThenRemoveTree(ctx context.Context, root *Root, source, destination str
 		return result, err
 	}
 	var quarantine string
+	var recoveryID string
 	for range 8 {
 		quarantine, err = createMoveQuarantinePath(source)
 		if err != nil {
 			return result, fmt.Errorf("create source quarantine path: %w", err)
 		}
+		record := moveRecoveryRecord{
+			Version: 1, ID: moveRecoveryID(quarantine), Kind: moveRecoveryTree,
+			SourcePath: source, QuarantinePath: quarantine,
+			DestinationPath: destination,
+			SourceIdentity: moveObjectIdentity{
+				Device: expected.Entries[0].Entry.Device,
+				Inode:  expected.Entries[0].Entry.Inode,
+			},
+			QuarantineIdentity: moveObjectIdentity{
+				Device: expected.Entries[0].Entry.Device,
+				Inode:  expected.Entries[0].Entry.Inode,
+			},
+			DestinationIdentity:    moveObjectIdentity{Device: destinationRoot.Device, Inode: destinationRoot.Inode},
+			DestinationFingerprint: destinationRoot.Fingerprint(),
+			DestinationDigest:      destinationSnapshot.Digest,
+		}
+		if err := root.writeMoveRecoveryRecord(record); err != nil {
+			return result, fmt.Errorf("record interrupted directory move: %w", err)
+		}
+		recoveryID = record.ID
 		err = root.RenameNoReplace(source, quarantine)
 		if err == nil {
 			break
+		}
+		if cleanupErr := root.removeMoveRecoveryRecord(recoveryID); cleanupErr != nil {
+			return result, errors.Join(fmt.Errorf("isolate move source before removal: %w", err), cleanupErr)
 		}
 		if !errors.Is(err, fs.ErrExist) {
 			return result, fmt.Errorf("isolate move source before removal: %w", err)
@@ -127,6 +192,9 @@ func copyThenRemoveTree(ctx context.Context, root *Root, source, destination str
 	result.SourceRetained = ""
 	if err := syncMoveParent(root, source); err != nil {
 		return result, fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
+	}
+	if err := root.removeMoveRecoveryRecord(recoveryID); err != nil {
+		return result, fmt.Errorf("%w: clear completed directory move record: %w", ErrPublishedNotDurable, err)
 	}
 	return result, nil
 }
@@ -176,6 +244,9 @@ func restoreMoveQuarantine(root *Root, source, quarantine string, result TreeMov
 	result.SourceRetained = ""
 	if err := syncMoveParent(root, source); err != nil {
 		return result, errors.Join(cause, fmt.Errorf("sync restored source: %w", err))
+	}
+	if err := root.removeMoveRecoveryRecord(moveRecoveryID(quarantine)); err != nil {
+		return result, errors.Join(cause, fmt.Errorf("clear restored directory move record: %w", err))
 	}
 	return result, cause
 }

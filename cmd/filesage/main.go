@@ -51,6 +51,21 @@ func main() {
 		os.Exit(1)
 	}
 	defer root.Close()
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(cfg.DataDir, "move-recovery")); err != nil {
+		slog.Error("cannot configure move recovery", "error", err)
+		os.Exit(1)
+	}
+	moveRecovery, err := root.RecoverInterruptedMoves(context.Background())
+	if err != nil {
+		slog.Error("cannot inspect interrupted moves", "error", err)
+		os.Exit(1)
+	}
+	if moveRecovery.Restored > 0 || moveRecovery.Cleaned > 0 {
+		slog.Info("interrupted move recovery completed", "restored", moveRecovery.Restored, "cleaned", moveRecovery.Cleaned)
+	}
+	if moveRecovery.Pending > 0 {
+		slog.Warn("interrupted moves need manual review", "count", moveRecovery.Pending)
+	}
 	trashManager, err := trashsvc.Open(context.Background(), root, metadata)
 	if err != nil {
 		slog.Error("cannot recover trash operations", "error", err)

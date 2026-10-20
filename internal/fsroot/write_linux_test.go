@@ -13,7 +13,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -179,44 +178,57 @@ func TestMoveFileNoReplaceUsesAtomicSameMountMove(t *testing.T) {
 	}
 }
 
+// TestMoveFileNoReplaceRestoresSourceReplacementAtCommitBoundary 验证同卷提交时替换来源不会被误移。
+func TestMoveFileNoReplaceRestoresSourceReplacementAtCommitBoundary(t *testing.T) {
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "target"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(rootPath, "source.txt")
+	originalPath := filepath.Join(rootPath, "original.txt")
+	destinationPath := filepath.Join(rootPath, "target", "moved.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	entry, err := root.LstatEntry("source.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &sameMountMoveRaceContext{
+		Context: context.Background(), source: sourcePath, original: originalPath,
+		replacement: []byte("changed file"), triggerAt: 3,
+	}
+
+	outcome, err := root.MoveFileNoReplace(ctx, "source.txt", "target/moved.txt", entry.Fingerprint())
+	if !ctx.triggered || !errors.Is(err, ErrConflict) || outcome.Published || outcome.SourceRemoved {
+		t.Fatalf("move result = (%#v, %v), race triggered %t; want rejected replacement", outcome, err, ctx.triggered)
+	}
+	if data, err := os.ReadFile(sourcePath); err != nil || string(data) != string(ctx.replacement) {
+		t.Fatalf("replacement source = (%q, %v), want unchanged", data, err)
+	}
+	if data, err := os.ReadFile(originalPath); err != nil || string(data) != "approved file" {
+		t.Fatalf("approved source = (%q, %v), want unchanged", data, err)
+	}
+	if _, err := os.Lstat(destinationPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("replacement was published at destination: %v", err)
+	}
+}
+
 func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
-	sourceDir, err := os.MkdirTemp("/tmp", "filesage-move-source-")
-	if err != nil {
-		t.Skipf("temporary source mount unavailable: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(sourceDir) })
-	destinationDir, err := os.MkdirTemp("/dev/shm", "filesage-move-destination-")
-	if err != nil {
-		t.Skipf("temporary destination mount unavailable: %v", err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(destinationDir) })
+	root, sourceDir, destinationDir := openMoveFileRaceRoots(t)
 
 	sourcePath := filepath.Join(sourceDir, "source.txt")
 	destinationPath := filepath.Join(destinationDir, "moved.txt")
 	if err := os.WriteFile(sourcePath, []byte("cross mount contents"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	root, err := Open("/")
-	if err != nil {
-		if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
-			t.Skipf("host denies inspection of an unrelated system mount: %v", err)
-		}
-		t.Fatal(err)
-	}
-	defer root.Close()
 	sourceRelative := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
 	destinationRelative := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
-	sourceMount, err := root.MountID(sourceRelative)
-	if err != nil {
-		t.Skipf("source mount identity unavailable: %v", err)
-	}
-	destinationMount, err := root.MountID(strings.TrimPrefix(filepath.ToSlash(destinationDir), "/"))
-	if err != nil {
-		t.Skipf("destination mount identity unavailable: %v", err)
-	}
-	if sourceMount == destinationMount {
-		t.Skip("/tmp and /dev/shm share a mount in this environment")
-	}
 
 	entry, err := root.LstatEntry(sourceRelative)
 	if err != nil {
@@ -229,6 +241,9 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	wantDigest := sha256.Sum256([]byte("cross mount contents"))
 	if err != nil || !outcome.Published || !outcome.SourceRemoved || outcome.SHA256 != hex.EncodeToString(wantDigest[:]) {
 		t.Fatalf("cross-mount move outcome = %#v, error = %v", outcome, err)
+	}
+	if entries, err := readMoveRecoveryEntries(root.moveRecoveryRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("completed move journal = (%v, %v), want empty", entries, err)
 	}
 	if _, err := os.Stat(sourcePath); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("cross-mount move kept source: %v", err)
@@ -274,9 +289,9 @@ func TestMoveFilePreservesSourceChangedAfterCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := platformRemoveFileIfUnchanged(root, "source.txt", entry.Fingerprint())
-	if removed || !errors.Is(err, ErrConflict) {
-		t.Fatalf("remove changed source = (%t, %v), want conflict without removal", removed, err)
+	removed, retained, err := platformRemoveFileIfUnchanged(context.Background(), root, "source.txt", "destination.txt", entry.Fingerprint(), copyResult.SHA256)
+	if removed || retained != "" || !errors.Is(err, ErrConflict) {
+		t.Fatalf("remove changed source = (%t, %q, %v), want conflict without removal", removed, retained, err)
 	}
 	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != string(externalContent) {
 		t.Fatalf("external source content = (%q, %v)", content, err)
@@ -284,6 +299,233 @@ func TestMoveFilePreservesSourceChangedAfterCopy(t *testing.T) {
 	if content, err := os.ReadFile(filepath.Join(rootPath, "target", "moved.txt")); err != nil || string(content) != string(approvedContent) {
 		t.Fatalf("copied target content = (%q, %v)", content, err)
 	}
+}
+
+// TestMoveFilePreservesReplacementAtRemovalBoundary 验证删除前替换的来源不会被误删。
+func TestMoveFilePreservesReplacementAtRemovalBoundary(t *testing.T) {
+	root, sourceBase, destinationBase := openMoveFileRaceRoots(t)
+	sourcePath := filepath.Join(sourceBase, "source.txt")
+	originalPath := filepath.Join(sourceBase, "original.txt")
+	destinationPath := filepath.Join(destinationBase, "moved.txt")
+	approvedContent := []byte("approved file")
+	externalContent := []byte("external file")
+	if len(approvedContent) != len(externalContent) {
+		t.Fatal("fixture contents must have equal sizes")
+	}
+	if err := os.WriteFile(sourcePath, approvedContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceRelative := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destinationRelative := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
+	entry, err := root.LstatEntry(sourceRelative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &moveFileUnlinkHookContext{Context: context.Background(), destination: destinationPath, hook: func() error {
+		if err := os.Rename(sourcePath, originalPath); err != nil {
+			return err
+		}
+		return os.WriteFile(sourcePath, externalContent, 0o600)
+	}}
+
+	outcome, err := root.MoveFileNoReplace(ctx, sourceRelative, destinationRelative, entry.Fingerprint())
+	if !ctx.triggered {
+		t.Fatal("source replacement hook did not run at the removal boundary")
+	}
+	if outcome.SourceRemoved || !errors.Is(err, ErrConflict) {
+		t.Fatalf("move outcome = (%+v, %v), want conflict with source retained", outcome, err)
+	}
+	if data, err := os.ReadFile(sourcePath); err != nil || string(data) != string(externalContent) {
+		t.Fatalf("replacement source = (%q, %v), want external content", data, err)
+	}
+	if data, err := os.ReadFile(originalPath); err != nil || string(data) != string(approvedContent) {
+		t.Fatalf("original source = (%q, %v), want approved content", data, err)
+	}
+	if data, err := os.ReadFile(destinationPath); err != nil || string(data) != string(approvedContent) {
+		t.Fatalf("destination = (%q, %v), want approved content", data, err)
+	}
+}
+
+// TestMoveFileRetainsQuarantinedSourceWhenRestoreConflicts 保留无法安全恢复的隔离来源路径。
+func TestMoveFileRetainsQuarantinedSourceWhenRestoreConflicts(t *testing.T) {
+	root, sourceBase, destinationBase := openMoveFileRaceRoots(t)
+	sourcePath := filepath.Join(sourceBase, "source.txt")
+	destinationPath := filepath.Join(destinationBase, "moved.txt")
+	approvedContent := []byte("approved file")
+	externalContent := []byte("external file")
+	changedContent := []byte("modified file")
+	if len(approvedContent) != len(externalContent) || len(approvedContent) != len(changedContent) {
+		t.Fatal("fixture contents must have equal sizes")
+	}
+	if err := os.WriteFile(sourcePath, approvedContent, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sourceRelative := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destinationRelative := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
+	entry, err := root.LstatEntry(sourceRelative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &moveFileQuarantineHookContext{Context: context.Background(), source: sourcePath, destination: destinationPath, hook: func(quarantined string) error {
+		if err := os.WriteFile(quarantined, changedContent, 0o600); err != nil {
+			return err
+		}
+		if err := os.Chtimes(quarantined, entry.ModifiedAt, entry.ModifiedAt); err != nil {
+			return err
+		}
+		return os.WriteFile(sourcePath, externalContent, 0o600)
+	}}
+
+	outcome, err := root.MoveFileNoReplace(ctx, sourceRelative, destinationRelative, entry.Fingerprint())
+	if !ctx.triggered {
+		t.Fatal("quarantine mutation hook did not run")
+	}
+	if outcome.SourceRemoved || outcome.SourceRetained == "" || !errors.Is(err, ErrConflict) {
+		t.Fatalf("move outcome = (%+v, %v), want retained quarantine and conflict", outcome, err)
+	}
+	retainedPath := filepath.Join("/", filepath.FromSlash(outcome.SourceRetained))
+	if data, err := os.ReadFile(retainedPath); err != nil || string(data) != string(changedContent) {
+		t.Fatalf("retained source = (%q, %v), want modified content", data, err)
+	}
+	if data, err := os.ReadFile(sourcePath); err != nil || string(data) != string(externalContent) {
+		t.Fatalf("replacement source = (%q, %v), want external content", data, err)
+	}
+	if data, err := os.ReadFile(destinationPath); err != nil || string(data) != string(approvedContent) {
+		t.Fatalf("destination = (%q, %v), want approved content", data, err)
+	}
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	report, err := root.RecoverInterruptedMoves(context.Background())
+	if err != nil || report.Restored != 1 || report.Pending != 0 {
+		t.Fatalf("RecoverInterruptedMoves() = (%+v, %v), want retained source restored", report, err)
+	}
+	if data, err := os.ReadFile(sourcePath); err != nil || string(data) != string(changedContent) {
+		t.Fatalf("recovered changed source = (%q, %v), want preserved quarantine content", data, err)
+	}
+}
+
+func openMoveFileRaceRoots(t *testing.T) (*Root, string, string) {
+	t.Helper()
+	rootFS, err := os.OpenRoot("/")
+	if err != nil {
+		t.Skipf("open host filesystem root: %v", err)
+	}
+	root := &Root{root: rootFS, rootPath: "/"}
+	t.Cleanup(func() { _ = root.Close() })
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(t.TempDir(), "move-recovery")); err != nil {
+		t.Fatal(err)
+	}
+	sourceBase, err := os.MkdirTemp("/tmp", "filesage-file-race-source-")
+	if err != nil {
+		t.Skipf("create source fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(sourceBase) })
+	destinationBase, err := os.MkdirTemp("/dev/shm", "filesage-file-race-target-")
+	if err != nil {
+		t.Skipf("create destination fixture: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(destinationBase) })
+	sourceMount, err := root.MountID(strings.TrimPrefix(filepath.ToSlash(sourceBase), "/"))
+	if err != nil {
+		t.Skipf("read source mount identity: %v", err)
+	}
+	destinationMount, err := root.MountID(strings.TrimPrefix(filepath.ToSlash(destinationBase), "/"))
+	if err != nil {
+		t.Skipf("read destination mount identity: %v", err)
+	}
+	if sourceMount == destinationMount {
+		t.Skip("/tmp and /dev/shm share a mount in this environment")
+	}
+	return root, sourceBase, destinationBase
+}
+
+type moveFileUnlinkHookContext struct {
+	context.Context
+	destination string
+	hook        func() error
+	checks      int
+	triggered   bool
+}
+
+// sameMountMoveRaceContext 在同卷文件校验后模拟外部替换。
+type sameMountMoveRaceContext struct {
+	context.Context
+	source      string
+	original    string
+	replacement []byte
+	triggerAt   int
+	checks      int
+	triggered   bool
+}
+
+// Err 在指定检查点替换来源。
+func (ctx *sameMountMoveRaceContext) Err() error {
+	ctx.checks++
+	if !ctx.triggered && ctx.checks == ctx.triggerAt {
+		ctx.triggered = true
+		if err := os.Rename(ctx.source, ctx.original); err != nil {
+			return err
+		}
+		if err := os.WriteFile(ctx.source, ctx.replacement, 0o600); err != nil {
+			return err
+		}
+	}
+	return ctx.Context.Err()
+}
+
+type moveFileQuarantineHookContext struct {
+	context.Context
+	source      string
+	destination string
+	hook        func(string) error
+	triggered   bool
+}
+
+func (ctx *moveFileQuarantineHookContext) Err() error {
+	if !ctx.triggered {
+		if _, err := os.Lstat(ctx.destination); err == nil {
+			entries, readErr := os.ReadDir(filepath.Dir(ctx.source))
+			if readErr != nil {
+				return readErr
+			}
+			for _, entry := range entries {
+				if !strings.HasPrefix(entry.Name(), ".filesage-move-quarantine-") {
+					continue
+				}
+				quarantined := filepath.Join(filepath.Dir(ctx.source), entry.Name(), "source")
+				if _, err := os.Lstat(quarantined); err == nil {
+					ctx.triggered = true
+					if err := ctx.hook(quarantined); err != nil {
+						return err
+					}
+					break
+				} else if !os.IsNotExist(err) {
+					return err
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return ctx.Context.Err()
+}
+
+func (ctx *moveFileUnlinkHookContext) Err() error {
+	if !ctx.triggered {
+		if _, err := os.Lstat(ctx.destination); err == nil {
+			ctx.checks++
+			if ctx.checks == 2 {
+				ctx.triggered = true
+				if err := ctx.hook(); err != nil {
+					return err
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return ctx.Context.Err()
 }
 
 // TestWriteAtomicIfUnchangedDetectsRestoredModTime 验证 ctime 可发现伪装成旧版本的原地改写。

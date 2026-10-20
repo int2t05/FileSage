@@ -1330,6 +1330,11 @@ func openAgentTestServices(t *testing.T, databasePath, rootPath string) (*store.
 		_ = metadata.Close()
 		t.Fatal(err)
 	}
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(filepath.Dir(databasePath), "move-recovery")); err != nil {
+		_ = root.Close()
+		_ = metadata.Close()
+		t.Fatal(err)
+	}
 	return metadata, root, New(metadata, root, coordination.New())
 }
 

@@ -16,7 +16,7 @@ cd filesage_vX.Y.Z_linux_amd64
 
 ## 从源码构建
 
-需要 Go 1.27.2 或更新版本、Node.js 24 和 npm：
+需要 Go 1.27.3 或更新版本、Node.js 24 和 npm：
 
 ```sh
 cd web

@@ -58,6 +58,46 @@ func TestMoveTreeNoReplaceUsesAtomicRenameOnSameMount(t *testing.T) {
 	assertMoveFileContents(t, filepath.Join(rootPath, "destination", "source", "nested", "note.txt"), "move tree")
 }
 
+// TestMoveTreeNoReplaceRestoresMutationAfterAtomicRename 验证改名窗口内的内容变化会恢复来源。
+func TestMoveTreeNoReplaceRestoresMutationAfterAtomicRename(t *testing.T) {
+	rootPath := t.TempDir()
+	sourcePath := filepath.Join(rootPath, "source")
+	destinationPath := filepath.Join(rootPath, "destination", "source")
+	if err := os.MkdirAll(filepath.Join(sourcePath, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(rootPath, "destination"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourceFile := filepath.Join(sourcePath, "nested", "note.txt")
+	if err := os.WriteFile(sourceFile, []byte("approved tree"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	snapshot, err := root.SnapshotTree(context.Background(), "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := &moveTreePublicationHookContext{Context: context.Background(), destination: destinationPath, hook: func() error {
+		return os.WriteFile(filepath.Join(destinationPath, "nested", "note.txt"), []byte("changed tree"), 0o600)
+	}}
+
+	result, err := root.MoveTreeNoReplace(ctx, "source", "destination/source", snapshot)
+	if !ctx.triggered || !errors.Is(err, ErrConflict) || result.Published || result.SourceRemoved || result.SourceRetained != "" {
+		t.Fatalf("move result = (%+v, %v), race triggered %t; want source restored", result, err, ctx.triggered)
+	}
+	if data, err := os.ReadFile(filepath.Join(sourcePath, "nested", "note.txt")); err != nil || string(data) != "changed tree" {
+		t.Fatalf("restored source = (%q, %v), want changed content preserved", data, err)
+	}
+	if _, err := os.Lstat(destinationPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("destination remains after conflict: %v", err)
+	}
+}
+
 // TestMoveTreeNoReplaceRejectsStaleSnapshotBeforeChangingPaths 验证过期快照不会移动或删除来源。
 func TestMoveTreeNoReplaceRejectsStaleSnapshotBeforeChangingPaths(t *testing.T) {
 	rootPath := t.TempDir()
@@ -90,24 +130,9 @@ func TestMoveTreeNoReplaceRejectsStaleSnapshotBeforeChangingPaths(t *testing.T) 
 
 // TestMoveTreeNoReplaceCopiesThenRemovesAcrossMounts 验证真实跨挂载移动先复制再移除来源。
 func TestMoveTreeNoReplaceCopiesThenRemovesAcrossMounts(t *testing.T) {
-	root, err := Open("/")
-	if err != nil {
-		t.Skipf("open filesystem root: %v", err)
-	}
-	t.Cleanup(func() { _ = root.Close() })
-	sourceBase, err := os.MkdirTemp("/tmp", "filesage-tree-move-source-")
-	if err != nil {
-		t.Skipf("create source fixture: %v", err)
-	}
-	destinationBase, err := os.MkdirTemp("/dev/shm", "filesage-tree-move-target-")
-	if err != nil {
-		_ = os.RemoveAll(sourceBase)
-		t.Skipf("create destination fixture: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(sourceBase)
-		_ = os.RemoveAll(destinationBase)
-	})
+	root, sourceBase, destinationBase := openCrossMountMoveRoots(t)
+	defer root.Close()
+	var err error
 	sourcePath := filepath.Join(sourceBase, "source")
 	if err := os.MkdirAll(filepath.Join(sourcePath, "nested", "empty"), 0o755); err != nil {
 		t.Fatal(err)
@@ -139,6 +164,9 @@ func TestMoveTreeNoReplaceCopiesThenRemovesAcrossMounts(t *testing.T) {
 	}
 	if !result.Published || !result.SourceRemoved || result.Atomic || result.SourceRetained != "" {
 		t.Fatalf("cross-mount result = %+v, want verified copy and source removal", result)
+	}
+	if entries, err := readMoveRecoveryEntries(root.moveRecoveryRoot); err != nil || len(entries) != 0 {
+		t.Fatalf("completed directory move journal = (%v, %v), want empty", entries, err)
 	}
 	if _, err := os.Lstat(sourcePath); !os.IsNotExist(err) {
 		t.Fatalf("cross-mount source remains: %v", err)
@@ -271,11 +299,16 @@ func TestMoveTreeNoReplaceRestoresMutationDuringQuarantineCheck(t *testing.T) {
 // openCrossMountMoveRoots 在 /tmp 与 /dev/shm 创建真实跨挂载测试目录。
 func openCrossMountMoveRoots(t *testing.T) (*Root, string, string) {
 	t.Helper()
-	root, err := Open("/")
+	// 直接打开根句柄，避免受容器内无关挂载点权限影响。
+	rootFS, err := os.OpenRoot("/")
 	if err != nil {
 		t.Skipf("open filesystem root: %v", err)
 	}
+	root := &Root{root: rootFS, rootPath: "/"}
 	t.Cleanup(func() { _ = root.Close() })
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(t.TempDir(), "move-recovery")); err != nil {
+		t.Fatal(err)
+	}
 	sourceBase, err := os.MkdirTemp("/tmp", "filesage-tree-move-source-")
 	if err != nil {
 		t.Skipf("create source fixture: %v", err)

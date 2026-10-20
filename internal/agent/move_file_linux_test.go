@@ -411,8 +411,9 @@ func TestMoveFileRecordsPublishedButUnremovedAsPartial(t *testing.T) {
 	if err := metadata.StartAgentOperation(ctx, plan.ID, plan.Operations[0].ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	updated, err := service.recordMoveFileOutcome(ctx, plan.ID, plan.Operations[0], fsroot.FileMoveResult{Published: true}, "", errors.New("source removal conflict"))
-	if err == nil || updated.Operations[0].Status != store.OperationPartial {
+	retainedPath := "source/.filesage-move-quarantine-test/source"
+	updated, err := service.recordMoveFileOutcome(ctx, plan.ID, plan.Operations[0], fsroot.FileMoveResult{Published: true, SourceRetained: retainedPath}, "", errors.New("source removal conflict"))
+	if err == nil || updated.Operations[0].Status != store.OperationPartial || !strings.Contains(updated.Operations[0].ResultMessage, retainedPath) {
 		t.Fatalf("partial result = (%#v, %v)", updated, err)
 	}
 	tasks, err := metadata.ListTasks(ctx, store.TaskListQuery{Limit: 10})
