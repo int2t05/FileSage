@@ -77,7 +77,7 @@ flowchart LR
 
 ### 上传
 
-浏览器使用 `tus-js-client`，服务端内嵌 tusd v2 的 tus 1.0 handler，上传仅写入服务私有暂存区。服务端分别持久化接收与发布状态；完成后验证长度、哈希、目标状态和权限，再经协调器改名发布；跨盘时复制并校验。回调不得绕过数字后缀、目标冲突和文件写锁。浏览器重选文件后重新核对大小与内容指纹，不能按文件名复用续传状态。[tus 协议](https://tus.io/protocols/resumable-upload.html)、[tusd v2 上游](https://github.com/tus/tusd)、[浏览器客户端](https://github.com/tus/tus-js-client/blob/0fee69e35750090a6f7f9ea30abf08852f0253ca/README.md)。分片大小、校验方式、同时上传数和文件规模按性能基准决定。
+浏览器使用 `tus-js-client`，服务端内嵌 tusd v2 的 tus 1.0 handler，上传仅写入服务私有暂存区。单文件与暂存声明总量默认各限 20 GiB，最多保留 128 个未完成或等待发布的上传；容量预留从 `.info` 状态恢复，取消及成功发布后释放，不自动删除仍可续传的文件。损坏或无法核算的暂存状态会阻止新建上传。服务端分别持久化接收与发布状态；完成后验证长度、哈希、目标状态和权限，再经协调器改名发布；跨盘时复制并校验。回调不得绕过数字后缀、目标冲突和文件写锁。浏览器重选文件后重新核对大小与内容指纹，不能按文件名复用续传状态。[tus 协议](https://tus.io/protocols/resumable-upload.html)、[tusd v2 上游](https://github.com/tus/tusd)、[浏览器客户端](https://github.com/tus/tus-js-client/blob/0fee69e35750090a6f7f9ea30abf08852f0253ca/README.md)。分片大小、校验方式和文件规模按性能基准决定。
 
 ### 文件阅读与派生处理
 
@@ -121,7 +121,7 @@ Shell 暂存方案在计划审计中提供真实文件差异；直接修改原�
 | ADR-0001 | Go 模块化单体；格式工具使用受限子进程 | GitHub CI 的 Linux 构建、全量测试、`vet` 和 `govulncheck` 通过；Linux 服务已部署。 | 整机重启与不同发行版安装仍待验。 |
 | ADR-0002 | 服务本机 SQLite WAL；目录索引可重建 | 持久实例已运行 schema v28；2026-10-20 只读核验结果为完整性 `ok`、外键错误 0。 | 真实数据恢复、真实规模和容量基准。 |
 | ADR-0003 | 文件系统为权威数据；限制软／硬链接写语义 | Linux 路径与并发测试通过；两卷复制、移动在非 root 服务下实测通过。 | 外部进程竞争、卸载及只读卷故障恢复。 |
-| ADR-0004 | tus 续传至私有暂存，校验后发布 | 浏览器续传、服务重启恢复及文件校验已有 E2E 记录；单文件默认限 20 GiB，超限请求返回 413，`FILESAGE_UPLOAD_MAX_BYTES=0` 可取消限制。 | 大规模负载和浏览器断网选择器恢复。 |
+| ADR-0004 | tus 续传至有界私有暂存，校验后发布 | 本地候选新增 20 GiB 暂存总量预留和 128 个资源上限；TUS 集成测试覆盖超限拒绝、重启恢复预留及取消释放。生产服务器尚未部署该变更。 | Linux CI、生产升级、批量上传容量基线和浏览器断网选择器恢复。 |
 | ADR-0005 | 浏览器专用解析；Office 由隔离 LibreOffice 静态转 PDF | 基础 Office、PDF、表格、EPUB 与归档合成样本通过；解析输入受大小、时间和并发限制。 | 复杂真实文件、相机样本及完整浏览器兼容矩阵。 |
 | ADR-0006 | Bubblewrap 暂存 Shell、差异审阅与统一提交；能力不足时拒绝执行 | Linux systemd 服务已启用资源委托；隔离执行、计划审阅、bypass 写回和审计有 E2E 记录。 | 当前部署版本的完整浏览器审批流程及主机重启恢复。 |
 | ADR-0007 | React、TypeScript、Vite、Radix Primitives、Lucide | 生产构建与 320／360／390 CSS px 页面检查通过。 | 实体手机、键盘和完整无障碍验收。 |

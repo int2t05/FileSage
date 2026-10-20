@@ -35,6 +35,7 @@ go build -o ./filesage ./cmd/filesage
 | `FILESAGE_ROOT` | 是 | 已存在的绝对路径；服务只能管理此目录树内文件。独立磁盘可挂载到该树下。 |
 | `FILESAGE_DATA_DIR` | 是 | SQLite 和上传暂存目录；必须位于管理根目录之外。 |
 | `FILESAGE_UPLOAD_MAX_BYTES` | 否 | 单文件上传上限，默认 20 GiB；设为 `0` 表示不限制。超过上限时服务在接收前返回 HTTP 413。 |
+| `FILESAGE_UPLOAD_STAGING_MAX_BYTES` | 否 | 未完成及等待发布的上传声明总量上限，默认 20 GiB；必须大于 `0`。超限的新上传返回 HTTP 413。 |
 | `FILESAGE_WEB_DIR` | 否 | 页面目录；源码构建时通常为 `web/dist`，systemd 示例使用 `/usr/local/lib/filesage/web`。设置后由 Go 同源托管页面和 API。 |
 | `FILESAGE_LISTEN_ADDR` | 否 | 监听地址，默认 `127.0.0.1:8080`。只允许回环、私有或链路本地 IP。 |
 | `FILESAGE_ALLOWED_HOSTS` | 否 | 逗号分隔的额外主机名／IP，不带端口。 |
@@ -42,6 +43,8 @@ go build -o ./filesage ./cmd/filesage
 | `FILESAGE_AGENT_MODEL` | 否 | Agent 模型名；不配置时基础文件管理仍可使用。 |
 | `FILESAGE_AGENT_PROVIDER` | 否 | 展示用服务标识，默认 `openai-compatible`。 |
 | `FILESAGE_AGENT_API_KEY` | 否 | 进程环境变量中的 Bearer 密钥；不写入数据库、日志或 API 响应。 |
+
+暂存容量按 TUS 上传声明的文件大小预留，服务重启后从暂存状态恢复；取消或成功发布后释放。最多保留 128 个未完成或等待发布的上传。系统不会自动清理仍可续传的上传；发现无法核算的暂存状态时，会保留已有数据并拒绝新建上传。
 
 最小运行示例：
 

@@ -46,6 +46,21 @@ type UploadPhase =
   | 'resume-needed'
   | 'unavailable';
 
+// uploadTransferErrorMessage 将服务端限额错误转成可操作提示。
+function uploadTransferErrorMessage(error: Error): string {
+  if (error instanceof tus.DetailedError) {
+    const response = error.originalResponse;
+    const status = response?.getStatus();
+    if (status === 413 && response?.getBody().includes('UPLOAD_STAGING_LIMIT')) {
+      return '上传暂存空间已满，请等待当前上传完成或取消任务后重试。';
+    }
+    if (status === 413) return '文件超过服务端单文件上传上限。';
+    if (status === 429) return '待处理上传过多，请完成或取消部分任务后重试。';
+    if (status === 507) return '暂存状态无法核验，现有上传数据已保留；请联系管理员检查服务日志。';
+  }
+  return error.message || '上传失败，请重试。';
+}
+
 interface UploadTask {
   id: string;
   upload?: tus.Upload;
@@ -563,7 +578,7 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
           }
           updateTask(id, (task) => ['published', 'failed', 'partial', 'cancelled', 'cancelling', 'checking', 'publishing'].includes(task.phase)
             ? task
-            : { ...task, phase: 'transfer-error', error: error.message || '上传失败，请重试。' });
+            : { ...task, phase: 'transfer-error', error: uploadTransferErrorMessage(error) });
         },
       });
       const task: UploadTask = {
