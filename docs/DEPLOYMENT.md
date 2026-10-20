@@ -34,6 +34,7 @@ go build -o ./filesage ./cmd/filesage
 | --- | --- | --- |
 | `FILESAGE_ROOT` | 是 | 已存在的绝对路径；服务只能管理此目录树内文件。独立磁盘可挂载到该树下。 |
 | `FILESAGE_DATA_DIR` | 是 | SQLite 和上传暂存目录；必须位于管理根目录之外。 |
+| `FILESAGE_UPLOAD_MAX_BYTES` | 否 | 单文件上传上限，默认 20 GiB；设为 `0` 表示不限制。超过上限时服务在接收前返回 HTTP 413。 |
 | `FILESAGE_WEB_DIR` | 否 | 页面目录；源码构建时通常为 `web/dist`，systemd 示例使用 `/usr/local/lib/filesage/web`。设置后由 Go 同源托管页面和 API。 |
 | `FILESAGE_LISTEN_ADDR` | 否 | 监听地址，默认 `127.0.0.1:8080`。只允许回环、私有或链路本地 IP。 |
 | `FILESAGE_ALLOWED_HOSTS` | 否 | 逗号分隔的额外主机名／IP，不带端口。 |
