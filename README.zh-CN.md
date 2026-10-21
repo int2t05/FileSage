@@ -68,7 +68,7 @@ npx playwright install chromium
 npm run e2e
 ```
 
-端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 会运行相同检查。
+端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 还会运行 race 检查、漏洞扫描和 Linux 发布包冒烟测试。
 
 ## 项目文档
 
