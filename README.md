@@ -13,7 +13,7 @@ mounted disks and lets you review AI-proposed file changes before they run.
 ## Status
 
 Early MVP development. There is no stable release or prebuilt package yet. See
-the [acceptance ledger](docs/ACCEPTANCE.md) for verified capabilities and
+the [acceptance scope](docs/ACCEPTANCE.md) for verified capabilities and
 remaining checks.
 
 ## What it does
@@ -21,7 +21,7 @@ remaining checks.
 - Browse, search, filter, upload and organize files in their native directory
   structure. Mount additional disks beneath the configured root; folders remain
   the only categories.
-- Resume interrupted uploads (20 GiB per file and in-progress staging by default; both configurable), download original files, and create or inspect supported archives.
+- Resume interrupted uploads (20 GiB per file and 20 GiB total staging by default; both configurable), download original files, and create or inspect supported archives.
 - Read common image, audio, video, PDF, text, Markdown, Office, spreadsheet,
   EPUB and archive formats in the browser. Unsupported or complex files remain
   available for download.
