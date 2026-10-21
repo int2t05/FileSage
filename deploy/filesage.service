@@ -20,6 +20,23 @@ RestartSec=5s
 TimeoutStopSec=15s
 # 为隔离 Shell 子任务委托聚合资源控制器。
 Delegate=cpu memory pids
+# 默认只允许写入管理根目录；StateDirectory 自动保持可写。
+ReadWritePaths=/srv/filesage-files
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+# 为 Bubblewrap 的无特权用户命名空间保留隔离所需能力。
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN
+ProtectClock=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
