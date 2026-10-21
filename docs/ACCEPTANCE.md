@@ -6,7 +6,7 @@
 
 | 范围 | 结果 | 边界 |
 | --- | --- | --- |
-| GitHub 主线 | 远端 `main` 提交 `e737ab2` 的 [CI](https://github.com/int2t05/FileSage/actions/runs/39686444542) 全绿，包含 Go 测试、race、`vet`、`govulncheck`、构建，Web 依赖审计、273 项测试、类型检查、生产构建、Chromium E2E 和 Linux 发布包冒烟。 | 主线构建通过不代表已发布稳定版。 |
+| GitHub 主线 | 远端 `main` 提交 `51e2f6e` 的 [CI](https://github.com/int2t05/FileSage/actions/runs/39689847500) 全绿，包含 Go 测试、race、`vet`、`govulncheck`、构建，Web 依赖审计、273 项测试、类型检查、生产构建、Chromium E2E 和 Linux 发布包冒烟。 | 主线构建通过不代表已发布稳定版。 |
 | Linux 候选 | `e737ab2` 通过 Go 全量测试、`vet`、race、`govulncheck`；Go 1.27.3 构建 Linux amd64 发布包，校验和与 start/write/restart/read 冒烟通过。Web 依赖审计为 0 项漏洞，273 项测试、类型检查、生产构建通过；Linux Chromium E2E 通过。 | 浏览器与文件操作使用合成数据；Agent E2E 使用本地固定测试模型。尚非稳定版发布。 |
 | 持久服务器 | 部署版本 `e737ab2`，Go 1.27.3；systemd 服务运行，私有 LAN 健康接口返回 `ok`，网页 HTTP 200。SQLite schema v29，`integrity_check` 为 `ok`，外键违规为 0；文件排序索引存在，管理根下的第二块 ext4 卷已挂载并纳入 systemd 挂载依赖。 | 验证覆盖部署、迁移和只读完整性检查；生产管理根目录的 Agent 文件写入仍未验收。 |
 | 备份与恢复 | 在服务器 `/home` ext4 卷上的隔离根目录和数据目录，使用 `e737ab2` 创建测试目录，经停服校验和备份管理根与 SQLite 数据；篡改并删除测试数据后恢复、重启，API 可读到原文件。恢复后 schema v29、`integrity_check` 为 `ok`，外键违规为 0。 | 同机同盘流程演练；未验证独立主机、独立备份介质、整机故障或介质损坏。 |
