@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"filesage/internal/fsroot"
+	"filesage/internal/logging"
 	"filesage/internal/store"
 )
 
@@ -62,10 +63,10 @@ func TestStartPlanUsesPersistedDefaultBypassAfterReview(t *testing.T) {
 }
 
 func TestAgentToolStepLogsStatusWithoutUserPaths(t *testing.T) {
-	ctx := context.Background()
+	ctx := logging.WithRequestID(context.Background(), "request-test-id")
 	previousLogger := slog.Default()
 	var output bytes.Buffer
-	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	slog.SetDefault(slog.New(logging.NewRequestIDHandler(slog.NewTextHandler(&output, nil))))
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 
 	_, _, service := permissionFixture(t)
@@ -87,7 +88,7 @@ func TestAgentToolStepLogsStatusWithoutUserPaths(t *testing.T) {
 	}
 
 	logs := output.String()
-	for _, expected := range []string{"agent tool step started", "agent tool step completed", "plan_id=", "operation_id=", "action=create_directory", "status=succeeded", "duration_ms="} {
+	for _, expected := range []string{"agent tool step started", "agent tool step completed", "request_id=request-test-id", "plan_id=", "operation_id=", "action=create_directory", "status=succeeded", "duration_ms="} {
 		if !strings.Contains(logs, expected) {
 			t.Errorf("tool logs %q do not include %q", logs, expected)
 		}

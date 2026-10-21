@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"filesage/internal/logging"
 )
 
 const slowRequestThreshold = 2 * time.Second
@@ -23,6 +25,7 @@ func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 			requestID = hex.EncodeToString(requestIDBytes[:])
 			w.Header().Set("X-Request-ID", requestID)
 		}
+		r = r.WithContext(logging.WithRequestID(r.Context(), requestID))
 		startedAt := time.Now()
 		response := &requestLogResponse{ResponseWriter: w}
 		next.ServeHTTP(response, r)

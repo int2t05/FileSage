@@ -21,6 +21,7 @@ import (
 	"filesage/internal/httpapi"
 	"filesage/internal/imagepreview"
 	"filesage/internal/indexer"
+	"filesage/internal/logging"
 	"filesage/internal/store"
 	trashsvc "filesage/internal/trash"
 	"filesage/internal/upload"
@@ -29,6 +30,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(logging.NewRequestIDHandler(slog.NewTextHandler(os.Stderr, nil))))
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)

@@ -182,7 +182,7 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 	startedAt := time.Now()
 	status := s.model.Status()
 	if !status.Available {
-		slog.Warn("agent conversation unavailable", "conversation_id", id, "reason", "model_unavailable")
+		slog.WarnContext(ctx, "agent conversation unavailable", "conversation_id", id, "reason", "model_unavailable")
 		if err := s.store.FinishConversationTurn(ctx, id, store.ConversationFailed,
 			"Agent 模型尚未配置，请先配置服务端模型。", store.AnalysisCard{}, status.Reason, time.Now().UTC()); err != nil {
 			return store.AgentConversation{}, err
@@ -204,7 +204,7 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 			if providerStatus > 0 {
 				logAttrs = append(logAttrs, "provider_status", providerStatus)
 			}
-			slog.Warn("agent model request failed", logAttrs...)
+			slog.WarnContext(ctx, "agent model request failed", logAttrs...)
 			return s.finishTurnFailure(ctx, id, "模型暂时无法处理本轮对话，请稍后重试。", "provider_error", completionErr)
 		}
 		result = conversationTurnResult{}
@@ -218,7 +218,7 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 			break
 		}
 		willRetry := modelAttempts == 1
-		slog.Warn("agent model response rejected", "conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "retry", willRetry, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", reason)
+		slog.WarnContext(ctx, "agent model response rejected", "conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "retry", willRetry, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", reason)
 		if !willRetry {
 			return s.finishTurnFailure(ctx, id, "模型返回的对话方案无效，请调整描述后重试。", "invalid_model_response", responseErr)
 		}
@@ -266,7 +266,7 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 	if err := s.store.FinishConversationTurn(ctx, id, state, result.Reply, card, "", time.Now().UTC(), contextSummary...); err != nil {
 		return store.AgentConversation{}, err
 	}
-	slog.Info("agent conversation turn completed", "conversation_id", id, "state", state, "operation_count", len(card.Operations), "model_attempts", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds())
+	slog.InfoContext(ctx, "agent conversation turn completed", "conversation_id", id, "state", state, "operation_count", len(card.Operations), "model_attempts", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds())
 	return s.store.Conversation(ctx, id)
 }
 

@@ -18,6 +18,7 @@ import (
 	"testing"
 
 	"filesage/internal/fsroot"
+	"filesage/internal/logging"
 )
 
 func newTestHandler(t *testing.T) http.Handler {
@@ -58,7 +59,9 @@ func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/files/{path...}", func(w http.ResponseWriter, _ *http.Request) {
+	var handledRequestID string
+	mux.HandleFunc("GET /api/v1/files/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		handledRequestID = logging.RequestID(r.Context())
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	})
 	response := httptest.NewRecorder()
@@ -67,6 +70,9 @@ func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 
 	if response.Code != http.StatusInternalServerError || response.Header().Get("X-Request-ID") == "" {
 		t.Fatalf("response = %d, request id = %q", response.Code, response.Header().Get("X-Request-ID"))
+	}
+	if handledRequestID == "" || handledRequestID != response.Header().Get("X-Request-ID") {
+		t.Fatalf("request context ID %q does not match response header %q", handledRequestID, response.Header().Get("X-Request-ID"))
 	}
 	output := logs.String()
 	for _, want := range []string{"GET /api/v1/files/{path...}", "status=500", "request_id="} {
