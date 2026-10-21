@@ -293,7 +293,7 @@ func conversationPromptMessages(conversation store.AgentConversation) []ChatMess
 
 func conversationToolCatalogPrompt() string {
 	var catalog strings.Builder
-	catalog.WriteString("当前可用的内置工具目录（写入动作 ID、输入契约和执行策略来自服务端注册表，是能力与输入要求的事实来源）：")
+	catalog.WriteString("当前可用的内置工具目录（动作 ID、能力说明与执行策略来自服务端注册表；输入契约是服务端预检字段，不是对话 JSON 字段名；对话输出字段以本指令中的 JSON 契约为准）：")
 	for _, tool := range AgentToolCatalog() {
 		catalog.WriteString("\n- ")
 		catalog.WriteString(tool.ID)

@@ -15,6 +15,11 @@ if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 git cat-file -e "$commit^{commit}"
 
+# 先校验工具链，避免生成缺少构建信息的发布包。
+go_version="$(go version)"
+node_version="$(node --version)"
+npm_version="$(npm --version)"
+
 bundle="filesage_"$version"_linux_amd64"
 stage="dist/$bundle"
 case "$stage" in
@@ -35,9 +40,9 @@ cp -R LICENSES/. "$stage/LICENSES/"
 {
   printf 'Version: %s\n' "$version"
   printf 'Commit: %s\n' "$commit"
-  printf 'Go: %s\n' "$(go version)"
-  printf 'Node: %s\n' "$(node --version)"
-  printf 'npm: %s\n' "$(npm --version)"
+  printf 'Go: %s\n' "$go_version"
+  printf 'Node: %s\n' "$node_version"
+  printf 'npm: %s\n' "$npm_version"
 } > "$stage/BUILDINFO.txt"
 
 source_date_epoch="$(git show -s --format=%ct "$commit")"

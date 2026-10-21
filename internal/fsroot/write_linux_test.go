@@ -234,11 +234,11 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	outcome, err := root.MoveFileNoReplace(context.Background(), sourceRelative, destinationRelative, entry.Fingerprint())
+	wantDigest := sha256.Sum256([]byte("cross mount contents"))
+	outcome, err := root.MoveFileNoReplaceWithSHA256(context.Background(), sourceRelative, destinationRelative, entry.Fingerprint(), hex.EncodeToString(wantDigest[:]))
 	if errors.Is(err, ErrAtomicWriteUnsupported) {
 		t.Skipf("destination mount does not support anonymous publication: %v", err)
 	}
-	wantDigest := sha256.Sum256([]byte("cross mount contents"))
 	if err != nil || !outcome.Published || !outcome.SourceRemoved || outcome.SHA256 != hex.EncodeToString(wantDigest[:]) {
 		t.Fatalf("cross-mount move outcome = %#v, error = %v", outcome, err)
 	}
@@ -250,6 +250,36 @@ func TestMoveFileNoReplaceAcrossMountsCopiesThenRemovesSource(t *testing.T) {
 	}
 	if data, err := os.ReadFile(destinationPath); err != nil || string(data) != "cross mount contents" {
 		t.Fatalf("cross-mount destination = (%q, %v)", data, err)
+	}
+}
+
+// TestMoveFileNoReplaceAcrossMountsRejectsDigestMismatch 验证摘要不符时不发布目标。
+func TestMoveFileNoReplaceAcrossMountsRejectsDigestMismatch(t *testing.T) {
+	root, sourceDir, destinationDir := openMoveFileRaceRoots(t)
+
+	sourcePath := filepath.Join(sourceDir, "source.txt")
+	destinationPath := filepath.Join(destinationDir, "moved.txt")
+	approvedContent := []byte("approved contents")
+	if err := os.WriteFile(sourcePath, approvedContent, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	sourceRelative := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destinationRelative := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
+	entry, err := root.LstatEntry(sourceRelative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongDigest := sha256.Sum256([]byte("external contents"))
+
+	outcome, err := root.MoveFileNoReplaceWithSHA256(context.Background(), sourceRelative, destinationRelative, entry.Fingerprint(), hex.EncodeToString(wrongDigest[:]))
+	if !errors.Is(err, ErrConflict) || outcome.Published || outcome.SourceRemoved {
+		t.Fatalf("cross-mount move with wrong digest = (%#v, %v), want conflict before publish", outcome, err)
+	}
+	if data, err := os.ReadFile(sourcePath); err != nil || string(data) != string(approvedContent) {
+		t.Fatalf("source after digest conflict = (%q, %v), want preserved", data, err)
+	}
+	if _, err := os.Lstat(destinationPath); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("cross-mount target after digest conflict = %v, want absent", err)
 	}
 }
 

@@ -272,7 +272,7 @@ func TestMultiOperationRecoveryRequiresConfirmationAndDoesNotReplaySuccess(t *te
 	if err := metadata.StartAgentOperation(ctx, plan.ID, first.ID, time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.applyOperation(first); err != nil {
+	if err := service.createDirectory(first); err != nil {
 		t.Fatal(err)
 	}
 	if err := metadata.FinishAgentOperation(ctx, plan.ID, first.ID, store.OperationSucceeded, "目录已创建", time.Now().UTC()); err != nil {
