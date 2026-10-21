@@ -1091,10 +1091,10 @@ func (s *Service) removeCancelledTextPayloads(plan store.PlanRecord) error {
 
 func (s *Service) executeOperation(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
 	startedAt := time.Now()
-	slog.Info("agent tool step started", "plan_id", planID, "operation_id", op.ID, "action", op.Action)
+	slog.InfoContext(ctx, "agent tool step started", "plan_id", planID, "operation_id", op.ID, "action", op.Action)
 	tool, ok := agentTools()[op.Action]
 	if !ok || tool.execute == nil {
-		slog.Warn("agent tool step rejected", "plan_id", planID, "operation_id", op.ID, "action", op.Action, "reason", "tool_not_registered")
+		slog.WarnContext(ctx, "agent tool step rejected", "plan_id", planID, "operation_id", op.ID, "action", op.Action, "reason", "tool_not_registered")
 		return store.PlanRecord{}, ErrUnsupported
 	}
 	plan, err := tool.execute(s, ctx, planID, scope, op)
