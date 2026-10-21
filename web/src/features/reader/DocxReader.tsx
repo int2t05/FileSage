@@ -139,7 +139,7 @@ export function DocxReader({ path, name, url, downloadUrl }: DocxReaderProps) {
   useEffect(() => {
     if (!document) { setImageUrls(new Map()); return; }
     const urls = new Map<string, string>();
-    for (const image of document.images) urls.set(image.id, URL.createObjectURL(new Blob([image.bytes], { type: image.mimeType })));
+    for (const image of document.images) urls.set(image.id, URL.createObjectURL(new Blob([new Uint8Array(image.bytes)], { type: image.mimeType })));
     setImageUrls(urls);
     return () => { for (const objectUrl of urls.values()) URL.revokeObjectURL(objectUrl); };
   }, [document]);
