@@ -19,6 +19,12 @@ git cat-file -e "$commit^{commit}"
 go_version="$(go version)"
 node_version="$(node --version)"
 npm_version="$(npm --version)"
+if [ ! -s web/dist/THIRD_PARTY_NOTICES.md ] \
+  || [ ! -d web/dist/LICENSES/npm ] \
+  || [ -z "$(find web/dist/LICENSES/npm -type f -print -quit 2>/dev/null)" ]; then
+  echo "frontend dependency licenses are missing; build the web app first" >&2
+  exit 1
+fi
 
 bundle="filesage_"$version"_linux_amd64"
 stage="dist/$bundle"
@@ -36,6 +42,7 @@ cp deploy/filesage.service deploy/filesage.env.example "$stage/deploy/"
 cp docs/DEPLOYMENT.md docs/agent-conversation-api.md "$stage/docs/"
 cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
 cp -R LICENSES/. "$stage/LICENSES/"
+bash scripts/collect-go-licenses.sh "$stage/LICENSES"
 
 {
   printf 'Version: %s\n' "$version"
