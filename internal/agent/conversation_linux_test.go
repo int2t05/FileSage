@@ -674,6 +674,70 @@ func TestTrashApprovalInvalidatesWhenSourceChanges(t *testing.T) {
 	}
 }
 
+// TestTrashApprovalInvalidatesOpenHandleChange 验证审核前原地改写不会移入回收站。
+func TestTrashApprovalInvalidatesOpenHandleChange(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	sourcePath := filepath.Join(rootPath, "source.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	trash, err := trashsvc.Open(ctx, root, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans.trash = trash
+	plan, err := plans.Propose(ctx, Proposal{
+		RequestText: "将文件移入回收站", Action: "trash", SourcePath: "source.txt", Reason: "按用户确认移入回收站",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedEntry, err := root.LstatEntry("source.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, externalData := rewriteThroughOpenHandlePreservingIdentityAndMtime(t, sourcePath, approvedInfo)
+	defer handle.Close()
+	currentEntry, err := root.LstatEntry("source.txt")
+	if err != nil || !currentEntry.ChangeTimeAvailable || currentEntry.ChangedAt.Equal(approvedEntry.ChangedAt) {
+		t.Fatalf("same-inode rewrite did not change ctime: entry=%#v err=%v", currentEntry, err)
+	}
+
+	updated, err := plans.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated {
+		t.Fatalf("trash approval after open-handle change = (%#v, %v), want invalidated conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+		t.Fatalf("external source changed: content=%q err=%v", content, err)
+	}
+	page, err := trash.List(ctx, 100, "")
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("stale item entered trash: %#v, %v", page.Items, err)
+	}
+	events, err := metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleAudit bool
+	for _, event := range events {
+		if event.PlanID == plan.ID && event.OperationID == plan.Operations[0].ID && event.EventType == "operation_invalidated" && event.Outcome == "stale" {
+			staleAudit = true
+			break
+		}
+	}
+	if !staleAudit {
+		t.Fatalf("open-handle conflict has no stale audit record: %#v", events)
+	}
+}
+
 func TestTrashApprovalInvalidatesWhenDirectoryContentsChange(t *testing.T) {
 	ctx := context.Background()
 	rootPath := t.TempDir()
@@ -1387,7 +1451,7 @@ func TestRenameRecordsPartialWhenTargetContentDiffers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.applyOperation(op); err != nil {
+	if err := root.RenameNoReplace(op.SourcePath, op.TargetPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(target, []byte("tampered"), 0o600); err != nil {
@@ -1400,7 +1464,9 @@ func TestRenameRecordsPartialWhenTargetContentDiffers(t *testing.T) {
 	if err != nil || !matchesRenameResult(entry.Fingerprint(), op.SourceStateJSON) {
 		t.Fatalf("test setup did not retain the approved file fingerprint: (%#v, %v)", entry, err)
 	}
-	updated, err := service.recordRenameOutcome(ctx, plan.ID, op, digest, nil)
+	updated, err := service.recordMoveFileOutcome(ctx, plan.ID, op, fsroot.FileMoveResult{
+		Published: true, SourceRemoved: true,
+	}, digest, nil)
 	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanFailed || updated.Operations[0].Status != store.OperationPartial {
 		t.Fatalf("tampered rename result = (%#v, %v), want manual review", updated, err)
 	}

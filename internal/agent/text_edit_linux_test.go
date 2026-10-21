@@ -4,9 +4,11 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -197,6 +199,153 @@ func TestTextEditRejectsHardLinksAndInvalidatesChangedSource(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(fixture.stageDir, operation.ID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("invalidated candidate remains: %v", err)
+	}
+}
+
+// TestTextEditReviewInvalidatesExternalOpenHandleAndRemovesCandidate 验证审核前改写会失效并清理候选。
+func TestTextEditReviewInvalidatesExternalOpenHandleAndRemovesCandidate(t *testing.T) {
+	ctx := context.Background()
+	fixture, plan := newTextEditFixture(t, "source\n", "candidate\n")
+	defer fixture.root.Close()
+	defer fixture.metadata.Close()
+	operation := plan.Operations[0]
+	if err := fixture.metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+
+	// 保持独立写句柄打开，模拟审核前其他程序改写源文件。
+	handle, err := os.OpenFile(fixture.sourcePath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if _, err := handle.WriteAt([]byte("outside\n"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := fixture.plans.StartPlan(ctx, plan.ID, plan.Version, "manual", false)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated || updated.Operations[0].Status != store.OperationSkipped {
+		t.Fatalf("stale review = (%#v, %v), want audited invalidation", updated, err)
+	}
+	if got, err := os.ReadFile(fixture.sourcePath); err != nil || string(got) != "outside\n" {
+		t.Fatalf("external contents = (%q, %v), want preserved", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.stageDir, operation.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalidated candidate remains staged: %v", err)
+	}
+
+	audit, err := fixture.metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invalidated bool
+	for _, record := range audit {
+		if record.PlanID == plan.ID && record.OperationID == operation.ID && record.EventType == "operation_invalidated" && record.Outcome == "stale" {
+			invalidated = true
+			break
+		}
+	}
+	if !invalidated {
+		t.Fatalf("stale review has no invalidation audit record: %#v", audit)
+	}
+}
+
+// TestTextEditStepInvalidatesExternalOpenHandleAndRemovesCandidate 验证逐步执行前改写会失效并清理候选。
+func TestTextEditStepInvalidatesExternalOpenHandleAndRemovesCandidate(t *testing.T) {
+	ctx := context.Background()
+	fixture, plan := newTextEditFixture(t, "source\n", "candidate\n")
+	defer fixture.root.Close()
+	defer fixture.metadata.Close()
+	operation := plan.Operations[0]
+	if err := fixture.metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := fixture.plans.StartPlan(ctx, plan.ID, plan.Version, "manual", false)
+	if err != nil || approved.ExecutionMode != "manual" || approved.ReviewedAt == nil {
+		t.Fatalf("StartPlan() = (%#v, %v)", approved, err)
+	}
+
+	// 保持独立写句柄打开，模拟审批后其他程序改写源文件。
+	handle, err := os.OpenFile(fixture.sourcePath, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	if _, err := handle.WriteAt([]byte("outside\n"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Sync(); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := fixture.plans.ExecuteStep(ctx, plan.ID, operation.ID, approved.Version)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated || updated.Operations[0].Status != store.OperationSkipped {
+		t.Fatalf("stale step = (%#v, %v), want audited invalidation", updated, err)
+	}
+	if got, err := os.ReadFile(fixture.sourcePath); err != nil || string(got) != "outside\n" {
+		t.Fatalf("external contents = (%q, %v), want preserved", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.stageDir, operation.ID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalidated candidate remains staged: %v", err)
+	}
+
+	audit, err := fixture.metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invalidated bool
+	for _, record := range audit {
+		if record.PlanID == plan.ID && record.OperationID == operation.ID && record.EventType == "operation_invalidated" && record.Outcome == "stale" {
+			invalidated = true
+			break
+		}
+	}
+	if !invalidated {
+		t.Fatalf("stale step has no invalidation audit record: %#v", audit)
+	}
+}
+
+// TestTextEditInvalidationReportsCandidateCleanupFailure 确保清理失败可诊断且不泄露路径。
+func TestTextEditInvalidationReportsCandidateCleanupFailure(t *testing.T) {
+	ctx := context.Background()
+	fixture, plan := newTextEditFixture(t, "source\n", "candidate\n")
+	defer fixture.root.Close()
+	defer fixture.metadata.Close()
+	operation := plan.Operations[0]
+	if err := fixture.metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	candidatePath := filepath.Join(fixture.stageDir, operation.ID)
+	if err := os.Remove(candidatePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(candidatePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(candidatePath, "retained"), []byte("candidate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fixture.sourcePath, []byte("external\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	previousLogger := slog.Default()
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	updated, err := fixture.plans.StartPlan(ctx, plan.ID, plan.Version, "manual", false)
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "remove invalidated text candidate") || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated {
+		t.Fatalf("stale review with cleanup failure = (%#v, %v), want invalidation and visible cleanup error", updated, err)
+	}
+	if _, err := os.Stat(filepath.Join(candidatePath, "retained")); err != nil {
+		t.Fatalf("cleanup failure did not retain candidate for recovery: %v", err)
+	}
+	logText := logs.String()
+	if !strings.Contains(logText, "agent invalidated text candidate cleanup failed") || !strings.Contains(logText, operation.ID) || strings.Contains(logText, fixture.sourcePath) || strings.Contains(logText, fixture.stageDir) {
+		t.Fatalf("cleanup log is missing diagnostics or contains a path: %q", logText)
 	}
 }
 

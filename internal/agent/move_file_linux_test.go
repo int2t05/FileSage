@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -189,6 +191,214 @@ func TestMoveFileRejectsExternalSourceChangeAfterApproval(t *testing.T) {
 	defer root.Close()
 	defer metadata.Close()
 	assertMoveRejectsChangedSourceAfterApproval(t, ctx, service, metadata, sourcePath, targetPath, "source/file.txt", "destination/file.txt")
+}
+
+// TestMoveFileRejectsOpenHandleChangeAfterApproval 验证原地改写会使移动审批失效。
+func TestMoveFileRejectsOpenHandleChangeAfterApproval(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(rootPath, "source"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rootPath, "destination"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(rootPath, "source", "file.txt")
+	targetPath := filepath.Join(rootPath, "destination", "file.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved source content"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	plan, err := service.Propose(ctx, moveFileProposal("source/file.txt", "destination/file.txt"))
+	if err != nil {
+		t.Fatalf("Propose() = %v", err)
+	}
+	if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve"); err != nil {
+		t.Fatalf("approve move plan: %v", err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedEntry, err := root.LstatEntry("source/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, externalData := rewriteThroughOpenHandlePreservingIdentityAndMtime(t, sourcePath, approvedInfo)
+	defer handle.Close()
+	currentEntry, err := root.LstatEntry("source/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !currentEntry.ChangeTimeAvailable || currentEntry.ChangedAt.Equal(approvedEntry.ChangedAt) {
+		t.Fatalf("test did not change ctime after preserving visible file metadata: before=%#v after=%#v", approvedEntry, currentEntry)
+	}
+
+	updated, err := service.Execute(ctx, plan.ID)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated || updated.Operations[0].Status != store.OperationSkipped {
+		t.Fatalf("move after open-handle change = (%#v, %v), want invalidated conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+		t.Fatalf("external source content changed: %q (%v)", content, err)
+	}
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("changed source was published to target: %v", err)
+	}
+	events, err := metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleAudit bool
+	for _, event := range events {
+		if event.PlanID == plan.ID && event.OperationID == plan.Operations[0].ID && event.EventType == "operation_invalidated" && event.Outcome == "stale" {
+			staleAudit = true
+			break
+		}
+	}
+	if !staleAudit {
+		t.Fatalf("open-handle conflict has no stale audit record: %#v", events)
+	}
+}
+
+// TestRenameRejectsOpenHandleChangeBetweenDigestAndCommit 验证摘要校验后的改写不会被重命名。
+func TestRenameRejectsOpenHandleChangeBetweenDigestAndCommit(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	parent := filepath.Join(rootPath, "documents")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(parent, "draft.txt")
+	targetPath := filepath.Join(parent, "final.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved rename"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	plan, err := service.Propose(ctx, Proposal{
+		RequestText: "重命名文件", ScopePath: "documents", Action: "rename",
+		SourcePath: "documents/draft.txt", TargetPath: "documents/final.txt", Reason: "按用户确认的名称修改",
+	})
+	if err != nil {
+		t.Fatalf("Propose() = %v", err)
+	}
+	approved, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if err != nil {
+		t.Fatalf("approve rename: %v", err)
+	}
+	if err := metadata.ClaimAgentPlanExecution(ctx, plan.ID, approved.Version, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.StartAgentOperation(ctx, plan.ID, plan.Operations[0].ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 第三次取消检查位于 Linux 同卷移动已校验打开文件描述符之后、原子改名前。
+	mutation := &openHandleMutationContext{Context: ctx, path: sourcePath, approved: approvedInfo, triggerAt: 3}
+	t.Cleanup(func() {
+		if mutation.handle != nil {
+			_ = mutation.handle.Close()
+		}
+	})
+	tool := agentTools()["rename"]
+	updated, err := tool.execute(service, mutation, plan.ID, approved.ScopePath, approved.Operations[0])
+	if !mutation.triggered || mutation.triggeredAt.Load() != mutation.triggerAt || mutation.err != nil {
+		t.Fatalf("race setup was not applied at commit boundary: triggered=%t call=%d err=%v", mutation.triggered, mutation.triggeredAt.Load(), mutation.err)
+	}
+	if !errors.Is(err, fsroot.ErrConflict) || updated.Status != store.PlanFailed || updated.Operations[0].Status != store.OperationFailed {
+		t.Fatalf("rename after open-handle change = (%#v, %v), want failed conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != mutation.data {
+		t.Fatalf("external source content changed: %q (%v)", content, err)
+	}
+	currentInfo, err := os.Stat(sourcePath)
+	if err != nil || !os.SameFile(approvedInfo, currentInfo) {
+		t.Fatalf("changed source was not restored to its original directory entry: info=%#v err=%v", currentInfo, err)
+	}
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale source was renamed: %v", err)
+	}
+	final, err := service.Plan(ctx, plan.ID)
+	if err != nil || final.Status != store.PlanFailed {
+		t.Fatalf("failed rename plan = (%#v, %v)", final, err)
+	}
+}
+
+// openHandleMutationContext 在指定取消检查处通过已打开句柄改写源文件。
+type openHandleMutationContext struct {
+	context.Context
+	path        string
+	approved    os.FileInfo
+	triggerAt   int32
+	calls       atomic.Int32
+	triggeredAt atomic.Int32
+	once        sync.Once
+	handle      *os.File
+	triggered   bool
+	data        string
+	err         error
+}
+
+// Err 在指定检查处、返回取消状态前触发一次受控的源文件改写。
+func (ctx *openHandleMutationContext) Err() error {
+	call := ctx.calls.Add(1)
+	if call == ctx.triggerAt {
+		ctx.triggeredAt.Store(call)
+		ctx.once.Do(func() {
+			ctx.triggered = true
+			ctx.handle, ctx.err = os.OpenFile(ctx.path, os.O_RDWR, 0)
+			if ctx.err != nil {
+				return
+			}
+			ctx.data = strings.Repeat("x", int(ctx.approved.Size()))
+			if _, ctx.err = ctx.handle.WriteAt([]byte(ctx.data), 0); ctx.err != nil {
+				return
+			}
+			if ctx.err = ctx.handle.Sync(); ctx.err != nil {
+				return
+			}
+			ctx.err = os.Chtimes(ctx.path, ctx.approved.ModTime(), ctx.approved.ModTime())
+		})
+	}
+	return ctx.Context.Err()
+}
+
+// rewriteThroughOpenHandlePreservingIdentityAndMtime 原地改写并保留文件身份、大小和修改时间。
+func rewriteThroughOpenHandlePreservingIdentityAndMtime(t *testing.T, path string, approved os.FileInfo) (*os.File, string) {
+	t.Helper()
+	handle, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalData := strings.Repeat("x", int(approved.Size()))
+	if _, err := handle.WriteAt([]byte(externalData), 0); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, approved.ModTime(), approved.ModTime()); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if !os.SameFile(approved, current) || current.Size() != approved.Size() || !current.ModTime().Equal(approved.ModTime()) {
+		_ = handle.Close()
+		t.Fatalf("test did not preserve file identity, size and modification time: before=%#v after=%#v", approved, current)
+	}
+	return handle, externalData
 }
 
 func assertMoveRejectsChangedSourceAfterApproval(t *testing.T, ctx context.Context, service *Service, metadata *store.Store, sourcePath, targetPath, sourceRelative, targetRelative string) {

@@ -30,6 +30,10 @@ func TestConversationPromptKeepsSummaryAndRecentMessages(t *testing.T) {
 	if !strings.Contains(messages[0].Content, "run_shell：在隔离副本中运行 Shell") || !strings.Contains(messages[0].Content, "输入：scopePath, workingDir, shellCommand") {
 		t.Fatalf("system prompt omitted the registered tool catalog: %q", messages[0].Content)
 	}
+	if !strings.Contains(messages[0].Content, "输入契约是服务端预检字段，不是对话 JSON 字段名") ||
+		!strings.Contains(messages[0].Content, "对话输出字段以本指令中的 JSON 契约为准") {
+		t.Fatal("system prompt did not distinguish backend input contracts from conversation JSON")
+	}
 	for _, analysisAction := range []string{"find_duplicates", "archive_photos", "classify_documents"} {
 		if !strings.Contains(messages[0].Content, analysisAction) {
 			t.Errorf("system prompt omitted the conversation analysis capability %q", analysisAction)

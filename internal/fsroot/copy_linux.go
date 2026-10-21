@@ -20,7 +20,7 @@ import (
 )
 
 // platformCopyFileNoReplace 校验来源、复制内容并以禁止覆盖方式发布。
-func platformCopyFileNoReplace(ctx context.Context, root *Root, source, destination string, expected Fingerprint) (FileCopyResult, error) {
+func platformCopyFileNoReplace(ctx context.Context, root *Root, source, destination string, expected Fingerprint, expectedSHA256 string) (FileCopyResult, error) {
 	sourceParent, sourceName, err := openRenameParent(root, source)
 	if err != nil {
 		return FileCopyResult{}, fmt.Errorf("open source parent: %w", err)
@@ -111,6 +111,12 @@ func platformCopyFileNoReplace(ctx context.Context, root *Root, source, destinat
 	if verifiedBytes != expected.Size || subtle.ConstantTimeCompare(sourceDigest.Sum(nil), copyDigest.Sum(nil)) != 1 {
 		return FileCopyResult{}, fmt.Errorf("copied content verification failed: %w", ErrConflict)
 	}
+	if expectedSHA256 != "" {
+		expectedDigest, err := hex.DecodeString(expectedSHA256)
+		if err != nil || len(expectedDigest) != sha256.Size || subtle.ConstantTimeCompare(sourceDigest.Sum(nil), expectedDigest) != 1 {
+			return FileCopyResult{}, conflictError("copy", source, nil)
+		}
+	}
 	if err := ctx.Err(); err != nil {
 		return FileCopyResult{}, err
 	}
@@ -142,7 +148,7 @@ func platformCopyFileNoReplace(ctx context.Context, root *Root, source, destinat
 }
 
 // platformMoveFileSameMountNoReplace 同卷移动后复核目录项，发现竞态则尝试恢复来源。
-func platformMoveFileSameMountNoReplace(ctx context.Context, root *Root, source, destination string, expected Fingerprint) (FileMoveResult, error) {
+func platformMoveFileSameMountNoReplace(ctx context.Context, root *Root, source, destination string, expected Fingerprint, expectedSHA256 string) (FileMoveResult, error) {
 	sourceParent, sourceName, err := openRenameParent(root, source)
 	if err != nil {
 		return FileMoveResult{}, fmt.Errorf("open move source parent: %w", err)
@@ -198,7 +204,11 @@ func platformMoveFileSameMountNoReplace(ctx context.Context, root *Root, source,
 	}
 	result := FileMoveResult{Published: true, SourceRemoved: true}
 
-	movedFD, err := unix.Openat(int(destinationParent.Fd()), destinationName, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	moveFlags := unix.O_PATH | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	if expectedSHA256 != "" {
+		moveFlags = unix.O_RDONLY | unix.O_NONBLOCK | unix.O_NOFOLLOW | unix.O_CLOEXEC
+	}
+	movedFD, err := unix.Openat(int(destinationParent.Fd()), destinationName, moveFlags, 0)
 	if err != nil {
 		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, nil, fmt.Errorf("inspect moved destination: %w", err))
 	}
@@ -211,6 +221,11 @@ func platformMoveFileSameMountNoReplace(ctx context.Context, root *Root, source,
 	if !movedInfo.Mode().IsRegular() || !sameFingerprintAfterRename(fingerprintFromInfo(movedInfo), expected) {
 		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, conflictError("move", source, nil))
 	}
+	if expectedSHA256 != "" {
+		if err := verifyMovedFileSHA256(ctx, movedFile, fingerprintFromInfo(movedInfo), expected.Size, expectedSHA256); err != nil {
+			return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, conflictError("move content", source, err))
+		}
+	}
 	if err := verifyOpenedDirectory(root, sourceParentPath, sourceParent); err != nil {
 		return restoreSameMountFileMove(root, source, destination, sourceParentPath, destinationParentPath, sourceParent, sourceName, destinationParent, destinationName, movedFile, err)
 	}
@@ -221,6 +236,41 @@ func platformMoveFileSameMountNoReplace(ctx context.Context, root *Root, source,
 		return result, fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
 	}
 	return result, nil
+}
+
+// verifyMovedFileSHA256 核对同卷移动项的稳定状态和内容摘要。
+func verifyMovedFileSHA256(ctx context.Context, file *os.File, expectedState Fingerprint, size int64, expectedSHA256 string) error {
+	expectedDigest, err := hex.DecodeString(expectedSHA256)
+	if err != nil || len(expectedDigest) != sha256.Size {
+		return fs.ErrInvalid
+	}
+	before, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	beforeState := fingerprintFromInfo(before)
+	if !sameFingerprint(beforeState, expectedState) || size < 0 || before.Size() != size {
+		return ErrConflict
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	digest := sha256.New()
+	count, err := io.CopyN(digest, contextReader{ctx: ctx, reader: file}, size)
+	if err != nil {
+		return err
+	}
+	if count != size {
+		return ErrSizeMismatch
+	}
+	after, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	if !sameFingerprint(fingerprintFromInfo(after), beforeState) || subtle.ConstantTimeCompare(digest.Sum(nil), expectedDigest) != 1 {
+		return ErrConflict
+	}
+	return nil
 }
 
 // restoreSameMountFileMove 在提交版本不符时无覆盖地恢复移动项。
