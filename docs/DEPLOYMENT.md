@@ -87,7 +87,9 @@ sudo install -d -o filesage -g filesage -m 0750 /srv/filesage-files
 
 已有或共享的数据卷应只为选定目录配置 ACL 或专用组权限。不要对整块卷递归 `chown`，也不要使用 `chmod -R 777`。服务账户需在每个管理卷上拥有目录遍历、读取和所需写入权限。
 
-unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需的独立挂载相符；systemd 不会从 `EnvironmentFile` 展开目录变量。数据库目录也必须在管理根目录之外。
+unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需的独立挂载相符；systemd 不会从 `EnvironmentFile` 展开目录变量。模板启用 `ProtectSystem=strict`，并通过 `ReadWritePaths=/srv/filesage-files` 开放默认管理根目录；`StateDirectory=filesage` 自动保持可写。更改 `FILESAGE_ROOT` 时同步调整 `ReadWritePaths`，更改 `FILESAGE_DATA_DIR` 时也将数据目录加入白名单。数据库目录必须位于管理根目录之外。
+
+模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界只保留 Bubblewrap 用户命名空间初始化所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
 
 unit 会等待 `network-online.target` 再启动。启用当前网络管理器对应的 wait-online 服务，确保固定监听地址已配置；例如 NetworkManager 使用 `NetworkManager-wait-online.service`，systemd-networkd 使用 `systemd-networkd-wait-online.service`。
 
