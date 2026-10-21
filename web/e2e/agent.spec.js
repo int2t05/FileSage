@@ -143,7 +143,8 @@ test('Agent 审阅并执行同目录重命名，保留原文件内容', async ({
 
   const confirmation = page.getByRole('region', { name: '确认操作' });
   await expect(confirmation).toContainText(sourceRelative);
-  await expect(confirmation).toContainText('确认后才会读取文件并生成建议');
+  await expect(confirmation).toContainText('UTF-8 文件正文全文');
+  await expect(confirmation).toContainText('不会修改文件');
   await expect(page.getByRole('button', { name: '确认并分析' })).toBeEnabled();
   await expect(readFile(sourcePath, 'utf8')).resolves.toBe(originalContent);
   await expect(access(targetPath)).rejects.toThrow();
