@@ -4,12 +4,15 @@
 package fsroot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestMoveTreeNoReplaceUsesAtomicRenameOnSameMount 验证同挂载目录使用原子无覆盖移动。
@@ -183,6 +186,132 @@ func TestMoveTreeNoReplaceCopiesThenRemovesAcrossMounts(t *testing.T) {
 		if strings.HasPrefix(entry.Name(), ".filesage-move-quarantine-") {
 			t.Fatalf("quarantine path remains after successful move: %q", entry.Name())
 		}
+	}
+}
+
+// TestMoveTreeRetainsSourceWithExternalOpenWriter 验证跨卷移树不会丢弃外部已打开文件的后续写入。
+func TestMoveTreeRetainsSourceWithExternalOpenWriter(t *testing.T) {
+	root, sourceBase, destinationBase := openMoveFileRaceRoots(t)
+	sourcePath := filepath.Join(sourceBase, "source")
+	if err := os.Mkdir(sourcePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(sourcePath, "note.txt")
+	approvedContent := "approved file"
+	externalContent := "external edit"
+	if len(approvedContent) != len(externalContent) {
+		t.Fatal("fixture contents must have equal sizes")
+	}
+	if err := os.WriteFile(filePath, []byte(approvedContent), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	destinationPath := filepath.Join(destinationBase, "moved")
+	destination := strings.TrimPrefix(filepath.ToSlash(destinationPath), "/")
+	snapshot, err := root.SnapshotTree(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	readyPath := filepath.Join(t.TempDir(), "writer-ready")
+	writePath := filepath.Join(t.TempDir(), "writer-go")
+	command := exec.Command(os.Args[0], "-test.run=^TestExternalFileWriterProcessHelper$")
+	command.Env = externalFileWriterProcessEnvironment(filePath, externalContent, readyPath, writePath)
+	var helperOutput bytes.Buffer
+	command.Stdout = &helperOutput
+	command.Stderr = &helperOutput
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	helperDone := make(chan error, 1)
+	go func() { helperDone <- command.Wait() }()
+	t.Cleanup(func() {
+		if command.ProcessState == nil {
+			_ = command.Process.Kill()
+			<-helperDone
+		}
+	})
+	waitCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := waitForExternalFileWriter(waitCtx, readyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	result, moveErr := root.MoveTreeNoReplace(context.Background(), source, destination, snapshot)
+	if err := os.WriteFile(writePath, []byte("go"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-helperDone; err != nil {
+		t.Fatalf("external writer failed: %v: %s", err, strings.TrimSpace(helperOutput.String()))
+	}
+	if !errors.Is(moveErr, ErrConflict) || !result.Published || result.SourceRemoved || result.SourceRetained == "" {
+		t.Fatalf("move result = (%+v, %v), want published copy and retained source", result, moveErr)
+	}
+	retainedFile := filepath.Join("/", filepath.FromSlash(result.SourceRetained), "note.txt")
+	if data, err := os.ReadFile(retainedFile); err != nil || string(data) != externalContent {
+		t.Fatalf("retained source contents = (%q, %v), want external edit", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(destinationPath, "note.txt")); err != nil || string(data) != approvedContent {
+		t.Fatalf("published copy contents = (%q, %v), want approved file", data, err)
+	}
+	records, err := readMoveRecoveryEntries(root.moveRecoveryRoot)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("retained move journal = (%v, %v), want source recovery record", records, err)
+	}
+	record, err := root.readMoveRecoveryRecord(records[0].Name())
+	if err != nil || record.QuarantinePath != result.SourceRetained {
+		t.Fatalf("retained move journal record = (%+v, %v), want retained source path", record, err)
+	}
+}
+
+// TestMoveTreeRetainsSourceChangedAfterSnapshot 验证复制后已完成的外部改写不会被清理阶段删除。
+func TestMoveTreeRetainsSourceChangedAfterSnapshot(t *testing.T) {
+	root, sourceBase, _ := openMoveFileRaceRoots(t)
+	sourcePath := filepath.Join(sourceBase, "source")
+	if err := os.Mkdir(sourcePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(sourcePath, "note.txt")
+	if err := os.WriteFile(filePath, []byte("approved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source := strings.TrimPrefix(filepath.ToSlash(sourcePath), "/")
+	snapshot, err := root.SnapshotTree(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mountID, err := root.MountID(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modifiedAt, err := os.Stat(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quarantine, err := createMoveQuarantinePath(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := root.RenameNoReplace(source, quarantine); err != nil {
+		t.Fatal(err)
+	}
+	quarantineFile := filepath.Join("/", filepath.FromSlash(quarantine), "note.txt")
+	if err := os.WriteFile(quarantineFile, []byte("modified"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(quarantineFile, modifiedAt.ModTime(), modifiedAt.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	parent, name, err := root.openParent(quarantine)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close()
+	if err := removeMoveTreeAt(context.Background(), int(parent.Fd()), name, mountID, source, quarantine, snapshot); !errors.Is(err, ErrConflict) {
+		t.Fatalf("remove changed source = %v, want conflict", err)
+	}
+	if data, err := os.ReadFile(quarantineFile); err != nil || string(data) != "modified" {
+		t.Fatalf("retained source contents = (%q, %v), want modified", data, err)
 	}
 }
 

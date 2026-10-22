@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -606,6 +607,178 @@ func TestV27ShellMigrationDropsPersistedCommandOutput(t *testing.T) {
 		}
 		if bytes.Contains(data, []byte(stdoutMarker)) || bytes.Contains(data, []byte(stderrMarker)) {
 			t.Fatalf("legacy Shell output remains in SQLite file %s", filepath.Base(path))
+		}
+	}
+}
+
+// TestV29FileIndexOrderingIndexes 验证默认排序索引已替换。
+func TestV29FileIndexOrderingIndexes(t *testing.T) {
+	ctx := context.Background()
+	databasePath := filepath.Join(t.TempDir(), "index-order.db")
+	db, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if db != nil {
+			if err := db.Close(); err != nil {
+				t.Errorf("close database: %v", err)
+			}
+		}
+	})
+
+	generation, err := db.BeginFileIndexScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := FileIndexRecord{
+		RelativePath: "docs/report.pdf", ParentPath: "docs", Name: "report.pdf",
+		Kind: "file", SizeBytes: 7, Mode: 0o644, MediaType: "application/pdf",
+		ContentSHA256: strings.Repeat("a", 64), IndexedAt: time.Now().UTC(),
+	}
+	if err := db.UpsertFileIndexBatch(ctx, generation, []FileIndexRecord{record}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CompleteFileIndexScan(ctx, generation); err != nil {
+		t.Fatal(err)
+	}
+
+	// 将新库还原为 v28 的索引状态，验证真实升级路径。
+	tx, err := db.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		DROP INDEX file_index_generation_parent_order_name;
+		DROP INDEX file_index_generation_order_name;
+		CREATE INDEX file_index_generation_parent_name
+			ON file_index_generation_entries(generation, parent_path, name);
+		DELETE FROM schema_migrations WHERE version = 29;
+	`); err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	beforeVersion, err := db.SchemaVersion(ctx)
+	if err != nil || beforeVersion != 28 {
+		t.Fatalf("SchemaVersion() before v29 upgrade = (%d, %v), want (28, nil)", beforeVersion, err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db = nil
+
+	db, err = Open(ctx, databasePath)
+	if err != nil {
+		t.Fatalf("reopen v28 database: %v", err)
+	}
+	version, err := db.SchemaVersion(ctx)
+	if err != nil || version != 29 {
+		t.Fatalf("SchemaVersion() after v28 upgrade = (%d, %v), want (29, nil)", version, err)
+	}
+	var preservedPath string
+	if err := db.db.QueryRowContext(ctx, `
+		SELECT relative_path FROM file_index_generation_entries
+		WHERE generation = ? AND relative_path = ?
+	`, generation, record.RelativePath).Scan(&preservedPath); err != nil {
+		t.Fatalf("read file index after v28 upgrade: %v", err)
+	}
+	if preservedPath != record.RelativePath {
+		t.Fatalf("migrated file index path = %q, want %q", preservedPath, record.RelativePath)
+	}
+
+	rows, err := db.db.QueryContext(ctx, `
+		SELECT name FROM sqlite_master
+		WHERE type = 'index' AND tbl_name = 'file_index_generation_entries'
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	indexes := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		indexes[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"file_index_generation_parent_order_name",
+		"file_index_generation_order_name",
+	} {
+		if !indexes[name] {
+			t.Errorf("index %q was not created", name)
+		}
+	}
+	if indexes["file_index_generation_parent_name"] {
+		t.Error("redundant parent/name index remains")
+	}
+
+	queries := []struct {
+		name  string
+		sql   string
+		args  []any
+		index string
+	}{
+		{
+			name: "directory listing",
+			sql: `EXPLAIN QUERY PLAN SELECT relative_path, parent_path, name, kind, size_bytes,
+				modified_at_ns, mode, device, inode, hard_link_count, media_type,
+				captured_at_ns, content_sha256, indexed_at_ns
+				FROM file_index_generation_entries
+				WHERE generation = ? AND parent_path = ?
+				ORDER BY CASE WHEN kind = 'directory' THEN 0 ELSE 1 END,
+					name COLLATE NOCASE ASC, relative_path ASC
+				LIMIT ? OFFSET ?`,
+			args:  []any{1, "", 100, 0},
+			index: "file_index_generation_parent_order_name",
+		},
+		{
+			name: "recursive search",
+			sql: `EXPLAIN QUERY PLAN SELECT relative_path, parent_path, name, kind, size_bytes,
+				modified_at_ns, mode, device, inode, hard_link_count, media_type,
+				captured_at_ns, content_sha256, indexed_at_ns
+				FROM file_index_generation_entries
+				WHERE generation = ? AND (name LIKE ? ESCAPE '\' COLLATE NOCASE
+					OR relative_path LIKE ? ESCAPE '\' COLLATE NOCASE)
+				ORDER BY CASE WHEN kind = 'directory' THEN 0 ELSE 1 END,
+					name COLLATE NOCASE ASC, relative_path ASC
+				LIMIT ? OFFSET ?`,
+			args:  []any{1, "%e%", "%e%", 100, 0},
+			index: "file_index_generation_order_name",
+		},
+	}
+	for _, query := range queries {
+		rows, err := db.db.QueryContext(ctx, query.sql, query.args...)
+		if err != nil {
+			t.Fatalf("explain %s: %v", query.name, err)
+		}
+		var details []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				rows.Close()
+				t.Fatalf("read %s plan: %v", query.name, err)
+			}
+			details = append(details, detail)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatalf("read %s plan: %v", query.name, err)
+		}
+		if err := rows.Close(); err != nil {
+			t.Fatalf("close %s plan: %v", query.name, err)
+		}
+		plan := strings.Join(details, "\n")
+		if !strings.Contains(plan, query.index) || strings.Contains(plan, "USE TEMP B-TREE FOR ORDER BY") {
+			t.Errorf("%s plan = %q, want %s without a temporary sort", query.name, plan, query.index)
 		}
 	}
 }

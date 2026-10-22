@@ -1,6 +1,6 @@
 // 验证窄屏下的会话恢复、会话切换和文件写入审批主链路。
 import { expect, test } from '@playwright/test';
-import { access, readFile, stat } from 'node:fs/promises';
+import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -106,5 +106,60 @@ test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录�
   await page.getByRole('button', { name: '审阅完成，开始执行' }).click();
   await expect(steps.getByRole('listitem').getByText('已完成', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await stat(followupPath).catch(() => undefined))?.isDirectory() ?? false, { timeout: 5_000 }).toBe(true);
+  expect(browserErrors).toEqual([]);
+});
+
+test('Agent 审阅并执行同目录重命名，保留原文件内容', async ({ page }, testInfo) => {
+  test.skip(process.platform !== 'linux', '文件版本校验依赖 Linux 文件身份元数据');
+  const suffix = `-${testInfo.repeatEachIndex}`;
+  const targetName = `agent-e2e-rename${suffix}`;
+  const relativeDirectory = targetName;
+  const sourceRelative = `${relativeDirectory}/source.md`;
+  const targetRelative = `${relativeDirectory}/renamed.md`;
+  const originalContent = '# 项目说明\n\n这是用于端到端验收的合成文件。\n';
+  const browserErrors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  const conversationListResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await page.goto('/#agent');
+  await conversationListResponse;
+  const root = await readManagedRoot(page);
+  const directory = path.join(root, relativeDirectory);
+  const sourcePath = path.join(root, sourceRelative);
+  const targetPath = path.join(root, targetRelative);
+  await mkdir(directory, { recursive: true });
+  await writeFile(sourcePath, originalContent, { mode: 0o600 });
+
+  const composer = page.getByRole('textbox', { name: '整理需求消息' });
+  const createdConversationResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await composer.fill(`请根据内容为 ${sourceRelative} 提出同目录重命名建议，任务编号 ${targetName}。`);
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await createdConversationResponse;
+
+  const confirmation = page.getByRole('region', { name: '确认操作' });
+  await expect(confirmation).toContainText(sourceRelative);
+  await expect(confirmation).toContainText('UTF-8 文件正文全文');
+  await expect(confirmation).toContainText('不会修改文件');
+  await expect(page.getByRole('button', { name: '确认并分析' })).toBeEnabled();
+  await expect(readFile(sourcePath, 'utf8')).resolves.toBe(originalContent);
+  await expect(access(targetPath)).rejects.toThrow();
+
+  await page.getByRole('button', { name: '确认并分析' }).click();
+  const steps = page.getByRole('list', { name: '执行步骤' });
+  await expect(page.getByRole('heading', { name: '执行计划' })).toBeVisible();
+  await expect(steps).toContainText(targetRelative);
+  await expect(page.getByRole('button', { name: '审阅完成，开始执行' })).toBeEnabled();
+  await expect(readFile(sourcePath, 'utf8')).resolves.toBe(originalContent);
+  await expect(access(targetPath)).rejects.toThrow();
+
+  await page.getByRole('button', { name: '审阅完成，开始执行' }).click();
+  await expect(steps.getByRole('listitem').getByText('已完成', { exact: true })).toBeVisible({ timeout: 30_000 });
+  await expect.poll(async () => readFile(targetPath, 'utf8').catch(() => '') , { timeout: 5_000 }).toBe(originalContent);
+  await expect(access(sourcePath)).rejects.toThrow();
   expect(browserErrors).toEqual([]);
 });

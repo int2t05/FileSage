@@ -27,7 +27,14 @@ jobs:
             printf '%s\n' "$unformatted_go_files"
             exit 1
           fi
+      - name: Verify systemd service unit
+        run: |
+          # 固定生产路径需要可执行文件，CI 用无副作用占位程序满足静态校验。
+          sudo install -D -m 0755 /usr/bin/true /usr/local/lib/filesage/filesage
+          systemd-analyze verify deploy/filesage.service
       - run: go test -count=1 ./...
+      - name: Check Agent request-context logging for races
+        run: go test -race -count=1 ./internal/logging ./internal/httpapi ./internal/agent
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go build ./...

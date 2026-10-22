@@ -14,7 +14,7 @@ Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。�
 ## 项目状态
 
 MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验项见
-[验收台账](docs/ACCEPTANCE.md)。
+[验收范围](docs/ACCEPTANCE.md)。
 
 ## 能力
 
@@ -68,7 +68,7 @@ npx playwright install chromium
 npm run e2e
 ```
 
-端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 会运行相同检查。
+端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 还会运行 race 检查、漏洞扫描和 Linux 发布包冒烟测试。
 
 ## 项目文档
 

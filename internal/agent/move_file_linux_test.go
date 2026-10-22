@@ -7,9 +7,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -189,6 +193,274 @@ func TestMoveFileRejectsExternalSourceChangeAfterApproval(t *testing.T) {
 	defer root.Close()
 	defer metadata.Close()
 	assertMoveRejectsChangedSourceAfterApproval(t, ctx, service, metadata, sourcePath, targetPath, "source/file.txt", "destination/file.txt")
+}
+
+// TestMoveFileRejectsOpenHandleChangeAfterApproval 验证原地改写会使移动审批失效。
+func TestMoveFileRejectsOpenHandleChangeAfterApproval(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(rootPath, "source"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(rootPath, "destination"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(rootPath, "source", "file.txt")
+	targetPath := filepath.Join(rootPath, "destination", "file.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved source content"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	plan, err := service.Propose(ctx, moveFileProposal("source/file.txt", "destination/file.txt"))
+	if err != nil {
+		t.Fatalf("Propose() = %v", err)
+	}
+	if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve"); err != nil {
+		t.Fatalf("approve move plan: %v", err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedEntry, err := root.LstatEntry("source/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, externalData := rewriteThroughOpenHandlePreservingIdentityAndMtime(t, sourcePath, approvedInfo)
+	defer handle.Close()
+	currentEntry, err := root.LstatEntry("source/file.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !currentEntry.ChangeTimeAvailable || currentEntry.ChangedAt.Equal(approvedEntry.ChangedAt) {
+		t.Fatalf("test did not change ctime after preserving visible file metadata: before=%#v after=%#v", approvedEntry, currentEntry)
+	}
+
+	updated, err := service.Execute(ctx, plan.ID)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated || updated.Operations[0].Status != store.OperationSkipped {
+		t.Fatalf("move after open-handle change = (%#v, %v), want invalidated conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+		t.Fatalf("external source content changed: %q (%v)", content, err)
+	}
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("changed source was published to target: %v", err)
+	}
+	events, err := metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleAudit bool
+	for _, event := range events {
+		if event.PlanID == plan.ID && event.OperationID == plan.Operations[0].ID && event.EventType == "operation_invalidated" && event.Outcome == "stale" {
+			staleAudit = true
+			break
+		}
+	}
+	if !staleAudit {
+		t.Fatalf("open-handle conflict has no stale audit record: %#v", events)
+	}
+}
+
+// TestRenameRejectsExternalProcessChangeBetweenDigestAndCommit 验证提交前的进程外改写会使重命名冲突。
+func TestRenameRejectsExternalProcessChangeBetweenDigestAndCommit(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	parent := filepath.Join(rootPath, "documents")
+	if err := os.Mkdir(parent, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(parent, "draft.txt")
+	targetPath := filepath.Join(parent, "final.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved rename"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	plan, err := service.Propose(ctx, Proposal{
+		RequestText: "重命名文件", ScopePath: "documents", Action: "rename",
+		SourcePath: "documents/draft.txt", TargetPath: "documents/final.txt", Reason: "按用户确认的名称修改",
+	})
+	if err != nil {
+		t.Fatalf("Propose() = %v", err)
+	}
+	approved, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if err != nil {
+		t.Fatalf("approve rename: %v", err)
+	}
+	if err := metadata.ClaimAgentPlanExecution(ctx, plan.ID, approved.Version, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.StartAgentOperation(ctx, plan.ID, plan.Operations[0].ID, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 第三次取消检查位于 Linux 同卷移动已校验打开文件描述符之后、原子改名前。
+	externalData := strings.Repeat("x", int(approvedInfo.Size()))
+	mutation := &externalWriterMutationContext{Context: ctx, path: sourcePath, triggerAt: 3, done: make(chan struct{})}
+	tool := agentTools()["rename"]
+	updated, err := tool.execute(service, mutation, plan.ID, approved.ScopePath, approved.Operations[0])
+	if mutation.triggeredAt.Load() != mutation.triggerAt {
+		t.Fatalf("race setup was not applied at commit boundary: call=%d", mutation.triggeredAt.Load())
+	}
+	select {
+	case <-mutation.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("external writer did not finish")
+	}
+	triggered, setupErr := mutation.result()
+	if !triggered || setupErr != nil {
+		t.Fatalf("external writer setup failed: triggered=%t err=%v", triggered, setupErr)
+	}
+	if !errors.Is(err, fsroot.ErrConflict) || updated.Status != store.PlanFailed || updated.Operations[0].Status != store.OperationFailed {
+		t.Fatalf("rename after external process change = (%#v, %v), want failed conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+		t.Fatalf("external source content changed: %q (%v)", content, err)
+	}
+	currentInfo, err := os.Stat(sourcePath)
+	if err != nil || !os.SameFile(approvedInfo, currentInfo) {
+		t.Fatalf("changed source was not restored to its original directory entry: info=%#v err=%v", currentInfo, err)
+	}
+	if _, err := os.Stat(targetPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale source was renamed: %v", err)
+	}
+	final, err := service.Plan(ctx, plan.ID)
+	if err != nil || final.Status != store.PlanFailed {
+		t.Fatalf("failed rename plan = (%#v, %v)", final, err)
+	}
+}
+
+// externalWriterMutationContext 在指定提交检查处启动独立进程改写源文件。
+type externalWriterMutationContext struct {
+	context.Context
+	path        string
+	triggerAt   int32
+	calls       atomic.Int32
+	triggeredAt atomic.Int32
+	once        sync.Once
+	mu          sync.Mutex
+	triggered   bool
+	err         error
+	done        chan struct{}
+}
+
+// Err 在指定检查处启动独立写入进程，计数需支持 database/sql 并发调用。
+func (ctx *externalWriterMutationContext) Err() error {
+	call := ctx.calls.Add(1)
+	if call == ctx.triggerAt {
+		ctx.triggeredAt.Store(call)
+		ctx.once.Do(func() {
+			defer close(ctx.done)
+			processContext, cancel := context.WithTimeout(ctx.Context, 10*time.Second)
+			defer cancel()
+			command := exec.CommandContext(processContext, os.Args[0], "-test.run=^TestExternalWriterProcessHelper$")
+			command.Env = externalWriterHelperEnvironment(ctx.path)
+			var setupErr error
+			if output, err := command.CombinedOutput(); err != nil {
+				setupErr = fmt.Errorf("external writer process: %w: %s", err, strings.TrimSpace(string(output)))
+			}
+			ctx.mu.Lock()
+			ctx.triggered = true
+			ctx.err = setupErr
+			ctx.mu.Unlock()
+		})
+	}
+	return ctx.Context.Err()
+}
+
+// result 在子进程完成后安全读取测试结果。
+func (ctx *externalWriterMutationContext) result() (bool, error) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.triggered, ctx.err
+}
+
+// TestExternalWriterProcessHelper 由竞态测试子进程调用，模拟应用锁之外的写入者。
+func TestExternalWriterProcessHelper(t *testing.T) {
+	if os.Getenv("FILESAGE_TEST_EXTERNAL_WRITER_HELPER") != "1" {
+		return
+	}
+	path := os.Getenv("FILESAGE_TEST_EXTERNAL_WRITER_PATH")
+	if path == "" {
+		t.Fatal("external writer path is required")
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	opened, err := handle.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		t.Fatalf("external writer opened a different file: info=%v err=%v", opened, err)
+	}
+	data := strings.Repeat("x", int(before.Size()))
+	if _, err := handle.WriteAt([]byte(data), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// externalWriterHelperEnvironment 仅向辅助进程传递本次测试参数。
+func externalWriterHelperEnvironment(path string) []string {
+	const prefix = "FILESAGE_TEST_EXTERNAL_WRITER_"
+	environment := make([]string, 0, len(os.Environ())+2)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, prefix) {
+			environment = append(environment, value)
+		}
+	}
+	return append(environment,
+		"FILESAGE_TEST_EXTERNAL_WRITER_HELPER=1",
+		"FILESAGE_TEST_EXTERNAL_WRITER_PATH="+path,
+	)
+}
+
+// rewriteThroughOpenHandlePreservingIdentityAndMtime 原地改写并保留文件身份、大小和修改时间。
+func rewriteThroughOpenHandlePreservingIdentityAndMtime(t *testing.T, path string, approved os.FileInfo) (*os.File, string) {
+	t.Helper()
+	handle, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalData := strings.Repeat("x", int(approved.Size()))
+	if _, err := handle.WriteAt([]byte(externalData), 0); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if err := handle.Sync(); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, approved.ModTime(), approved.ModTime()); err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	current, err := os.Stat(path)
+	if err != nil {
+		_ = handle.Close()
+		t.Fatal(err)
+	}
+	if !os.SameFile(approved, current) || current.Size() != approved.Size() || !current.ModTime().Equal(approved.ModTime()) {
+		_ = handle.Close()
+		t.Fatalf("test did not preserve file identity, size and modification time: before=%#v after=%#v", approved, current)
+	}
+	return handle, externalData
 }
 
 func assertMoveRejectsChangedSourceAfterApproval(t *testing.T, ctx context.Context, service *Service, metadata *store.Store, sourcePath, targetPath, sourceRelative, targetRelative string) {

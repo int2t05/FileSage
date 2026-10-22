@@ -15,6 +15,17 @@ if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 git cat-file -e "$commit^{commit}"
 
+# 先校验工具链，避免生成缺少构建信息的发布包。
+go_version="$(go version)"
+node_version="$(node --version)"
+npm_version="$(npm --version)"
+if [ ! -s web/dist/THIRD_PARTY_NOTICES.md ] \
+  || [ ! -d web/dist/LICENSES/npm ] \
+  || [ -z "$(find web/dist/LICENSES/npm -type f -print -quit 2>/dev/null)" ]; then
+  echo "frontend dependency licenses are missing; build the web app first" >&2
+  exit 1
+fi
+
 bundle="filesage_"$version"_linux_amd64"
 stage="dist/$bundle"
 case "$stage" in
@@ -31,13 +42,14 @@ cp deploy/filesage.service deploy/filesage.env.example "$stage/deploy/"
 cp docs/DEPLOYMENT.md docs/agent-conversation-api.md "$stage/docs/"
 cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
 cp -R LICENSES/. "$stage/LICENSES/"
+bash scripts/collect-go-licenses.sh "$stage/LICENSES"
 
 {
   printf 'Version: %s\n' "$version"
   printf 'Commit: %s\n' "$commit"
-  printf 'Go: %s\n' "$(go version)"
-  printf 'Node: %s\n' "$(node --version)"
-  printf 'npm: %s\n' "$(npm --version)"
+  printf 'Go: %s\n' "$go_version"
+  printf 'Node: %s\n' "$node_version"
+  printf 'npm: %s\n' "$npm_version"
 } > "$stage/BUILDINFO.txt"
 
 source_date_epoch="$(git show -s --format=%ct "$commit")"

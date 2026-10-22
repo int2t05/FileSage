@@ -32,6 +32,7 @@ type Root interface {
 	MoveToTrash(string, string, uint64) error
 	RestoreFromTrash(string, string, uint64) error
 	Remove(string) error
+	RemoveEntryIfUnchanged(fsroot.Entry) error
 	TrashArea(string) (string, string, uint64, error)
 	VerifyTrashArea(string, uint64) error
 	MountID(string) (uint64, error)
@@ -273,7 +274,14 @@ func (m *Manager) PermanentRemove(ctx context.Context, expected fsroot.Entry) er
 	}); err != nil {
 		return err
 	}
-	if err := m.root.Remove(current.Path); err != nil {
+	if err := m.root.RemoveEntryIfUnchanged(current); err != nil {
+		if errors.Is(err, fsroot.ErrPublishedNotDurable) {
+			_, auditErr := m.data.AppendAudit(ctx, store.AuditRecord{
+				EventType: "permanent_delete_completed", Actor: "user", Outcome: "needs_review",
+				Message: "永久删除已执行，但目录持久化未确认", SourcePath: current.Path,
+			})
+			return errors.Join(err, auditErr)
+		}
 		_, _ = m.data.AppendAudit(ctx, store.AuditRecord{EventType: "permanent_delete_failed", Actor: "user", Outcome: "failed", Message: "永久删除未完成", SourcePath: current.Path})
 		return err
 	}
