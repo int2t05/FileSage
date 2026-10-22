@@ -185,7 +185,7 @@ func copyThenRemoveTree(ctx context.Context, root *Root, source, destination str
 	if !sameRelocatedTreeSnapshot(expected, actual, source, quarantine) {
 		return restoreMoveQuarantine(root, source, quarantine, result, ErrConflict)
 	}
-	if err := removeMoveQuarantine(root, quarantine, sourceMountID, expected.Entries[0].Entry); err != nil {
+	if err := removeMoveQuarantine(ctx, root, source, quarantine, sourceMountID, expected); err != nil {
 		return result, fmt.Errorf("remove isolated move source %q: %w", quarantine, err)
 	}
 	result.SourceRemoved = true
@@ -252,8 +252,11 @@ func restoreMoveQuarantine(root *Root, source, quarantine string, result TreeMov
 }
 
 // removeMoveQuarantine 仅删除本次命名的隔离目录并核验根身份与挂载边界。
-func removeMoveQuarantine(root *Root, quarantine string, mountID uint64, expected Entry) error {
+func removeMoveQuarantine(ctx context.Context, root *Root, source, quarantine string, mountID uint64, expected TreeSnapshot) error {
 	if validateMutationPath(quarantine) != nil || hasTrashComponent(quarantine) || !strings.HasPrefix(path.Base(quarantine), ".filesage-move-quarantine-") {
+		return ErrInvalidPath
+	}
+	if len(expected.Entries) == 0 || expected.RootPath != source {
 		return ErrInvalidPath
 	}
 	if err := root.rejectSymlinkParents(quarantine); err != nil {
@@ -267,7 +270,7 @@ func removeMoveQuarantine(root *Root, quarantine string, mountID uint64, expecte
 		return err
 	}
 	defer parent.Close()
-	return removeTreeAt(int(parent.Fd()), name, mountID, &trashIdentity{device: expected.Device, inode: expected.Inode})
+	return removeMoveTreeAt(ctx, int(parent.Fd()), name, mountID, source, quarantine, expected)
 }
 
 // syncMoveParents 持久化移动前后所在目录。

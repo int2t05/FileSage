@@ -19,7 +19,34 @@ import (
 
 	"filesage/internal/coordination"
 	"filesage/internal/fsroot"
+	"filesage/internal/store"
 )
+
+type mutateAfterRenameAudit struct {
+	taskReader
+	mutate  func() error
+	started bool
+	outcome string
+}
+
+func (audit *mutateAfterRenameAudit) BeginManualAudit(context.Context, store.AuditRecord) (int64, error) {
+	audit.started = true
+	if audit.mutate != nil {
+		if err := audit.mutate(); err != nil {
+			return 0, err
+		}
+	}
+	return 1, nil
+}
+
+func (audit *mutateAfterRenameAudit) FinishManualAudit(_ context.Context, _ int64, outcome, _ string) error {
+	audit.outcome = outcome
+	return nil
+}
+
+func (*mutateAfterRenameAudit) AuditHistoryPage(context.Context, int64, int) (store.AuditHistoryPage, error) {
+	return store.AuditHistoryPage{}, nil
+}
 
 func TestListFilesIncludesOpaqueVersionToken(t *testing.T) {
 	rootPath, handler := newMutationHandler(t)
@@ -151,6 +178,50 @@ func TestRenameRequiresCurrentVersionAndNeverOverwrites(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "hello.txt")); err != nil {
 		t.Fatalf("stale rename changed source: %v", err)
+	}
+}
+
+func TestRenameRejectsReplacementDuringAuditWrite(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("file identity validation is required")
+	}
+	rootPath := t.TempDir()
+	approvedPath := filepath.Join(rootPath, "hello.txt")
+	replacementPath := filepath.Join(rootPath, "replacement.txt")
+	if err := os.WriteFile(approvedPath, []byte("approved contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := fsroot.Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	audit := &mutateAfterRenameAudit{mutate: func() error {
+		if err := os.Rename(approvedPath, replacementPath); err != nil {
+			return err
+		}
+		return os.WriteFile(approvedPath, []byte("replacement contents"), 0o600)
+	}}
+	handler := NewWithTaskStore(root, audit, nil, coordination.New())
+	version := versionFromListing(t, handler, "hello.txt")
+	response := performJSONRequest(handler, http.MethodPost, "/api/v1/files/rename", `{"path":"hello.txt","name":"renamed.txt","version":"`+version+`"}`)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("rename status = %d, want conflict: %s", response.Code, response.Body.String())
+	}
+	if !audit.started || audit.outcome != "failed" {
+		t.Fatalf("audit started=%v outcome=%q, want started and failed", audit.started, audit.outcome)
+	}
+	for path, want := range map[string]string{
+		approvedPath:    "replacement contents",
+		replacementPath: "approved contents",
+	} {
+		contents, err := os.ReadFile(path)
+		if err != nil || string(contents) != want {
+			t.Errorf("file %q = (%q, %v), want %q", path, contents, err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, "renamed.txt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("renamed target exists after conflict: %v", err)
 	}
 }
 

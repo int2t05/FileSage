@@ -1079,6 +1079,14 @@ func (api *API) renameFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// 审计写入后重新核对版本，避免等待期间的路径替换继续执行。
+	if _, err := api.verifyEntryVersion(request.Path, request.Version); err != nil {
+		if !finishFileAudit(api, w, r, auditID, "failed", "源文件状态已变化，未执行重命名。") {
+			return
+		}
+		writeFileError(w, err)
+		return
+	}
 	if err := api.files.RenameNoReplace(request.Path, newPath); err != nil {
 		if !finishFileAudit(api, w, r, auditID, "failed", "重命名未完成。") {
 			return
