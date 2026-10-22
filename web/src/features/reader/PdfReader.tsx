@@ -171,7 +171,7 @@ export function PdfReader({ url, downloadUrl, fileName, presentationMode = false
       // PDF.js 仅在打开 PDF 时加载，worker 仍随应用本地打包。
       const [pdfjs, workerModule] = await Promise.all([
         import('pdfjs-dist'),
-        // @ts-expect-error Vite 的 ?url 查询由打包器解析。
+        // Vite 的 ?url 查询由打包器解析。
         import('pdfjs-dist/build/pdf.worker.min.mjs?url'),
       ]);
       if (cancelled) return;

@@ -709,7 +709,7 @@ export function ReaderPanel({ path, name, kind, capturedAt, onClose, onFileCreat
           'Content-Type': 'text/plain; charset=utf-8',
           'X-FileSage-Version': textState.version,
         },
-        body: new Blob([bytes], { type: 'text/plain; charset=utf-8' }),
+        body: new Blob([new Uint8Array(bytes)], { type: 'text/plain; charset=utf-8' }),
         signal: controller.signal,
         cache: 'no-store',
       });
@@ -797,7 +797,7 @@ export function ReaderPanel({ path, name, kind, capturedAt, onClose, onFileCreat
           'Content-Type': 'text/plain; charset=utf-8',
           'If-None-Match': '*',
         },
-        body: new Blob([bytes], { type: 'text/plain; charset=utf-8' }),
+        body: new Blob([new Uint8Array(bytes)], { type: 'text/plain; charset=utf-8' }),
         signal: controller.signal,
         cache: 'no-store',
       });
