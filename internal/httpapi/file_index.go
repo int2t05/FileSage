@@ -129,6 +129,10 @@ func (api *API) listFilePage(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusServiceUnavailable, "文件索引正在校准，请稍后重试。")
 				return
 			}
+			if errors.Is(err, fs.ErrNotExist) {
+				writeFileError(w, err)
+				return
+			}
 			if errors.Is(err, store.ErrNotFound) || errors.Is(err, store.ErrFileIndexGenerationNotReady) {
 				writeError(w, http.StatusConflict, "文件索引已变化，请重新搜索。")
 				return

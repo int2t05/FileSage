@@ -239,6 +239,44 @@ func TestRecursiveFilePageKeepsAvailableFilesWhenVolumeIsUnavailable(t *testing.
 	}
 }
 
+// TestListFilePageReturnsNotFoundForMissingDirectoryWithIndex 验证索引回退保留路径错误语义。
+func TestListFilePageReturnsNotFoundForMissingDirectoryWithIndex(t *testing.T) {
+	ctx := context.Background()
+	managedRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(managedRoot, "existing"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	root, err := fsroot.Open(managedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+
+	metadata, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	generation, err := metadata.BeginFileIndexScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.UpsertFileIndexBatch(ctx, generation, []store.FileIndexRecord{
+		fileIndexRecordForTest(t, root, "existing"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.CompleteFileIndexScan(ctx, generation); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewWithAgentAndIndex(root, nil, nil, nil, &testFileIndexer{data: metadata}, nil, coordination.New())
+	response := requestFilePage(t, handler, "path=missing")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing directory status = %d, body = %s; want %d", response.Code, response.Body.String(), http.StatusNotFound)
+	}
+}
+
 // TestListFilePageReportsUnavailableCaptureMetadata 验证拍摄元数据未就绪时返回明确提示。
 func TestListFilePageReportsUnavailableCaptureMetadata(t *testing.T) {
 	ctx := context.Background()
