@@ -14,13 +14,13 @@ Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。�
 ## 项目状态
 
 MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验项见
-[验收台账](docs/ACCEPTANCE.md)。
+[验收范围](docs/ACCEPTANCE.md)。
 
 ## 能力
 
 - 按原生目录浏览、搜索、筛选、上传和整理文件；可在管理根目录下挂载多块磁盘；
   文件夹就是类别。
-- 支持续传、原件下载，以及常见压缩包的浏览、预览、创建和解压。
+- 支持续传（单文件与暂存总量默认各限 20 GiB，可配置）、原件下载，以及常见压缩包的浏览、预览、创建和解压。
 - 在浏览器阅读常见图片、音视频、PDF、文本、Markdown、Office、表格、EPUB
   和压缩包；不支持或过于复杂的文件仍可下载。
 - 与 OpenAI-compatible 模型对话以澄清任务，审阅整份计划后执行。同一会话可继续处理
@@ -30,7 +30,7 @@ MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验�
 
 ## 快速开始
 
-需要 Linux、Go 1.27.2 或更新版本、Node.js 24 和 npm。Office 转换、OCR、
+需要 Linux、Go 1.27.3 或更新版本、Node.js 24 和 npm。Office 转换、OCR、
 视频海报、7-Zip 归档等能力需要额外系统工具，详见[部署说明](docs/DEPLOYMENT.md)。
 
 ```sh
@@ -68,7 +68,7 @@ npx playwright install chromium
 npm run e2e
 ```
 
-端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 会运行相同检查。
+端到端测试使用本地模拟模型、临时文件和数据库。[GitHub Actions](.github/workflows/ci.yml) 还会运行 race 检查、漏洞扫描和 Linux 发布包冒烟测试。
 
 ## 项目文档
 

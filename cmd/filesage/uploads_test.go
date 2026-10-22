@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -38,6 +39,34 @@ type uploadIntegration struct {
 	managerDone chan error
 }
 
+func TestUploadFailureLogOmitsManagedPaths(t *testing.T) {
+	previousLogger := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	metadata, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	manager := newPublicationManager(nil, nil, nil, metadata)
+	const privatePath = "private-upload-path-token"
+	event := upload.Event{
+		Kind: upload.UploadCompleted, UploadID: "0123456789abcdef0123456789abcdef", Size: 12, Offset: 12,
+		Metadata: upload.Metadata{FileName: "secret.txt", Target: "private", RelativePath: privatePath},
+	}
+	manager.finishFailure(event, newPublicationResult(event), &os.PathError{Op: "write", Path: privatePath, Err: syscall.ENOSPC}, context.Background())
+
+	logs := output.String()
+	if !strings.Contains(logs, "upload publication failed") || !strings.Contains(logs, "reason=storage_full") {
+		t.Fatalf("failure log omitted useful status: %s", logs)
+	}
+	if strings.Contains(logs, privatePath) || strings.Contains(logs, "private/"+privatePath) || strings.Contains(logs, "secret.txt") {
+		t.Fatalf("upload failure log exposed managed file details: %s", logs)
+	}
+}
+
 func newUploadIntegration(t *testing.T) *uploadIntegration {
 	t.Helper()
 	temp := t.TempDir()
@@ -55,7 +84,7 @@ func newUploadIntegration(t *testing.T) *uploadIntegration {
 		_ = root.Close()
 		t.Fatal(err)
 	}
-	uploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20})
+	uploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		_ = metadata.Close()
 		_ = root.Close()
@@ -94,6 +123,38 @@ func TestTusUploadDoesNotAllowCrossOriginPreflight(t *testing.T) {
 	defer response.Body.Close()
 	if origin := response.Header.Get("Access-Control-Allow-Origin"); origin != "" {
 		t.Fatalf("cross-origin tus preflight received Access-Control-Allow-Origin %q", origin)
+	}
+}
+
+func TestTusUploadRejectsFilesAboveConfiguredLimit(t *testing.T) {
+	fixture := newUploadIntegration(t)
+	metadata := []string{
+		"filename " + base64.StdEncoding.EncodeToString([]byte("large.bin")),
+		"target " + base64.StdEncoding.EncodeToString([]byte(".")),
+		"relativepath " + base64.StdEncoding.EncodeToString([]byte("large.bin")),
+	}
+	request, err := http.NewRequest(http.MethodPost, fixture.server.URL+"/api/v1/uploads/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Tus-Resumable", "1.0.0")
+	request.Header.Set("Upload-Length", fmt.Sprint((1<<20)+1))
+	request.Header.Set("Upload-Metadata", strings.Join(metadata, ","))
+	response, err := fixture.server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("create oversized tus upload: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusRequestEntityTooLarge {
+		body, _ := io.ReadAll(response.Body)
+		t.Fatalf("oversized upload status = %d, want %d: %s", response.StatusCode, http.StatusRequestEntityTooLarge, body)
+	}
+	entries, err := os.ReadDir(fixture.staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("oversized upload created %d staging entries", len(entries))
 	}
 }
 
@@ -532,7 +593,7 @@ func TestUploadStatusReconcilesTusCompletionAndKeepsPublishedResult(t *testing.T
 		t.Fatal(err)
 	}
 	defer metadata.Close()
-	application, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath})
+	application, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -707,7 +768,7 @@ func TestUploadPublicationRecoveryAfterCommitBeforeSuccessRecord(t *testing.T) {
 		_ = root.Close()
 		t.Fatal(err)
 	}
-	firstUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20})
+	firstUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		_ = metadata.Close()
 		_ = root.Close()
@@ -724,7 +785,7 @@ func TestUploadPublicationRecoveryAfterCommitBeforeSuccessRecord(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rootPath, filepath.FromSlash(candidate)), content, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	preRecoveryUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20})
+	preRecoveryUploads, err := upload.New(upload.Config{StagingDir: staging, ManagedRoot: rootPath, MaxUploadSize: 1 << 20, MaxStagingBytes: 20 << 30})
 	if err != nil {
 		t.Fatal(err)
 	}

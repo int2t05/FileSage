@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -58,6 +59,114 @@ func (m *scriptedConversationModel) callCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return len(m.requests)
+}
+
+func TestConversationRetriesInvalidModelResponseOnce(t *testing.T) {
+	invalid := `{"state":"ready","reply":"","goal":"建立并列目录","operations":[{"action":"create_directory","filePath":"","targetPath":"qa-a"},{"action":"create_directory","filePath":"","targetPath":"qa-b"}]}`
+	valid := `{"state":"ready","reply":"我会创建两个并列文件夹，请确认。","goal":"建立并列目录","operations":[{"action":"create_directory","filePath":"","targetPath":"qa-a"},{"action":"create_directory","filePath":"","targetPath":"qa-b"}]}`
+	for _, test := range []struct {
+		name      string
+		replies   []string
+		wantState store.ConversationState
+		wantOps   int
+	}{
+		{name: "修正后接受", replies: []string{invalid, valid}, wantState: store.ConversationAwaitingConfirmation, wantOps: 2},
+		{name: "重试次数有界", replies: []string{invalid, invalid}, wantState: store.ConversationFailed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			rootPath := t.TempDir()
+			metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+			defer root.Close()
+			defer func() { _ = metadata.Close() }()
+			model := &scriptedConversationModel{
+				status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+				replies: test.replies,
+			}
+			service := &ConversationService{store: metadata, root: root, plans: plans, model: model}
+			conversation, err := service.Create(ctx, "在管理根目录建立两个并列目录")
+			operationCount := 0
+			if conversation.Analysis != nil {
+				operationCount = len(conversation.Analysis.Operations)
+			}
+			errValid := err == nil && test.wantState == store.ConversationAwaitingConfirmation || errors.Is(err, ErrModelResponse) && test.wantState == store.ConversationFailed
+			if !errValid || conversation.State != test.wantState || operationCount != test.wantOps || model.callCount() != 2 {
+				t.Fatalf("Create() state=%q operations=%d calls=%d err=%v", conversation.State, operationCount, model.callCount(), err)
+			}
+			model.mu.Lock()
+			retryMessages := model.requests[1]
+			model.mu.Unlock()
+			last := retryMessages[len(retryMessages)-1]
+			if last.Role != "system" || !strings.Contains(last.Content, "可见工具回执") || !strings.Contains(last.Content, "不得改变用户目标") {
+				t.Fatalf("retry did not include a bounded correction prompt: %#v", last)
+			}
+		})
+	}
+}
+
+func TestConversationSummarizesCompletedToolReceiptWithoutCreatingAnotherPlan(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+
+	model := &scriptedConversationModel{
+		status: ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+		replies: []string{
+			`{"state":"ready","reply":"我会建立合同文件夹，请确认。","contextSummary":"","goal":"建立合同文件夹","operations":[{"action":"create_directory","filePath":"","targetPath":"合同"}]}`,
+			`{"state":"clarifying","reply":"上一计划已完成，已创建“合同”文件夹。","contextSummary":"用户已确认创建合同文件夹，计划已完成。"}`,
+		},
+	}
+	conversationService := &ConversationService{store: metadata, root: root, plans: plans, model: model}
+	conversation, err := conversationService.Create(ctx, "创建合同文件夹")
+	if err != nil || conversation.State != store.ConversationAwaitingConfirmation || conversation.Analysis == nil {
+		t.Fatalf("Create() = (%#v, %v)", conversation, err)
+	}
+	conversation, err = conversationService.ConfirmAnalysis(ctx, conversation.ID)
+	if err != nil || conversation.State != store.ConversationAwaitingApproval || conversation.PlanID == "" {
+		t.Fatalf("ConfirmAnalysis() = (%#v, %v)", conversation, err)
+	}
+	plan, err := plans.Plan(ctx, conversation.PlanID)
+	if err != nil || len(plan.Operations) != 1 {
+		t.Fatalf("Plan() = (%#v, %v)", plan, err)
+	}
+	approved, err := plans.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if err != nil {
+		t.Fatalf("Decide() = %v", err)
+	}
+	completed, err := plans.Execute(ctx, plan.ID, approved.Version)
+	if err != nil || completed.Status != store.PlanCompleted || completed.Operations[0].Status != store.OperationSucceeded {
+		t.Fatalf("Execute() = (%#v, %v)", completed, err)
+	}
+
+	conversation, err = conversationService.AddMessage(ctx, conversation.ID, "只总结上一轮结果，不要继续操作")
+	if err != nil || conversation.State != store.ConversationClarifying || conversation.PlanID != "" || conversation.Analysis != nil {
+		t.Fatalf("AddMessage() created a plan or failed to answer: (%#v, %v)", conversation, err)
+	}
+	model.mu.Lock()
+	followupMessages := append([]ChatMessage(nil), model.requests[1]...)
+	callCount := len(model.requests)
+	model.mu.Unlock()
+	hasReceipt, hasUserRequest := false, false
+	for _, message := range followupMessages {
+		if message.Role == "assistant" && strings.Contains(message.Content, "上一计划已完成") && strings.Contains(message.Content, "合同") && strings.Contains(message.Content, "目录已创建") {
+			hasReceipt = true
+		}
+		if message.Role == "user" && message.Content == "只总结上一轮结果，不要继续操作" {
+			hasUserRequest = true
+		}
+	}
+	if !hasReceipt || !hasUserRequest {
+		t.Fatalf("follow-up omitted the persisted tool receipt or user request: receipt=%t request=%t", hasReceipt, hasUserRequest)
+	}
+	if callCount != 2 || !strings.Contains(conversation.Messages[len(conversation.Messages)-1].Content, "已创建“合同”文件夹") {
+		t.Fatalf("reply-only turn was not completed cleanly: calls=%d messages=%#v", callCount, conversation.Messages)
+	}
+	tasks, err := metadata.ListTasks(ctx, store.TaskListQuery{Limit: 10})
+	if err != nil || len(tasks.Tasks) != 1 {
+		t.Fatalf("follow-up created another task: tasks=%#v err=%v", tasks.Tasks, err)
+	}
 }
 
 func TestConfirmedAnalysisPersistsBoundPlanAndReusesApprovalFlow(t *testing.T) {
@@ -565,6 +674,70 @@ func TestTrashApprovalInvalidatesWhenSourceChanges(t *testing.T) {
 	}
 }
 
+// TestTrashApprovalInvalidatesOpenHandleChange 验证审核前原地改写不会移入回收站。
+func TestTrashApprovalInvalidatesOpenHandleChange(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	sourcePath := filepath.Join(rootPath, "source.txt")
+	if err := os.WriteFile(sourcePath, []byte("approved"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+	trash, err := trashsvc.Open(ctx, root, metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans.trash = trash
+	plan, err := plans.Propose(ctx, Proposal{
+		RequestText: "将文件移入回收站", Action: "trash", SourcePath: "source.txt", Reason: "按用户确认移入回收站",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvedEntry, err := root.LstatEntry("source.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, externalData := rewriteThroughOpenHandlePreservingIdentityAndMtime(t, sourcePath, approvedInfo)
+	defer handle.Close()
+	currentEntry, err := root.LstatEntry("source.txt")
+	if err != nil || !currentEntry.ChangeTimeAvailable || currentEntry.ChangedAt.Equal(approvedEntry.ChangedAt) {
+		t.Fatalf("same-inode rewrite did not change ctime: entry=%#v err=%v", currentEntry, err)
+	}
+
+	updated, err := plans.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated {
+		t.Fatalf("trash approval after open-handle change = (%#v, %v), want invalidated conflict", updated, err)
+	}
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+		t.Fatalf("external source changed: content=%q err=%v", content, err)
+	}
+	page, err := trash.List(ctx, 100, "")
+	if err != nil || len(page.Items) != 0 {
+		t.Fatalf("stale item entered trash: %#v, %v", page.Items, err)
+	}
+	events, err := metadata.AuditForTask(ctx, plan.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var staleAudit bool
+	for _, event := range events {
+		if event.PlanID == plan.ID && event.OperationID == plan.Operations[0].ID && event.EventType == "operation_invalidated" && event.Outcome == "stale" {
+			staleAudit = true
+			break
+		}
+	}
+	if !staleAudit {
+		t.Fatalf("open-handle conflict has no stale audit record: %#v", events)
+	}
+}
+
 func TestTrashApprovalInvalidatesWhenDirectoryContentsChange(t *testing.T) {
 	ctx := context.Background()
 	rootPath := t.TempDir()
@@ -638,6 +811,52 @@ func TestConversationMultiOperationPreflightCreatesNoPartialPlan(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "parent", "one")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("preflight created the valid first target: %v", err)
+	}
+}
+
+func TestConversationAcceptsModelSizedIndependentPlan(t *testing.T) {
+	ctx := context.Background()
+	rootPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(rootPath, "parent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	metadata, root, plans := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+	defer root.Close()
+	defer metadata.Close()
+
+	operations := make([]store.AnalysisOperation, 21)
+	for index := range operations {
+		operations[index] = store.AnalysisOperation{Action: "create_directory", TargetPath: fmt.Sprintf("parent/category-%02d", index)}
+	}
+	response, err := json.Marshal(struct {
+		State      string                    `json:"state"`
+		Reply      string                    `json:"reply"`
+		Goal       string                    `json:"goal"`
+		Operations []store.AnalysisOperation `json:"operations"`
+	}{State: "ready", Reply: "将按计划整理类别，请确认。", Goal: "整理类别目录", Operations: operations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := &scriptedConversationModel{
+		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+		replies: []string{string(response)},
+	}
+	service := &ConversationService{store: metadata, root: root, plans: plans, model: model}
+	conversation, err := service.Create(ctx, "建立 21 个类别文件夹")
+	if err != nil || conversation.State != store.ConversationAwaitingConfirmation || conversation.Analysis == nil || len(conversation.Analysis.Operations) != len(operations) {
+		var operationCount int
+		if conversation.Analysis != nil {
+			operationCount = len(conversation.Analysis.Operations)
+		}
+		t.Fatalf("Create() = (state %q, operations %d, error %v)", conversation.State, operationCount, err)
+	}
+	conversation, err = service.ConfirmAnalysis(ctx, conversation.ID)
+	if err != nil || conversation.State != store.ConversationAwaitingApproval || conversation.PlanID == "" {
+		t.Fatalf("ConfirmAnalysis() = (state %q, plan %q, error %v)", conversation.State, conversation.PlanID, err)
+	}
+	plan, err := plans.Plan(ctx, conversation.PlanID)
+	if err != nil || len(plan.Operations) != len(operations) {
+		t.Fatalf("Plan() = (%d operations, %v), want %d", len(plan.Operations), err, len(operations))
 	}
 }
 
@@ -1175,6 +1394,11 @@ func openAgentTestServices(t *testing.T, databasePath, rootPath string) (*store.
 		_ = metadata.Close()
 		t.Fatal(err)
 	}
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(filepath.Dir(databasePath), "move-recovery")); err != nil {
+		_ = root.Close()
+		_ = metadata.Close()
+		t.Fatal(err)
+	}
 	return metadata, root, New(metadata, root, coordination.New())
 }
 
@@ -1227,7 +1451,7 @@ func TestRenameRecordsPartialWhenTargetContentDiffers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.applyOperation(op); err != nil {
+	if err := root.RenameNoReplace(op.SourcePath, op.TargetPath); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(target, []byte("tampered"), 0o600); err != nil {
@@ -1240,7 +1464,9 @@ func TestRenameRecordsPartialWhenTargetContentDiffers(t *testing.T) {
 	if err != nil || !matchesRenameResult(entry.Fingerprint(), op.SourceStateJSON) {
 		t.Fatalf("test setup did not retain the approved file fingerprint: (%#v, %v)", entry, err)
 	}
-	updated, err := service.recordRenameOutcome(ctx, plan.ID, op, digest, nil)
+	updated, err := service.recordMoveFileOutcome(ctx, plan.ID, op, fsroot.FileMoveResult{
+		Published: true, SourceRemoved: true,
+	}, digest, nil)
 	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanFailed || updated.Operations[0].Status != store.OperationPartial {
 		t.Fatalf("tampered rename result = (%#v, %v), want manual review", updated, err)
 	}

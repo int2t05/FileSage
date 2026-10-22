@@ -112,6 +112,7 @@ func platformUpdateMetadata(root *Root, rel string, expected Fingerprint, update
 		return Entry{}, fmt.Errorf("%w: read updated file metadata: %w", ErrMetadataNeedsReview, err)
 	}
 	entry := entryFromInfo(name, rel, info)
+	root.applyReadOnly(&entry, rel)
 	entry.ModifiedAt = unixTime(after.Mtime.Sec, after.Mtime.Nsec)
 	entry.ChangedAt = unixTime(after.Ctime.Sec, after.Ctime.Nsec)
 	entry.ChangeTimeAvailable = true

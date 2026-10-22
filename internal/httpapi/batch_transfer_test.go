@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"filesage/internal/coordination"
@@ -61,6 +62,15 @@ func decodeBatchTransferResponse(t *testing.T, responseBody io.Reader) batchTran
 func postBatchTransfer(t *testing.T, handler http.Handler, endpoint string, items []batchTransferInput, destination, destinationVersion string) *httptest.ResponseRecorder {
 	t.Helper()
 	return performJSONRequest(handler, http.MethodPost, endpoint, batchTransferBody(t, items, destination, destinationVersion))
+}
+
+func TestBatchTransferFailureReportsRetainedSourcePath(t *testing.T) {
+	retainedPath := "source/.filesage-move-quarantine-test/source"
+	err := retainedMoveSourceError{path: retainedPath, cause: fsroot.ErrConflict}
+	message := batchTransferFailureMessage(&err, true, true)
+	if !strings.Contains(message, retainedPath) {
+		t.Fatalf("partial move message = %q, want retained path %q", message, retainedPath)
+	}
 }
 
 func batchTransferInputForPath(t *testing.T, handler http.Handler, relativePath string) batchTransferInput {

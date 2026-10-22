@@ -48,6 +48,8 @@ var (
 	ErrNoReplaceUnsupported = errors.New("no-replace rename unsupported")
 	// ErrAtomicWriteUnsupported 表示平台不能提供原子替换语义。
 	ErrAtomicWriteUnsupported = errors.New("atomic write unsupported")
+	// ErrMoveRecoveryUnavailable 表示跨卷移动缺少持久恢复日志。
+	ErrMoveRecoveryUnavailable = errors.New("move recovery journal unavailable")
 	// ErrSizeMismatch 表示流的实际长度与声明长度不符。
 	ErrSizeMismatch = errors.New("stream size does not match expected size")
 	// ErrPublishedNotDurable 表示目标已发布，但父目录同步失败。
@@ -162,13 +164,16 @@ func (e Entry) Fingerprint() Fingerprint {
 // Root 持有根目录句柄，并将文件操作限制在其目录树内。
 type Root struct {
 	root             *os.Root
+	moveRecoveryRoot *os.Root
 	rootPath         string
 	registeredMounts []registeredMount
+	rootReadOnly     bool
 }
 
 type registeredMount struct {
-	path string
-	id   uint64
+	path     string
+	id       uint64
+	readOnly bool
 }
 
 const maxSymlinkHops = 128
@@ -211,7 +216,12 @@ func Open(rootPath string) (*Root, error) {
 		_ = root.Close()
 		return nil, fmt.Errorf("inspect mounted volumes: %w", err)
 	}
-	return &Root{root: root, rootPath: canonicalRoot, registeredMounts: registeredMounts}, nil
+	rootReadOnly, err := platformRootReadOnly(canonicalRoot)
+	if err != nil {
+		_ = root.Close()
+		return nil, fmt.Errorf("inspect filesystem root permissions: %w", err)
+	}
+	return &Root{root: root, rootPath: canonicalRoot, registeredMounts: registeredMounts, rootReadOnly: rootReadOnly}, nil
 }
 
 // Close 释放根目录句柄。
@@ -219,7 +229,11 @@ func (r *Root) Close() error {
 	if r == nil || r.root == nil {
 		return nil
 	}
-	return r.root.Close()
+	var closeErr error
+	if r.moveRecoveryRoot != nil {
+		closeErr = errors.Join(closeErr, r.moveRecoveryRoot.Close())
+	}
+	return errors.Join(closeErr, r.root.Close())
 }
 
 // List 返回 rel 的直接子项；空路径表示根目录，越界软链接不会被跟随。
@@ -416,6 +430,7 @@ func (r *Root) OpenRead(rel string) (io.ReadCloser, Entry, error) {
 	}
 
 	entry := entryFromInfo(path.Base(rel), rel, openedInfo)
+	r.applyReadOnly(&entry, rel)
 	if linkInfo.Mode()&os.ModeSymlink != 0 {
 		target, targetErr := r.root.Readlink(rel)
 		if targetErr != nil {
@@ -559,6 +574,15 @@ func (r *Root) checkRegisteredMount(mount registeredMount) error {
 	return nil
 }
 
+// applyReadOnly 标记当前路径所在文件系统是否只读。
+func (r *Root) applyReadOnly(entry *Entry, rel string) {
+	if mount, ok := registeredMountForPath(r.registeredMounts, rel); ok {
+		entry.ReadOnly = mount.readOnly
+		return
+	}
+	entry.ReadOnly = r.rootReadOnly
+}
+
 func markUnavailableVolume(entry *Entry) {
 	entry.MountUnavailable = true
 	entry.ReadOnly = true
@@ -580,6 +604,7 @@ func relativeParent(rel string) string {
 
 func (r *Root) entry(name, rel string, info fs.FileInfo) Entry {
 	entry := entryFromInfo(name, rel, info)
+	r.applyReadOnly(&entry, rel)
 	if info.Mode()&os.ModeSymlink == 0 {
 		return entry
 	}
@@ -599,6 +624,7 @@ func (r *Root) entry(name, rel string, info fs.FileInfo) Entry {
 		return entry
 	}
 	entry = entryFromInfo(name, rel, resolved.info)
+	r.applyReadOnly(&entry, rel)
 	entry.Symlink = true
 	entry.LinkStatus = LinkStatusInternal
 	entry.LinkTarget = resolved.linkTarget

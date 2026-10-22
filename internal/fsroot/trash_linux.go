@@ -3,6 +3,7 @@
 package fsroot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -421,6 +422,68 @@ type trashIdentity struct {
 }
 
 func removeTreeAt(parentFD int, name string, expectedMountID uint64, expectedRoot *trashIdentity) error {
+	return removeTreeAtWithMovePolicy(parentFD, name, expectedMountID, expectedRoot, nil, "")
+}
+
+type moveTreeRemovalPolicy struct {
+	quarantine string
+	entries    map[string]Entry
+	ctx        context.Context
+	preflight  bool
+	visited    int
+}
+
+// removeMoveTreeAt 先核对整棵树，再逐项取得租约并移除来源。
+func removeMoveTreeAt(ctx context.Context, parentFD int, name string, expectedMountID uint64, source, quarantine string, snapshot TreeSnapshot) error {
+	if len(snapshot.Entries) == 0 || snapshot.RootPath != source || snapshot.Entries[0].Entry.Path != source {
+		return ErrInvalidPath
+	}
+	policy := &moveTreeRemovalPolicy{
+		quarantine: quarantine,
+		entries:    make(map[string]Entry, len(snapshot.Entries)),
+		ctx:        ctx,
+		preflight:  true,
+	}
+	for _, item := range snapshot.Entries {
+		entryPath := item.Entry.Path
+		if entryPath != source && !strings.HasPrefix(entryPath, source+"/") {
+			return ErrInvalidPath
+		}
+		movePath := quarantine + strings.TrimPrefix(entryPath, source)
+		if _, exists := policy.entries[movePath]; exists {
+			return ErrInvalidPath
+		}
+		policy.entries[movePath] = item.Entry
+	}
+	root := snapshot.Entries[0].Entry
+	expectedRoot := &trashIdentity{device: root.Device, inode: root.Inode}
+	if err := removeTreeAtWithMovePolicy(parentFD, name, expectedMountID, expectedRoot, policy, quarantine); err != nil {
+		return err
+	}
+	if policy.visited != len(policy.entries) {
+		return ErrConflict
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	policy.visited = 0
+	policy.preflight = false
+	if err := removeTreeAtWithMovePolicy(parentFD, name, expectedMountID, expectedRoot, policy, quarantine); err != nil {
+		return err
+	}
+	if policy.visited != len(policy.entries) {
+		return ErrConflict
+	}
+	return nil
+}
+
+// removeTreeAtWithMovePolicy 共用安全遍历，并在移动删除前复核每项状态。
+func removeTreeAtWithMovePolicy(parentFD int, name string, expectedMountID uint64, expectedRoot *trashIdentity, policy *moveTreeRemovalPolicy, relativePath string) error {
+	if policy != nil && policy.preflight {
+		if err := policy.ctx.Err(); err != nil {
+			return err
+		}
+	}
 	stat, err := statxAt(parentFD, name, unix.AT_SYMLINK_NOFOLLOW)
 	if err != nil {
 		return err
@@ -431,7 +494,19 @@ func removeTreeAt(parentFD int, name string, expectedMountID uint64, expectedRoo
 	if expectedRoot != nil && !matchesTrashIdentity(stat, *expectedRoot) {
 		return ErrPathChanged
 	}
+	var expected Entry
+	if policy != nil {
+		var ok bool
+		expected, ok = policy.entries[relativePath]
+		if !ok {
+			return ErrConflict
+		}
+		policy.visited++
+	}
 	if stat.Mode&unix.S_IFMT != unix.S_IFDIR {
+		if policy != nil && stat.Mode&unix.S_IFMT == unix.S_IFREG {
+			return removeMoveFileEntry(parentFD, name, expectedMountID, expected.Fingerprint(), policy.preflight)
+		}
 		fd, err := unix.Openat(parentFD, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return err
@@ -447,12 +522,18 @@ func removeTreeAt(parentFD int, name string, expectedMountID uint64, expectedRoo
 		if expectedRoot != nil && !matchesTrashIdentity(opened, *expectedRoot) {
 			return ErrPathChanged
 		}
+		if policy != nil && (opened.Ino != expected.Inode || statxDevice(opened) != expected.Device) {
+			return ErrConflict
+		}
 		current, err := statxAt(parentFD, name, unix.AT_SYMLINK_NOFOLLOW)
 		if err != nil {
 			return err
 		}
 		if current.Mnt_id != expectedMountID || !sameTrashObject(opened, current) {
 			return ErrPathChanged
+		}
+		if policy != nil && policy.preflight {
+			return nil
 		}
 		return unix.Unlinkat(parentFD, name, 0)
 	}
@@ -476,13 +557,30 @@ func removeTreeAt(parentFD int, name string, expectedMountID uint64, expectedRoo
 		return ErrPathChanged
 	}
 	file := os.NewFile(uintptr(fd), name)
+	if policy != nil {
+		info, statErr := file.Stat()
+		if statErr != nil {
+			_ = file.Close()
+			return statErr
+		}
+		current := fingerprintFromInfo(info)
+		matches := sameFingerprint(current, expected.Fingerprint())
+		if relativePath == policy.quarantine {
+			matches = sameFingerprintAfterRename(current, expected.Fingerprint())
+		}
+		if !matches {
+			_ = file.Close()
+			return ErrConflict
+		}
+	}
 	children, err := file.ReadDir(-1)
 	if err != nil {
 		_ = file.Close()
 		return err
 	}
 	for _, child := range children {
-		if err := removeTreeAt(fd, child.Name(), expectedMountID, nil); err != nil {
+		childPath := path.Join(relativePath, child.Name())
+		if err := removeTreeAtWithMovePolicy(fd, child.Name(), expectedMountID, nil, policy, childPath); err != nil {
 			_ = file.Close()
 			return err
 		}
@@ -504,7 +602,55 @@ func removeTreeAt(parentFD int, name string, expectedMountID uint64, expectedRoo
 	if current.Mnt_id != expectedMountID || !sameTrashObject(opened, current) || current.Mode&unix.S_IFMT != unix.S_IFDIR {
 		return ErrPathChanged
 	}
+	if policy != nil && policy.preflight {
+		return nil
+	}
 	return unix.Unlinkat(parentFD, name, unix.AT_REMOVEDIR)
+}
+
+// removeMoveFileEntry 在快照复核及写租约保护下删除普通文件。
+func removeMoveFileEntry(parentFD int, name string, expectedMountID uint64, expected Fingerprint, preflight bool) error {
+	fd, err := unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	file := os.NewFile(uintptr(fd), name)
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	opened, err := statxFD(fd)
+	if err != nil {
+		return err
+	}
+	current, err := statxAt(parentFD, name, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
+	if opened.Mnt_id != expectedMountID || opened.Mode&unix.S_IFMT != unix.S_IFREG || !sameTrashObject(opened, current) || !sameFingerprint(fingerprintFromInfo(info), expected) {
+		return ErrConflict
+	}
+	if _, err := unix.FcntlInt(file.Fd(), unix.F_SETLEASE, unix.F_WRLCK); err != nil {
+		return fmt.Errorf("%w: acquire source write lease: %w", ErrConflict, err)
+	}
+	if err := requireFileWriteLease(file); err != nil {
+		return fmt.Errorf("%w: source write lease was broken: %w", ErrConflict, err)
+	}
+	current, err = statxAt(parentFD, name, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
+	if current.Mnt_id != expectedMountID || current.Mode&unix.S_IFMT != unix.S_IFREG || !sameTrashObject(opened, current) || !sameFingerprint(fingerprintFromInfoAfterRead(file), expected) {
+		return ErrConflict
+	}
+	if err := requireFileWriteLease(file); err != nil {
+		return fmt.Errorf("%w: source write lease was broken: %w", ErrConflict, err)
+	}
+	if preflight {
+		return nil
+	}
+	return unix.Unlinkat(parentFD, name, 0)
 }
 
 func sameTrashObject(first, second unix.Statx_t) bool {

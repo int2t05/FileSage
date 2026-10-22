@@ -69,6 +69,8 @@ type Config struct {
 	BasePath string
 	// MaxUploadSize 是单个上传的字节上限，零表示不限制。
 	MaxUploadSize int64
+	// MaxStagingBytes 限制所有未发布上传声明大小的总和，必须大于零。
+	MaxStagingBytes int64
 	// EventBuffer 限制待消费事件数量，零默认使用 64。
 	EventBuffer int
 }
@@ -78,6 +80,7 @@ type Server struct {
 	httpHandler   http.Handler
 	stagingDir    string
 	store         filestore.FileStore
+	quotaStore    *stagingQuotaStore
 	events        chan Event
 	stop          context.CancelFunc
 	done          chan struct{}
@@ -90,6 +93,9 @@ type Server struct {
 func New(config Config) (*Server, error) {
 	if config.MaxUploadSize < 0 {
 		return nil, errors.New("maximum upload size cannot be negative")
+	}
+	if config.MaxStagingBytes <= 0 {
+		return nil, errors.New("maximum upload staging size must be positive")
 	}
 	basePath, err := normalizeBasePath(config.BasePath)
 	if err != nil {
@@ -110,9 +116,13 @@ func New(config Config) (*Server, error) {
 	store := filestore.New(stagingDir)
 	store.DirModePerm = 0o700
 	store.FileModePerm = 0o600
+	quotaStore, err := newStagingQuotaStore(store, stagingDir, config.MaxStagingBytes)
+	if err != nil {
+		return nil, err
+	}
 	composer := tusd.NewStoreComposer()
-	composer.UseCore(store)
-	composer.UseTerminater(store)
+	composer.UseCore(quotaStore)
+	composer.UseTerminater(quotaStore)
 	locker := filelocker.New(stagingDir)
 	locker.UseIn(composer)
 
@@ -153,6 +163,7 @@ func New(config Config) (*Server, error) {
 		httpHandler: http.StripPrefix(strings.TrimSuffix(basePath, "/"), protocolHandler),
 		stagingDir:  stagingDir,
 		store:       store,
+		quotaStore:  quotaStore,
 		events:      make(chan Event, eventBuffer),
 		stop:        stop,
 		done:        make(chan struct{}),
@@ -328,12 +339,12 @@ func (server *Server) CompletedUploads() ([]Event, error) {
 			if err == nil {
 				err = errors.New("staged upload info is not a regular file")
 			}
-			slog.Warn("skipping invalid staged upload info", "upload_id", uploadID, "error", err)
+			slog.Warn("skipping invalid staged upload info", "upload_id", uploadID, "reason", "invalid_metadata_file")
 			continue
 		}
 		event, err := server.TransferStatus(uploadID)
 		if err != nil {
-			slog.Warn("skipping staged upload with invalid tus state", "upload_id", uploadID, "error", err)
+			slog.Warn("skipping staged upload with invalid tus state", "upload_id", uploadID, "reason", "invalid_transfer_state")
 			continue
 		}
 		if event.Kind != UploadCompleted {
@@ -341,11 +352,11 @@ func (server *Server) CompletedUploads() ([]Event, error) {
 		}
 		reader, _, _, err := server.OpenCompleted(event)
 		if err != nil {
-			slog.Warn("skipping staged upload that failed validation", "upload_id", uploadID, "error", err)
+			slog.Warn("skipping staged upload that failed validation", "upload_id", uploadID, "reason", "staged_upload_invalid")
 			continue
 		}
 		if err := reader.Close(); err != nil {
-			slog.Warn("cannot close validated staged upload", "upload_id", uploadID, "error", err)
+			slog.Warn("cannot close validated staged upload", "upload_id", uploadID, "reason", "staging_io_failure")
 			continue
 		}
 		events = append(events, event)
@@ -366,7 +377,7 @@ func (server *Server) DiscardCompleted(event Event) error {
 	if err != nil {
 		return fmt.Errorf("load staged upload for cleanup: %w", err)
 	}
-	if err := server.store.AsTerminatableUpload(storedUpload).Terminate(context.Background()); err != nil {
+	if err := server.quotaStore.AsTerminatableUpload(storedUpload).Terminate(context.Background()); err != nil {
 		return fmt.Errorf("remove published upload from staging: %w", err)
 	}
 	return nil
@@ -404,7 +415,7 @@ func (server *Server) forwardEvent(ctx context.Context, kind EventKind, raw tusd
 			err = errors.New("tusd emitted an incomplete upload event")
 		}
 		// 元数据在创建前已校验；此处再次校验后才向调用方转发。
-		slog.Error("discarding invalid tusd upload event", "kind", kind, "error", err)
+		slog.Error("discarding invalid tusd upload event", "kind", kind, "reason", "invalid_upload_event")
 		return
 	}
 	select {

@@ -69,13 +69,7 @@ func buildAgentToolRegistry() map[string]agentTool {
 		}
 	}
 	register("rename", "在同一目录安全重命名文件", "scopePath, sourcePath, targetPath, reason", "root_scoped_snapshot_write", proposal("rename"),
-		func(s *Service, ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
-			digest, err := s.hashApprovedFile(op)
-			if err != nil {
-				return s.recordRenameOutcome(ctx, planID, op, "", err)
-			}
-			return s.recordRenameOutcome(ctx, planID, op, digest, s.applyOperation(op))
-		})
+		executeMoveTool)
 	register("edit_text", "编辑单个 UTF-8 文本文件", "scopePath, sourcePath, reason, stagedContent", "root_scoped_snapshot_write", proposal("edit_text"), executeTextTool)
 	register("create_file", "创建单个 UTF-8 文本文件", "scopePath, targetPath, reason, stagedContent", "root_scoped_snapshot_write", proposal("create_file"), executeTextTool)
 	register("overwrite_file", "覆盖单个 UTF-8 文本文件", "scopePath, sourcePath, reason, stagedContent", "root_scoped_snapshot_write", proposal("overwrite_file"), executeTextTool)
@@ -153,7 +147,7 @@ func executeShellTool(s *Service, ctx context.Context, planID, _ string, _ store
 }
 
 func executeCreateDirectoryTool(s *Service, ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
-	applyErr := s.applyOperation(op)
+	applyErr := s.createDirectory(op)
 	if applyErr != nil {
 		message := "目录创建失败，未覆盖已有内容"
 		if errors.Is(applyErr, fsroot.ErrConflict) || errors.Is(applyErr, fs.ErrExist) {

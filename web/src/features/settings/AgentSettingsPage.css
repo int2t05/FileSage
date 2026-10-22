@@ -1,6 +1,6 @@
 /* Agent 设置页及权限模式开关。 */
 .agent-settings-page {
-  width: min(100%, 760px);
+  width: min(100%, var(--content-width-settings));
   margin: 0 auto;
 }
 
