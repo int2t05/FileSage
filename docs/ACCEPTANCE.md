@@ -6,7 +6,7 @@
 
 | 范围 | 结果 | 边界 |
 | --- | --- | --- |
-| GitHub 主线 | 远端 `main` 当前为 `35800d6`。[主线 CI](https://github.com/int2t05/FileSage/actions/runs/39718713380) 全部通过。依赖 PR #1、#2、#4、#8、#9 均已合并；开放 PR 为 0，远端仅保留 `main` 分支。 | 主线检查通过不代表已发布稳定版；目前没有 GitHub Release。 |
+| GitHub 主线 | 代码提交 `35800d6` 的[主线 CI](https://github.com/int2t05/FileSage/actions/runs/39718713380) 与后续文档提交 `0022b06` 的[主线 CI](https://github.com/int2t05/FileSage/actions/runs/39719973386) 均通过。PR #1、#2、#4、#8、#9 已合并，重复或过期的 #3、#5、#6、#7 已关闭；开放 PR 为 0，远端仅保留 `main` 分支。 | 主线检查通过不代表已发布稳定版；目前没有 GitHub Release。 |
 | Linux 发布候选 | 以 `35800d663fbb07f6a31c781abd8cf8fb5be6661a` 验收。GitHub CI 的 Go/Web 检查、race、漏洞扫描、npm 审计、测试、类型检查、生产构建、Chromium E2E 和 Linux 发布包冒烟均通过。Linux 原生构建包大小 14,991,515 字节，SHA-256 为 `1a03dfd1381edb76ff3bfdeed0fd70645e7476965c497d191b5131fac189738f`；在隔离数据目录通过启动／写入／重启／读取冒烟。 | 使用合成文件和固定测试模型；尚未创建正式 Release。 |
 | 持久服务器 | 已部署 `35800d6`，Go 1.27.3；systemd 服务运行，LAN 健康接口返回 `ok`，网页 HTTP 200。`CAP_LEASE` 已加入服务能力集。SQLite schema v29，`integrity_check` 为 `ok`，外键违规为 0；管理根下的 ext4 卷已挂载并纳入 systemd 挂载依赖。部署后再次核验服务与健康接口正常。 | 验证覆盖部署、迁移和只读完整性检查；生产管理根目录的 Agent 文件写入、主机防火墙和路由器端口转发仍未验收。 |
 | 备份与恢复 | 隔离根目录和数据目录的恢复演练中，篡改并删除测试数据后恢复、重启，API 可读到原文件。2026-10-22 部署前保存回退点 `/usr/local/lib/filesage/rollback-before-35800d6`，包含旧二进制、网页、systemd 配置和 SQLite v29 快照；快照完整性检查通过。 | 恢复演练为同机同盘；未验证独立主机、独立备份介质、整机故障或介质损坏。 |
