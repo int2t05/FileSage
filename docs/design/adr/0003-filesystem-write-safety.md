@@ -2,7 +2,7 @@
 
 ## 状态
 
-**已决定；Linux 链接、并发和双卷操作测试通过，专用服务账户及 ext4 子卷已部署。Linux 覆盖已有文件前申请读租约；永久删除前复核确认的目录项状态，并对普通文件取得写租约。打开的外部写句柄或状态变化会使操作停止。隔离内核验证确认租约检查与 `unlink` 之间仍有不可原子化的外部访问窗口；此限制适用于跨卷清理、替换旧文件和永久删除。其他写入口竞态和介质故障恢复仍待验证。**
+**已决定；Linux 链接、并发和双卷操作测试通过，专用服务账户及 ext4 子卷已部署。Linux 覆盖已有文件前申请读租约；永久删除前复核确认的目录项状态，并对普通文件取得写租约。systemd 服务通过 `CAP_LEASE` 支持 ACL／专用组授权的异主文件。打开的外部写句柄或状态变化会使操作停止。隔离内核验证确认租约检查与 `unlink` 之间仍有不可原子化的外部访问窗口；此限制适用于跨卷清理、替换旧文件和永久删除。其他写入口竞态和介质故障恢复仍待验证。**
 
 ## 背景
 
@@ -27,7 +27,7 @@ Linux 替换已有文件先对当前文件申请读租约，阻止或检测外�
 
 ## 影响
 
-根目录约束不等于 Linux 权限提升；服务以非 root 用户运行，只能修改其有权访问的文件，`chown` 按实际权限失败。内部软链接须解析至根目录；硬链接不能靠 `realpath` 识别。服务外程序可竞态替换目录项，执行时必须校验文件身份；若目标状态不符就停止并要求重新审批。替换和永久删除后不恢复旧内容。
+根目录约束不等于 Linux 权限提升；服务以非 root 用户运行，只能修改其有权访问的文件，`CAP_LEASE` 不替代读写权限，`chown` 按实际权限失败。内部软链接须解析至根目录；硬链接不能靠 `realpath` 识别。服务外程序可竞态替换目录项，执行时必须校验文件身份；若目标状态不符就停止并要求重新审批。替换和永久删除后不恢复旧内容。
 
 ## 证据
 
@@ -38,6 +38,7 @@ Linux 替换已有文件先对当前文件申请读租约，阻止或检测外�
 - `internal/httpapi/write_test.go` 与 `batch_rename_test.go` 覆盖审计写入期间替换源路径，以及改名返回前目标身份变化；前者拒绝执行并结束失败审计，后者记为 `needs_review`，停止后续批次且不报告成功。改名后的身份核对不能消除系统调用窗口，也不自动恢复错误目标。Linux 全量 Go 测试、`httpapi`／`fsroot`／trash race 与全量 `go vet` 通过。
 - 隔离内核探针在服务器 `/tmp` ext4 上取得写租约后启动阻塞打开请求；探针先检查租约并删除目录项，再释放租约。请求随后成功打开并写入 `st_nlink=0` 的 inode，确认租约检查与 `unlink` 之间存在不可原子化的外部访问窗口。独立验证使用临时目录，未访问生产服务或真实用户文件。
 - [Linux `F_SETLEASE`／`F_GETLEASE`](https://man7.org/linux/man-pages/man2/F_SETLEASE.2const.html) 说明文件租约会在冲突访问时被打破并可能阻塞调用方；该机制不使目录项删除与租约状态检查成为一个原子事务。
+- 2026-10-22：服务器上以 `filesage` 身份对另一 UID 所有、但可读的临时文件申请租约返回 `EPERM`；同一操作在仅授予 `AmbientCapabilities=CAP_LEASE` 的临时 systemd 单元中通过。测试文件位于 `/tmp`，已删除；持久服务未修改。
 - [Go traversal-resistant file API](https://go.dev/blog/osroot) 与[GO-2026-4970 漏洞公告](https://pkg.go.dev/vuln/GO-2026-4970)（访问 2026-10-15）：说明目录句柄路径 API 的能力及版本修复要求。
 - [Linux `openat2`](https://man7.org/linux/man-pages/man2/openat2.2.html)（访问 2026-10-15）：`RESOLVE_IN_ROOT` 将绝对路径／软链接按指定根解析；不能禁用所有挂载点，因为管理根目录允许多卷。
 - [Linux rename](https://man7.org/linux/man-pages/man2/rename.2.html)、[软链接](https://man7.org/linux/man-pages/man7/symlink.7.html)、[chmod](https://man7.org/linux/man-pages/man2/chmod.2.html)、[chown](https://man7.org/linux/man-pages/man2/chown.2.html)：官方手册用于提交和权限实现。

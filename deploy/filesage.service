@@ -28,7 +28,9 @@ PrivateDevices=yes
 PrivateTmp=yes
 NoNewPrivileges=yes
 # 为 Bubblewrap 的无特权用户命名空间保留隔离所需能力。
-CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN
+# 为异主 ACL 文件协调内核租约；不改变文件读写权限。
+AmbientCapabilities=CAP_LEASE
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_LEASE
 ProtectClock=yes
 ProtectKernelModules=yes
 LockPersonality=yes

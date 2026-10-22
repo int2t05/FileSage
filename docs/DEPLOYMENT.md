@@ -89,7 +89,7 @@ sudo install -d -o filesage -g filesage -m 0750 /srv/filesage-files
 
 unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需的独立挂载相符；systemd 不会从 `EnvironmentFile` 展开目录变量。模板启用 `ProtectSystem=strict`，并通过 `ReadWritePaths=/srv/filesage-files` 开放默认管理根目录；`StateDirectory=filesage` 自动保持可写。更改 `FILESAGE_ROOT` 时同步调整 `ReadWritePaths`，更改 `FILESAGE_DATA_DIR` 时也将数据目录加入白名单。数据库目录必须位于管理根目录之外。
 
-模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界只保留 Bubblewrap 用户命名空间初始化所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
+模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界包含 Bubblewrap 所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`，以及在 ACL／专用组授权的异主文件上设置读写租约所需的 `CAP_LEASE`。`CAP_LEASE` 不绕过文件读写权限，但可对进程能打开的文件设置租约；应用只在管理根目录内的文件操作中使用它，保留其余 systemd 文件系统限制。部署后可用 `systemctl show filesage.service -p CapabilityBoundingSet -p AmbientCapabilities` 核对能力配置。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
 
 unit 会等待 `network-online.target` 再启动。启用当前网络管理器对应的 wait-online 服务，确保固定监听地址已配置；例如 NetworkManager 使用 `NetworkManager-wait-online.service`，systemd-networkd 使用 `systemd-networkd-wait-online.service`。
 
@@ -111,7 +111,7 @@ sudo systemd-analyze verify /etc/systemd/system/filesage.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now filesage.service
 sudo systemctl status filesage.service
-sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor
+sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor -p CapabilityBoundingSet -p AmbientCapabilities
 ```
 
 更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。运行日志由 systemd journal 接收，使用 `sudo journalctl -u filesage.service` 查看。HTTP 错误和超过 2 秒的请求带有 `X-Request-ID`；同一标识进入请求上下文，Agent 对话、模型与工具步骤日志以 `request_id` 关联。Agent 日志只记录会话／计划／操作 ID、动作、状态、错误类别和耗时，不记录路径、命令、消息正文或文件内容。
