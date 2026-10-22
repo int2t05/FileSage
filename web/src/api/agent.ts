@@ -24,7 +24,10 @@ export interface AgentOperation {
   command?: string;
   workingDir?: string;
   exitCode?: number;
+  stdout?: string;
+  stderr?: string;
   outputDiscarded?: boolean;
+  outputTruncated?: boolean;
 }
 
 export interface AgentOperationPreview {
@@ -188,7 +191,10 @@ function parseOperation(value: unknown): AgentOperation | null {
   const command = value.command;
   const workingDir = value.workingDir;
   const exitCode = value.exitCode;
+  const stdout = value.stdout;
+  const stderr = value.stderr;
   const outputDiscarded = value.outputDiscarded;
+  const outputTruncated = value.outputTruncated;
   if (hasInvalidInteger
     || (value.action === 'edit_text' && (!isSafeRootRelativePath(value.sourcePath) || value.sourcePath !== value.targetPath || !isSupportedTextPath(value.sourcePath)))
     || (value.action === 'create_file' && (!isSafeRootRelativePath(value.targetPath) || !isSupportedTextPath(value.targetPath)
@@ -198,8 +204,11 @@ function parseOperation(value: unknown): AgentOperation | null {
       || !isSafeRootRelativePath(value.sourcePath) && value.sourcePath !== ''
       || typeof workingDir !== 'string' || !isShellWorkingDirectory(workingDir) || value.targetPath !== ''
       || exitCode !== undefined && (typeof exitCode !== 'number' || !Number.isInteger(exitCode) || exitCode < 0 || exitCode > 255)
-      || outputDiscarded !== undefined && typeof outputDiscarded !== 'boolean'))
-    || (value.action !== 'run_shell' && (command !== undefined || workingDir !== undefined || exitCode !== undefined || outputDiscarded !== undefined || value.stdout !== undefined || value.stderr !== undefined))
+      || stdout !== undefined && (typeof stdout !== 'string' || new TextEncoder().encode(stdout).byteLength > 16 * 1024)
+      || stderr !== undefined && (typeof stderr !== 'string' || new TextEncoder().encode(stderr).byteLength > 16 * 1024)
+      || outputDiscarded !== undefined && typeof outputDiscarded !== 'boolean'
+      || outputTruncated !== undefined && typeof outputTruncated !== 'boolean'))
+    || (value.action !== 'run_shell' && (command !== undefined || workingDir !== undefined || exitCode !== undefined || outputDiscarded !== undefined || stdout !== undefined || stderr !== undefined || outputTruncated !== undefined))
     || (value.action === 'set_permissions' && (beforeMode === undefined || mode === undefined || hasOwner))
     || (value.action === 'set_owner' && (hasMode || beforeOwnerUid === undefined || ownerUid === undefined
       || beforeGroupGid === undefined || groupGid === undefined))
@@ -233,7 +242,10 @@ function parseOperation(value: unknown): AgentOperation | null {
     ...(value.action === 'run_shell' ? {
       command: command as string, workingDir: workingDir as string,
       ...(typeof exitCode === 'number' ? { exitCode } : {}),
+      ...(typeof stdout === 'string' ? { stdout } : {}),
+      ...(typeof stderr === 'string' ? { stderr } : {}),
       ...(typeof outputDiscarded === 'boolean' ? { outputDiscarded } : {}),
+      ...(typeof outputTruncated === 'boolean' ? { outputTruncated } : {}),
     } : {}),
   };
 }

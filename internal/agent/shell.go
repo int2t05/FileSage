@@ -296,12 +296,12 @@ func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, res
 		ScopePath: proposal.ScopePath, ModelProvider: proposal.ModelProvider, ModelName: proposal.ModelName,
 		CreatedAt: now, UpdatedAt: now,
 	}
-	if len(result.Stdout)+len(result.Stderr) > 256<<10 {
-		return store.PlanRecord{}, ErrUnsupported
-	}
+	stdout, stdoutTruncated := boundedShellOutput(result.Stdout)
+	stderr, stderrTruncated := boundedShellOutput(result.Stderr)
 	run := store.ShellRunRecord{
 		ID: runID, PlanID: planID, OperationID: operationID, Command: proposal.Command,
-		WorkingDirectory: proposal.WorkingDirectory, OutputDiscarded: len(result.Stdout)+len(result.Stderr) > 0, ExitCode: result.ExitCode,
+		WorkingDirectory: proposal.WorkingDirectory, Stdout: stdout, Stderr: stderr,
+		OutputTruncated: stdoutTruncated || stderrTruncated, ExitCode: result.ExitCode,
 		StageID: runID, Status: runStatus,
 		CreatedAt: now, UpdatedAt: now,
 	}
@@ -387,6 +387,19 @@ func (s *Service) saveShellPlan(ctx context.Context, proposal ShellProposal, res
 	return s.store.Plan(ctx, planID)
 }
 
+// boundedShellOutput 保留有效 UTF-8，并限制单路持久化输出大小。
+func boundedShellOutput(value string) (string, bool) {
+	value = strings.ToValidUTF8(value, "�")
+	if len(value) <= store.MaxShellOutputBytes {
+		return value, false
+	}
+	value = value[:store.MaxShellOutputBytes]
+	for !utf8.ValidString(value) {
+		value = value[:len(value)-1]
+	}
+	return value, true
+}
+
 func hashShellPath(root *fsroot.Root, relativePath string, expectedSize int64) (string, error) {
 	reader, _, err := root.OpenReadNoFollow(relativePath)
 	if err != nil {
@@ -404,7 +417,7 @@ func hashShellPath(root *fsroot.Root, relativePath string, expectedSize int64) (
 	return hex.EncodeToString(digest.Sum(nil)), nil
 }
 
-// ShellRun 返回命令元数据，不返回命令原始输出。
+// ShellRun 返回审核界面和续聊所需的限长命令回执。
 func (s *Service) ShellRun(ctx context.Context, planID string) (store.ShellRunRecord, error) {
 	if s == nil || s.store == nil {
 		return store.ShellRunRecord{}, ErrUnsupported

@@ -70,7 +70,7 @@ func prepareShellFixture(t *testing.T, count int, noChanges bool) shellFixture {
 	}
 	run := ShellRunRecord{
 		ID: "shell-run", PlanID: plan.ID, OperationID: operation.ID, Command: "find . -type f", WorkingDirectory: ".",
-		OutputDiscarded: true, ExitCode: 0,
+		Stdout: "file listing", Stderr: "warning", OutputTruncated: true, ExitCode: 0,
 		StageID: "stage-payload", Status: runStatus, CreatedAt: now, UpdatedAt: now,
 	}
 	changes := make([]ShellChangeRecord, count)
@@ -105,7 +105,8 @@ func TestCreateConversationShellTaskPlanPersistsAndPagesChanges(t *testing.T) {
 	fixture := createShellFixture(t, 105, false)
 	ctx := context.Background()
 	run, err := fixture.db.ShellRun(ctx, fixture.plan.ID)
-	if err != nil || run.Command != fixture.run.Command || run.WorkingDirectory != "." || run.StageID != fixture.run.StageID {
+	if err != nil || run.Command != fixture.run.Command || run.WorkingDirectory != "." || run.StageID != fixture.run.StageID ||
+		run.Stdout != fixture.run.Stdout || run.Stderr != fixture.run.Stderr || run.OutputTruncated != fixture.run.OutputTruncated {
 		t.Fatalf("ShellRun() = (%#v, %v)", run, err)
 	}
 	first, err := fixture.db.ListShellChanges(ctx, fixture.plan.ID, 100, 0)
@@ -255,7 +256,8 @@ func TestReviewedShellPlanApprovesDiffAsOneToolStep(t *testing.T) {
 		}
 	}
 	run, err := fixture.db.ShellRun(ctx, plan.ID)
-	if err != nil || run.Status != ShellRunApproved || run.ExitCode != 0 || run.OutputDiscarded != fixture.run.OutputDiscarded {
+	if err != nil || run.Status != ShellRunApproved || run.ExitCode != 0 || run.OutputDiscarded != fixture.run.OutputDiscarded ||
+		run.Stdout != fixture.run.Stdout || run.Stderr != fixture.run.Stderr || run.OutputTruncated != fixture.run.OutputTruncated {
 		t.Fatalf("reviewed Shell run = (%#v, %v)", run, err)
 	}
 	if err := fixture.db.StartShellExecution(ctx, plan.ID, plan.Version, time.Now().UTC()); err != nil {

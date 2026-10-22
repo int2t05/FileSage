@@ -18,18 +18,27 @@ export function shellCommandSummary(command: string): string {
 
 export function shellResultSummary({
   resultMessage,
+  stdout = '',
+  stderr = '',
   outputDiscarded,
+  outputTruncated = false,
   exitCode,
   executionStatus,
 }: {
   resultMessage: string;
+  stdout?: string;
+  stderr?: string;
   outputDiscarded: boolean;
+  outputTruncated?: boolean;
   exitCode?: number;
   executionStatus: string;
 }): string {
   const message = shouldShowShellResultMessage(resultMessage) ? firstLine(resultMessage) : '';
   if (message) return fitSummary(message);
+  const output = firstLine(stdout) || firstLine(stderr);
+  if (output) return fitSummary(`${output}${outputTruncated ? ' · 输出已截断' : ''}`);
   if (outputDiscarded) return exitCode === undefined ? '命令输出已省略' : `命令输出已省略 · 退出码 ${exitCode}`;
+  if (outputTruncated) return '输出已截断';
   if (exitCode !== undefined) return exitCode === 0 ? '无输出 · 退出码 0' : `退出码 ${exitCode}`;
   if (executionStatus === 'running') return '正在运行';
   if (executionStatus === 'pending') return '等待执行';
@@ -51,13 +60,19 @@ export function shouldShowShellResultMessage(resultMessage: string): boolean {
 export function shouldShowShellResultSummary({
   executionStatus,
   resultMessage,
+  stdout = '',
+  stderr = '',
   outputDiscarded,
+  outputTruncated = false,
 }: {
   executionStatus: string;
   resultMessage: string;
+  stdout?: string;
+  stderr?: string;
   outputDiscarded: boolean;
+  outputTruncated?: boolean;
 }): boolean {
-  if (outputDiscarded || executionStatus === 'failed' || executionStatus === 'partial') return true;
+  if (outputDiscarded || outputTruncated || stdout !== '' || stderr !== '' || executionStatus === 'failed' || executionStatus === 'partial') return true;
   if (executionStatus !== 'succeeded') return false;
   return shouldShowShellResultMessage(resultMessage);
 }

@@ -266,7 +266,7 @@ func AnalysisDataTypes(action string) []string {
 	case "set_owner":
 		return []string{"任务描述、文件路径与目标属主"}
 	case "run_shell":
-		return []string{"经确认的命令与工作目录；隔离结果作为一个 Shell 步骤展示并提交"}
+		return []string{"经确认的命令、管理范围与工作目录；执行状态、退出码、stdout/stderr（各限 16 KiB）及变化路径、类型和状态会发送给配置模型；FileSage 不另行读取文件正文，命令输出可能包含文件内容或其他敏感信息"}
 	case "find_duplicates":
 		return []string{"任务描述与扫描范围会发送给模型；文件内容仅在服务端本机读取并计算 SHA-256，不发送给模型"}
 	case "archive_photos":
@@ -279,17 +279,18 @@ func AnalysisDataTypes(action string) []string {
 }
 
 type AgentConversation struct {
-	ID              string
-	State           ConversationState
-	Messages        []ConversationMessage
-	ContextSummary  string
-	Analysis        *AnalysisCard
-	TaskID          string
-	PlanID          string
-	DuplicateScanID string
-	Error           string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                string
+	State             ConversationState
+	Messages          []ConversationMessage
+	ContextSummary    string
+	ToolContextPlanID string `json:"-"`
+	Analysis          *AnalysisCard
+	TaskID            string
+	PlanID            string
+	DuplicateScanID   string
+	Error             string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type ConversationSummary struct {
@@ -346,7 +347,7 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 	} else if err != nil {
 		return fmt.Errorf("read conversation turn state: %w", err)
 	}
-	var receipt string
+	var receipt, toolContextPlanID string
 	if planID.Valid {
 		if state != ConversationAwaitingApproval && state != ConversationAnalysisComplete && state != ConversationFailed {
 			return ErrConversationConflict
@@ -363,6 +364,13 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 		receipt, err = conversationPlanReceipt(ctx, tx, planID.String, status)
 		if err != nil {
 			return err
+		}
+		var hasShellRun int
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM shell_runs WHERE plan_id = ?)`, planID.String).Scan(&hasShellRun); err != nil {
+			return fmt.Errorf("check prior Shell tool result: %w", err)
+		}
+		if hasShellRun == 1 {
+			toolContextPlanID = planID.String
 		}
 	} else if !continuableConversationState(state) {
 		return ErrConversationConflict
@@ -383,14 +391,15 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_conversations SET state = 'processing', task_id = NULL, plan_id = NULL, analysis_action = 'rename', goal = '', file_path = '',
 			target_path = '', mode = NULL, owner_uid = NULL, group_gid = NULL,
-			operations_json = '[]', provider = '', model = '', destination = '', duplicate_scan_id = NULL, error_code = '', updated_at_ns = ?
+			operations_json = '[]', provider = '', model = '', destination = '', duplicate_scan_id = NULL, error_code = '',
+			tool_context_plan_id = CASE WHEN ? <> '' THEN ? ELSE tool_context_plan_id END, updated_at_ns = ?
 		WHERE id = ? AND state = ? AND plan_id IS ? AND (
 			(plan_id IS NULL AND state IN ('clarifying', 'awaiting_confirmation', 'analysis_complete', 'unsupported', 'failed'))
 			OR (plan_id IS NOT NULL AND state IN ('awaiting_approval', 'analysis_complete', 'failed') AND EXISTS (
 				SELECT 1 FROM plans WHERE plans.id = agent_conversations.plan_id
 					AND plans.status IN ('completed', 'failed', 'invalidated', 'rejected', 'cancelled')
 			))
-		)`, atNS, id, state, nullablePlanID(planID))
+		)`, toolContextPlanID, toolContextPlanID, atNS, id, state, nullablePlanID(planID))
 	if err != nil {
 		return fmt.Errorf("start agent conversation turn: %w", err)
 	}
@@ -648,9 +657,10 @@ func (s *Store) FinishConversationTurn(ctx context.Context, id string, state Con
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_conversations SET state = ?, analysis_action = ?, goal = ?, file_path = ?, target_path = ?,
 			mode = ?, owner_uid = ?, group_gid = ?, context_summary = CASE WHEN ? THEN ? ELSE context_summary END,
-			operations_json = ?, provider = ?, model = ?, destination = ?, error_code = ?, updated_at_ns = ?
+			operations_json = ?, provider = ?, model = ?, destination = ?, error_code = ?,
+			tool_context_plan_id = CASE WHEN ? = 'failed' THEN tool_context_plan_id ELSE '' END, updated_at_ns = ?
 		WHERE id = ? AND state = 'processing'`,
-		state, action, goal, filePath, targetPath, mode, ownerUID, groupGID, updateSummary, summary, operationsJSON, provider, model, destination, errorCode, atNS, id)
+		state, action, goal, filePath, targetPath, mode, ownerUID, groupGID, updateSummary, summary, operationsJSON, provider, model, destination, errorCode, state, atNS, id)
 	if err != nil {
 		return fmt.Errorf("finish agent conversation turn: %w", err)
 	}
@@ -911,7 +921,7 @@ func (s *Store) CreateConversationTaskPlan(ctx context.Context, conversationID s
 	if count >= maxConversationMessages {
 		return ErrConversationLimit
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_conversations SET state = 'awaiting_approval', task_id = ?, plan_id = ?, error_code = '', updated_at_ns = ? WHERE id = ? AND state = 'analyzing' AND task_id IS NULL AND plan_id IS NULL`, task.ID, plan.ID, timestampOrNow(task.UpdatedAt), conversationID)
+	result, err := tx.ExecContext(ctx, `UPDATE agent_conversations SET state = 'awaiting_approval', task_id = ?, plan_id = ?, error_code = '', tool_context_plan_id = '', updated_at_ns = ? WHERE id = ? AND state = 'analyzing' AND task_id IS NULL AND plan_id IS NULL`, task.ID, plan.ID, timestampOrNow(task.UpdatedAt), conversationID)
 	if err != nil {
 		return fmt.Errorf("link conversation to plan: %w", err)
 	}
@@ -1196,12 +1206,12 @@ func loadConversation(ctx context.Context, queryer interface {
 }, id string) (AgentConversation, error) {
 	var conversation AgentConversation
 	var createdAt, updatedAt int64
-	var action, goal, filePath, targetPath, operationsJSON, provider, model, destination string
+	var action, goal, filePath, targetPath, operationsJSON, provider, model, destination, toolContextPlanID string
 	var mode, ownerUID, groupGID sql.NullInt64
 	var taskID, planID, duplicateScanID sql.NullString
-	err := queryer.QueryRowContext(ctx, `SELECT id, state, analysis_action, goal, file_path, target_path, mode, owner_uid, group_gid, operations_json, provider, model, destination, task_id, plan_id, duplicate_scan_id, error_code, created_at_ns, updated_at_ns, context_summary FROM agent_conversations WHERE id = ?`, id).Scan(
+	err := queryer.QueryRowContext(ctx, `SELECT id, state, analysis_action, goal, file_path, target_path, mode, owner_uid, group_gid, operations_json, provider, model, destination, task_id, plan_id, duplicate_scan_id, error_code, created_at_ns, updated_at_ns, context_summary, tool_context_plan_id FROM agent_conversations WHERE id = ?`, id).Scan(
 		&conversation.ID, &conversation.State, &action, &goal, &filePath, &targetPath, &mode, &ownerUID, &groupGID, &operationsJSON, &provider, &model, &destination,
-		&taskID, &planID, &duplicateScanID, &conversation.Error, &createdAt, &updatedAt, &conversation.ContextSummary,
+		&taskID, &planID, &duplicateScanID, &conversation.Error, &createdAt, &updatedAt, &conversation.ContextSummary, &toolContextPlanID,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return AgentConversation{}, ErrConversationNotFound
@@ -1211,6 +1221,7 @@ func loadConversation(ctx context.Context, queryer interface {
 	}
 	conversation.CreatedAt = time.Unix(0, createdAt).UTC()
 	conversation.UpdatedAt = time.Unix(0, updatedAt).UTC()
+	conversation.ToolContextPlanID = toolContextPlanID
 	if taskID.Valid {
 		conversation.TaskID = taskID.String
 	}

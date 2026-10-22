@@ -53,9 +53,12 @@ describe('Agent Shell 审核界面', () => {
     assert.match(toolCall, /<strong>命令<\/strong>/);
     assert.match(toolCall, /<strong>结果<\/strong>/);
     assert.match(toolCall, /outputDiscarded/);
-    assert.doesNotMatch(toolCall, /operation\.stdout|operation\.stderr|标准输出|错误输出/);
+    assert.match(review, /stdout=\{operation\.stdout \?\? ''\}/);
+    assert.match(review, /stderr=\{operation\.stderr \?\? ''\}/);
+    assert.match(toolCall, /stdout && <div className="agent-shell-tool-call-output"/);
+    assert.match(toolCall, /stderr && <div className="agent-shell-tool-call-output"/);
     assert.match(toolCall, /exitCode/);
-    assert.match(toolCall, /shouldShowShellResultSummary\(\{ executionStatus, resultMessage, outputDiscarded \}\)/);
+    assert.match(toolCall, /shouldShowShellResultSummary\(\{ executionStatus, resultMessage, stdout, stderr, outputDiscarded, outputTruncated \}\)/);
     assert.match(review, /plan\.operations\.length === 0 && \(/);
     assert.match(toolCall, /agent-shell-tool-call-result-label">结果/);
     assert.match(toolCallStyles, /agent-shell-tool-call-result/);

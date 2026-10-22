@@ -68,6 +68,24 @@ async function answerModel(request, response) {
       && message.content.includes('用户希望在同一会话持续处理文件。'));
     const hasToolResult = body.messages?.some((message) => message.role === 'assistant'
       && message.content.includes('目录已创建'));
+    if (body.model === 'filesage-e2e' && typeof userMessage === 'string'
+      && userMessage.includes('agent-e2e-shell-confirmation')) {
+      const content = JSON.stringify({
+        state: 'ready',
+        reply: '请先核对隔离 Shell 命令和数据范围。',
+        contextSummary: '用户正在检查 Shell 确认卡的数据披露。',
+        goal: '验证 Shell 确认卡的数据范围',
+        operations: [{
+          action: 'run_shell',
+          filePath: 'docs',
+          targetPath: '',
+          shellCommand: "printf 'filesage-e2e-output\\n'",
+          workingDir: 'reports',
+        }],
+      });
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+      return;
+    }
     if (body.model !== 'filesage-e2e' || typeof userMessage !== 'string'
       || !userMessage.includes(target) || isFollowup && (!hasMemory || !hasToolResult)) {
       response.writeHead(422, { 'Content-Type': 'application/json' }).end('{"error":"unexpected test prompt"}');

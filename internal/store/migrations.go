@@ -1630,6 +1630,20 @@ ON file_index_generation_entries(
 );
 `,
 	},
+	{
+		version: 30,
+		// 保存限长 Shell 输出，并记录仅供下一轮模型使用的回执来源。
+		sql: `
+ALTER TABLE shell_runs ADD COLUMN stdout TEXT NOT NULL DEFAULT ''
+	CHECK (length(CAST(stdout AS BLOB)) <= 16384);
+ALTER TABLE shell_runs ADD COLUMN stderr TEXT NOT NULL DEFAULT ''
+	CHECK (length(CAST(stderr AS BLOB)) <= 16384);
+ALTER TABLE shell_runs ADD COLUMN output_truncated INTEGER NOT NULL DEFAULT 0
+	CHECK (output_truncated IN (0, 1));
+ALTER TABLE agent_conversations ADD COLUMN tool_context_plan_id TEXT NOT NULL DEFAULT ''
+	CHECK (length(tool_context_plan_id) <= 256);
+`,
+	},
 }
 
 // migrate 顺序应用迁移，并清理旧 Shell 输出的 SQLite 残留。

@@ -163,3 +163,34 @@ test('Agent 审阅并执行同目录重命名，保留原文件内容', async ({
   await expect(access(sourcePath)).rejects.toThrow();
   expect(browserErrors).toEqual([]);
 });
+
+test('Agent 在 Shell 执行前披露续聊会发送的数据范围', async ({ page }) => {
+  const browserErrors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  const conversationListResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await page.goto('/#agent');
+  await conversationListResponse;
+  const root = await readManagedRoot(page);
+  await mkdir(path.join(root, 'docs', 'reports'), { recursive: true });
+  const composer = page.getByRole('textbox', { name: '整理需求消息' });
+  const createdConversationResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await composer.fill('请准备一个无文件写入的 Shell 命令，供 agent-e2e-shell-confirmation 浏览器验收。');
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await createdConversationResponse;
+
+  const confirmation = page.getByRole('region', { name: '确认隔离运行' });
+  await expect(confirmation).toContainText('确认隔离运行');
+  await expect(confirmation).toContainText('docs/reports');
+  await expect(confirmation).toContainText("printf 'filesage-e2e-output");
+  await expect(confirmation).toContainText('变化路径、类型和状态');
+  await expect(confirmation).toContainText('stdout/stderr 各限 16 KiB');
+  await expect(confirmation).toContainText('FileSage 不会另行读取文件正文，但命令输出可能包含文件内容或其他敏感信息');
+  await expect(page.getByRole('button', { name: '运行并查看变化' })).toBeEnabled();
+  expect(browserErrors).toEqual([]);
+});

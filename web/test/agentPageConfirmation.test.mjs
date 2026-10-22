@@ -277,7 +277,7 @@ describe('Agent 移动文件确认卡', () => {
     assert.equal(view.confirmLabel, '确认并分析');
   });
 
-  it('Shell 确认卡展示完整命令与范围，只说明会在隔离区运行', () => {
+  it('Shell 确认卡披露输出和文件变化的模型数据流', () => {
     const command = 'find . -type f -name "*.tmp" -print0 | xargs -0 -r rm --';
     const view = presentationModule.analysisCardPresentation({
       action: 'run_shell',
@@ -290,8 +290,11 @@ describe('Agent 移动文件确认卡', () => {
     assert.equal(view.scopePath, '管理根目录');
     assert.equal(view.workingDir, '管理根目录');
     assert.equal(view.shellCommand, command);
-    assert.match(view.notice, /隔离区运行/);
-    assert.match(view.notice, /审核并批准文件变化后，还需确认写入原目录/);
+    assert.match(view.notice, /隔离副本运行/);
+    assert.match(view.notice, /确认卡中的命令、范围、工作目录、执行结果及文件变化路径、类型和状态/);
+    assert.match(view.notice, /stdout\/stderr 各限 16 KiB/);
+    assert.match(view.notice, /不会另行读取文件正文，但命令输出可能包含文件内容或其他敏感信息/);
+    assert.match(view.notice, /文件变化经审核后提交/);
     assert.equal(view.confirmLabel, '运行并查看变化');
     assert.match(source, /className="agent-shell-command">\{analysisCardView\.shellCommand\}<\/pre>/);
     assert.match(styles, /\.agent-shell-command\s*\{/);

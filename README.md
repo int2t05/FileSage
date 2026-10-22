@@ -31,9 +31,9 @@ remaining checks.
   plan before it runs. Continue with follow-up tasks in the same saved
   conversation, including after a refresh. `bypasspermission` is on by default
   and runs steps in order; turn it off in Agent settings to run one step at a
-  time. Expand a step to inspect its command, exit code and file diff, then
-  check the audit history. Raw Shell output is discarded rather than stored or
-  returned.
+  time. Expand a step to inspect its command, exit code, bounded output and
+  file diff, then check the audit history. Bounded Shell output is retained in
+  the task record and can inform the next turn in the same conversation.
 - Keep SQLite task and search metadata outside the managed files. The filesystem remains the source of truth.
 
 ## Quick start
@@ -103,8 +103,13 @@ the [security reporting guide](SECURITY.md) for private reports.
 FileSage is intended for a trusted personal network. It does not authenticate
 users, provide HTTPS termination or protect an internet-facing deployment. Keep
 it on loopback or a trusted LAN behind a firewall. Agent chat messages are sent
-to the configured model as you converse. File contents are read and sent only
-after you confirm an analysis card; review its listed data types first. See the
+to the configured model as you converse. File-analysis tools read and send file
+contents only after you confirm an analysis card; review its listed data types
+first. Shell does not read file bodies automatically. After you confirm a Shell
+run, stdout and stderr are stored locally (up to 16 KiB per stream). The next
+turn sends the confirmed command, scope, working directory, execution status,
+bounded output and changed paths, types and statuses to the configured model
+as untrusted evidence. Command output may contain file contents or other sensitive information. See the
 [Agent API notes](docs/agent-conversation-api.md).
 
 ## License

@@ -51,7 +51,7 @@ describe('Agent 方案元数据解析', () => {
     assert.equal(parsed.operations[0].mode, undefined);
   });
 
-  it('Shell 方案保留命令和工作目录，但不解析历史原始输出', async () => {
+  it('Shell 方案解析限长输出并保留旧记录省略状态', async () => {
     const shell = await readPlan(plan({
       action: 'run_shell', sourcePath: '', targetPath: '',
       command: 'printf done > result.txt', workingDir: '', approval: 'approved',
@@ -63,8 +63,13 @@ describe('Agent 方案元数据解析', () => {
       exitCode: 0, stdout: 'done\n', stderr: '',
     }));
     assert.equal(shellWithOutput.operations[0].exitCode, 0);
-    assert.equal(shellWithOutput.operations[0].stdout, undefined);
-    assert.equal(shellWithOutput.operations[0].stderr, undefined);
+    assert.equal(shellWithOutput.operations[0].stdout, 'done\n');
+    assert.equal(shellWithOutput.operations[0].stderr, '');
+    const shellWithTruncation = await readPlan(plan({
+      action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.',
+      exitCode: 0, stdout: 'done', outputTruncated: true,
+    }));
+    assert.equal(shellWithTruncation.operations[0].outputTruncated, true);
     const shellWithoutOutput = await readPlan(plan({
       action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.',
       exitCode: 0, outputDiscarded: true,
@@ -72,6 +77,9 @@ describe('Agent 方案元数据解析', () => {
     assert.equal(shellWithoutOutput.operations[0].outputDiscarded, true);
     assert.throws(() => readPlan(plan({
       action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.', outputDiscarded: 'true',
+    })), /无效/);
+    assert.throws(() => readPlan(plan({
+      action: 'run_shell', sourcePath: '', targetPath: '', command: 'printf done', workingDir: '.', stdout: 'x'.repeat(16 * 1024 + 1),
     })), /无效/);
     assert.throws(() => readPlan(plan({ stdout: '不适用于文件操作' })), /无效/);
     const multi = { ...plan({ ...shell.operations[0] }), operations: [shell.operations[0], { ...shell.operations[0], id: 'shell-2' }] };

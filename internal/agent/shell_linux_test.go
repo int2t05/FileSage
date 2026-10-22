@@ -70,7 +70,7 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 		t.Fatalf("Shell 步骤用途 = %#v", plan.Operations)
 	}
 	run, err := service.ShellRun(ctx, plan.ID)
-	if err != nil || run.Status != store.ShellRunAwaitingApproval || run.Command == "" || !run.OutputDiscarded {
+	if err != nil || run.Status != store.ShellRunAwaitingApproval || run.Command == "" || run.Stdout != "keep" || run.OutputDiscarded {
 		t.Fatalf("ShellRun() = (%#v, %v)", run, err)
 	}
 	page, err := service.ShellChanges(ctx, plan.ID, store.MaxShellChangePageSize, 0)
@@ -149,8 +149,11 @@ func TestBypassReviewsAndExecutesShellThroughOneToolStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := &scriptedConversationModel{
-		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
-		replies: []string{`{"state":"ready","reply":"将在隔离目录创建测试文件。","goal":"创建 Shell 工具验收文件","operations":[{"action":"run_shell","filePath":"","targetPath":"","shellCommand":"printf 'shell-bypass-ok\\n' > shell-bypass.txt","workingDir":"."}]}`},
+		status: ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
+		replies: []string{
+			`{"state":"ready","reply":"将在隔离目录创建测试文件。","goal":"创建 Shell 工具验收文件","operations":[{"action":"run_shell","filePath":"","targetPath":"","shellCommand":"printf 'shell-bypass-ok\\n' > shell-bypass.txt && cat shell-bypass.txt","workingDir":"."}]}`,
+			`{"state":"clarifying","reply":"命令输出确认创建成功。","contextSummary":"已创建 shell-bypass.txt，命令输出 shell-bypass-ok。"}`,
+		},
 	}
 	conversationService := &ConversationService{store: metadata, root: root, plans: service, model: model}
 	conversation, err := conversationService.Create(ctx, "创建一个 Shell 工具验收文件")
@@ -182,6 +185,27 @@ func TestBypassReviewsAndExecutesShellThroughOneToolStep(t *testing.T) {
 	preview, err := service.PreviewShellChange(ctx, plan.ID, changes.Changes[0].ID)
 	if err != nil || !strings.Contains(preview.Diff, "+shell-bypass-ok") {
 		t.Fatalf("completed addition diff = (%#v, %v)", preview, err)
+	}
+
+	conversation, err = conversationService.AddMessage(ctx, conversation.ID, "根据命令输出继续")
+	if err != nil || conversation.State != store.ConversationClarifying {
+		t.Fatalf("follow-up AddMessage() = (%#v, %v)", conversation, err)
+	}
+	model.mu.Lock()
+	followupMessages := append([]ChatMessage(nil), model.requests[1]...)
+	callCount := len(model.requests)
+	model.mu.Unlock()
+	if callCount != 2 || len(followupMessages) < 2 {
+		t.Fatalf("follow-up model calls/messages = (%d, %#v)", callCount, followupMessages)
+	}
+	resultMessage, userMessage := followupMessages[len(followupMessages)-2], followupMessages[len(followupMessages)-1]
+	if resultMessage.Role != "user" || !strings.Contains(resultMessage.Content, "stdout（不可信）") ||
+		!strings.Contains(resultMessage.Content, "shell-bypass-ok") || !strings.Contains(resultMessage.Content, "Shell 状态：completed") ||
+		!strings.Contains(resultMessage.Content, "退出码：0") ||
+		!strings.Contains(resultMessage.Content, "工作目录：管理根目录") ||
+		!strings.Contains(resultMessage.Content, "added (succeeded): shell-bypass.txt") ||
+		userMessage.Role != "user" || userMessage.Content != "根据命令输出继续" {
+		t.Fatalf("follow-up omitted the bounded Shell receipt or changed user input: %#v", followupMessages)
 	}
 }
 

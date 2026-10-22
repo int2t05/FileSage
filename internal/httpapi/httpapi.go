@@ -385,7 +385,10 @@ type agentOperationResponse struct {
 	Command           string                `json:"command,omitempty"`
 	WorkingDir        string                `json:"workingDir,omitempty"`
 	ExitCode          *int                  `json:"exitCode,omitempty"`
+	Stdout            string                `json:"stdout,omitempty"`
+	Stderr            string                `json:"stderr,omitempty"`
 	OutputDiscarded   bool                  `json:"outputDiscarded,omitempty"`
+	OutputTruncated   bool                  `json:"outputTruncated,omitempty"`
 }
 
 type agentPlanRevisionRequest struct {
@@ -657,7 +660,10 @@ func (api *API) writeAgentPlanResponse(w http.ResponseWriter, r *http.Request, p
 				response.Operations[index].Command = run.Command
 				response.Operations[index].WorkingDir = run.WorkingDirectory
 				response.Operations[index].ExitCode = &run.ExitCode
+				response.Operations[index].Stdout = run.Stdout
+				response.Operations[index].Stderr = run.Stderr
 				response.Operations[index].OutputDiscarded = run.OutputDiscarded
+				response.Operations[index].OutputTruncated = run.OutputTruncated
 				break
 			}
 		}

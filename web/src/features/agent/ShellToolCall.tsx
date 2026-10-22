@@ -7,7 +7,10 @@ import './ShellToolCall.css';
 export function ShellToolCall({
   command,
   resultMessage = '',
+  stdout = '',
+  stderr = '',
   outputDiscarded = false,
+  outputTruncated = false,
   exitCode,
   executionStatus,
   scope = '',
@@ -16,7 +19,10 @@ export function ShellToolCall({
 }: {
   command: string;
   resultMessage?: string;
+  stdout?: string;
+  stderr?: string;
   outputDiscarded?: boolean;
+  outputTruncated?: boolean;
   exitCode?: number;
   executionStatus: string;
   scope?: string;
@@ -27,11 +33,14 @@ export function ShellToolCall({
   const commandShownInSummary = commandSummary === command.trim();
   const resultSummary = shellResultSummary({
     resultMessage,
+    stdout,
+    stderr,
     outputDiscarded,
+    outputTruncated,
     exitCode,
     executionStatus,
   });
-  const showResultSummary = shouldShowShellResultSummary({ executionStatus, resultMessage, outputDiscarded });
+  const showResultSummary = shouldShowShellResultSummary({ executionStatus, resultMessage, stdout, stderr, outputDiscarded, outputTruncated });
   const hasAttention = executionStatus === 'failed' || executionStatus === 'partial';
 
   return (
@@ -65,8 +74,11 @@ export function ShellToolCall({
               </span>
             </div>
             {shouldShowShellResultMessage(resultMessage) && <p>{resultMessage}</p>}
-            {outputDiscarded && <p>命令输出未保存，请以退出码和文件差异核对结果。</p>}
-            {!shouldShowShellResultMessage(resultMessage) && !outputDiscarded && <p>没有命令输出。</p>}
+            {outputDiscarded && <p>此历史记录没有保存命令输出。</p>}
+            {!outputDiscarded && stdout && <div className="agent-shell-tool-call-output"><small>stdout</small><pre>{stdout}</pre></div>}
+            {!outputDiscarded && stderr && <div className="agent-shell-tool-call-output"><small>stderr</small><pre className="is-error">{stderr}</pre></div>}
+            {outputTruncated && <p>输出已截断；stdout 与 stderr 每路最多保留 16 KiB。</p>}
+            {!shouldShowShellResultMessage(resultMessage) && !outputDiscarded && !stdout && !stderr && !outputTruncated && <p>没有命令输出。</p>}
           </section>
         </div>
       </details>

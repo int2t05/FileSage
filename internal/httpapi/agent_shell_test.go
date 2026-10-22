@@ -160,32 +160,36 @@ func TestPreviewAgentShellChangeIsNoStoreAndReturnsTextOnlyOnDemand(t *testing.T
 	}
 }
 
-func TestAgentPlanResponseOmitsShellOutput(t *testing.T) {
+func TestAgentPlanResponseIncludesBoundedShellOutput(t *testing.T) {
 	plan := store.PlanRecord{
 		ID: "plan-1", TaskID: "task-1", Version: 1,
 		Operations: []store.OperationRecord{{ID: "operation-1", Action: "run_shell"}},
 	}
 	stub := &shellHTTPStub{plan: plan, run: store.ShellRunRecord{
 		PlanID: plan.ID, OperationID: "operation-1", Command: "printf ok", WorkingDirectory: ".",
-		OutputDiscarded: true, ExitCode: 0,
+		Stdout: "ok", Stderr: "warning", OutputTruncated: true, ExitCode: 0,
 	}}
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/agent/plans/plan-1", nil)
 	response := httptest.NewRecorder()
 	(&API{agent: stub}).writeAgentPlanResponse(response, request, plan)
-	if response.Code != http.StatusOK {
-		t.Fatalf("response=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("response=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
 	}
 	var body struct {
 		Operations []struct {
-			ExitCode        int  `json:"exitCode"`
-			OutputDiscarded bool `json:"outputDiscarded"`
+			ExitCode        int    `json:"exitCode"`
+			Stdout          string `json:"stdout"`
+			Stderr          string `json:"stderr"`
+			OutputDiscarded bool   `json:"outputDiscarded"`
+			OutputTruncated bool   `json:"outputTruncated"`
 		} `json:"operations"`
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body.Operations) != 1 {
 		t.Fatalf("decode response = (%#v, %v)", body, err)
 	}
-	if body.Operations[0].ExitCode != 0 || !body.Operations[0].OutputDiscarded || strings.Contains(response.Body.String(), "stdout") || strings.Contains(response.Body.String(), "stderr") {
-		t.Fatalf("Shell output was not omitted: %s", response.Body.String())
+	if body.Operations[0].ExitCode != 0 || body.Operations[0].Stdout != "ok" || body.Operations[0].Stderr != "warning" ||
+		body.Operations[0].OutputDiscarded || !body.Operations[0].OutputTruncated {
+		t.Fatalf("Shell tool result response = %#v, raw=%s", body.Operations[0], response.Body.String())
 	}
 }
 

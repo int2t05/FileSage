@@ -57,6 +57,25 @@ func TestStartConversationTurnAfterTerminalPlan(t *testing.T) {
 	}
 }
 
+func TestShellResultIsAvailableOnlyToTheNextConversationTurn(t *testing.T) {
+	fixture := createShellFixture(t, 0, true)
+	ctx := context.Background()
+	if err := fixture.db.StartConversationTurn(ctx, fixture.conversation, "根据刚才的命令结果继续", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := fixture.db.Conversation(ctx, fixture.conversation)
+	if err != nil || conversation.ToolContextPlanID != fixture.plan.ID {
+		t.Fatalf("Shell tool context = (%q, %v), want %q", conversation.ToolContextPlanID, err, fixture.plan.ID)
+	}
+	if err := fixture.db.FinishConversationTurn(ctx, fixture.conversation, ConversationClarifying, "请说明下一步。", AnalysisCard{}, "", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	conversation, err = fixture.db.Conversation(ctx, fixture.conversation)
+	if err != nil || conversation.ToolContextPlanID != "" {
+		t.Fatalf("consumed Shell tool context = (%q, %v), want empty", conversation.ToolContextPlanID, err)
+	}
+}
+
 func TestBoundedToolResultKeepsValidUTF8AndOneLine(t *testing.T) {
 	got := boundedToolResult("  操作\n已完成  ", 32)
 	if got != "操作 已完成" {

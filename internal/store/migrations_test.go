@@ -564,19 +564,21 @@ func TestV27ShellMigrationDropsPersistedCommandOutput(t *testing.T) {
 		t.Fatalf("upgrade v26 database: %v", err)
 	}
 	defer db.Close()
-	var outputDiscarded, exitCode int
-	var command string
-	if err := db.db.QueryRowContext(ctx, `SELECT output_discarded, exit_code, command FROM shell_runs WHERE id = 'shell-run'`).Scan(&outputDiscarded, &exitCode, &command); err != nil {
+	var outputDiscarded, outputTruncated, exitCode int
+	var command, stdout, stderr string
+	if err := db.db.QueryRowContext(ctx, `SELECT output_discarded, output_truncated, exit_code, command, stdout, stderr FROM shell_runs WHERE id = 'shell-run'`).
+		Scan(&outputDiscarded, &outputTruncated, &exitCode, &command, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
-	if outputDiscarded != 1 || exitCode != 0 || command != "cat private.txt" {
-		t.Fatalf("migrated Shell run = (discarded=%d, exit=%d, command=%q)", outputDiscarded, exitCode, command)
+	if outputDiscarded != 1 || outputTruncated != 0 || exitCode != 0 || command != "cat private.txt" || stdout != "" || stderr != "" {
+		t.Fatalf("migrated Shell run = (discarded=%d, truncated=%d, exit=%d, command=%q, stdout=%q, stderr=%q)", outputDiscarded, outputTruncated, exitCode, command, stdout, stderr)
 	}
 	columns, err := db.db.QueryContext(ctx, "PRAGMA table_info(shell_runs)")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer columns.Close()
+	var hasStdout, hasStderr, hasOutputAvailable bool
 	for columns.Next() {
 		var index, notNull, primaryKey int
 		var name, columnType string
@@ -584,12 +586,15 @@ func TestV27ShellMigrationDropsPersistedCommandOutput(t *testing.T) {
 		if err := columns.Scan(&index, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
 			t.Fatal(err)
 		}
-		if name == "stdout" || name == "stderr" || name == "output_available" {
-			t.Fatalf("legacy Shell output column %q remains", name)
-		}
+		hasStdout = hasStdout || name == "stdout"
+		hasStderr = hasStderr || name == "stderr"
+		hasOutputAvailable = hasOutputAvailable || name == "output_available"
 	}
 	if err := columns.Err(); err != nil {
 		t.Fatal(err)
+	}
+	if !hasStdout || !hasStderr || hasOutputAvailable {
+		t.Fatalf("bounded output schema = (stdout=%t, stderr=%t, legacy output_available=%t)", hasStdout, hasStderr, hasOutputAvailable)
 	}
 	if err := db.Close(); err != nil {
 		t.Fatalf("close migrated database: %v", err)
@@ -643,7 +648,7 @@ func TestV29FileIndexOrderingIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 将新库还原为 v28 的索引状态，验证真实升级路径。
+	// 将新库还原为 v28 的索引状态，验证 v29 与 v30 的升级路径。
 	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -653,7 +658,11 @@ func TestV29FileIndexOrderingIndexes(t *testing.T) {
 		DROP INDEX file_index_generation_order_name;
 		CREATE INDEX file_index_generation_parent_name
 			ON file_index_generation_entries(generation, parent_path, name);
-		DELETE FROM schema_migrations WHERE version = 29;
+		ALTER TABLE shell_runs DROP COLUMN output_truncated;
+		ALTER TABLE shell_runs DROP COLUMN stderr;
+		ALTER TABLE shell_runs DROP COLUMN stdout;
+		ALTER TABLE agent_conversations DROP COLUMN tool_context_plan_id;
+		DELETE FROM schema_migrations WHERE version >= 29;
 	`); err != nil {
 		_ = tx.Rollback()
 		t.Fatal(err)
@@ -675,8 +684,8 @@ func TestV29FileIndexOrderingIndexes(t *testing.T) {
 		t.Fatalf("reopen v28 database: %v", err)
 	}
 	version, err := db.SchemaVersion(ctx)
-	if err != nil || version != 29 {
-		t.Fatalf("SchemaVersion() after v28 upgrade = (%d, %v), want (29, nil)", version, err)
+	if err != nil || version != len(migrations) {
+		t.Fatalf("SchemaVersion() after v28 upgrade = (%d, %v), want (%d, nil)", version, err, len(migrations))
 	}
 	var preservedPath string
 	if err := db.db.QueryRowContext(ctx, `

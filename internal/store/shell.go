@@ -17,6 +17,7 @@ const (
 	MaxShellChangePageSize = 100
 	maxShellCommandBytes   = 64 << 10
 	maxShellChangeMessage  = 4096
+	MaxShellOutputBytes    = 16 << 10
 )
 
 var ErrShellPagination = errors.New("invalid Shell change page")
@@ -35,14 +36,17 @@ const (
 	ShellRunPartial          ShellRunStatus = "partial"
 )
 
-// ShellRunRecord 保存命令元数据，不保存原始输出。
+// ShellRunRecord 保存命令状态和限长输出，供审核界面及后续会话使用。
 type ShellRunRecord struct {
 	ID               string
 	PlanID           string
 	OperationID      string
 	Command          string
 	WorkingDirectory string
+	Stdout           string
+	Stderr           string
 	OutputDiscarded  bool
+	OutputTruncated  bool
 	ExitCode         int
 	StageID          string
 	Status           ShellRunStatus
@@ -191,7 +195,7 @@ func (s *Store) CreateConversationShellTaskPlan(ctx context.Context, conversatio
 	if noChanges {
 		nextConversationState = ConversationAnalysisComplete
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE agent_conversations SET state = ?, task_id = ?, plan_id = ?, error_code = '', updated_at_ns = ?
+	result, err := tx.ExecContext(ctx, `UPDATE agent_conversations SET state = ?, task_id = ?, plan_id = ?, error_code = '', tool_context_plan_id = '', updated_at_ns = ?
 		WHERE id = ? AND state = 'analyzing' AND task_id IS NULL AND plan_id IS NULL`, nextConversationState, task.ID, plan.ID, updatedAt, conversationID)
 	if err != nil {
 		return fmt.Errorf("link Shell conversation to plan: %w", err)
@@ -215,7 +219,7 @@ func (s *Store) ShellRun(ctx context.Context, planID string) (ShellRunRecord, er
 	if !validShellID(planID) {
 		return ShellRunRecord{}, ErrNotFound
 	}
-	return scanShellRun(s.db.QueryRowContext(ctx, `SELECT id, plan_id, operation_id, command, working_directory, output_discarded, exit_code, stage_id, status, created_at_ns, updated_at_ns
+	return scanShellRun(s.db.QueryRowContext(ctx, `SELECT id, plan_id, operation_id, command, working_directory, stdout, stderr, output_discarded, output_truncated, exit_code, stage_id, status, created_at_ns, updated_at_ns
 		FROM shell_runs WHERE plan_id = ?`, planID))
 }
 
@@ -962,8 +966,9 @@ func scanShellChange(row shellRowScanner) (ShellChangeRecord, error) {
 func scanShellRun(row shellRowScanner) (ShellRunRecord, error) {
 	var run ShellRunRecord
 	var createdAt, updatedAt int64
-	var outputDiscarded int
-	err := row.Scan(&run.ID, &run.PlanID, &run.OperationID, &run.Command, &run.WorkingDirectory, &outputDiscarded, &run.ExitCode, &run.StageID, &run.Status, &createdAt, &updatedAt)
+	var outputDiscarded, outputTruncated int
+	err := row.Scan(&run.ID, &run.PlanID, &run.OperationID, &run.Command, &run.WorkingDirectory, &run.Stdout, &run.Stderr,
+		&outputDiscarded, &outputTruncated, &run.ExitCode, &run.StageID, &run.Status, &createdAt, &updatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ShellRunRecord{}, ErrNotFound
 	}
@@ -971,6 +976,7 @@ func scanShellRun(row shellRowScanner) (ShellRunRecord, error) {
 		return ShellRunRecord{}, fmt.Errorf("read Shell run: %w", err)
 	}
 	run.OutputDiscarded = outputDiscarded == 1
+	run.OutputTruncated = outputTruncated == 1
 	run.CreatedAt = time.Unix(0, createdAt).UTC()
 	run.UpdatedAt = time.Unix(0, updatedAt).UTC()
 	return run, nil
@@ -980,8 +986,10 @@ func insertShellRun(ctx context.Context, tx *sql.Tx, run ShellRunRecord) error {
 	if !validShellRun(run) || run.Status != ShellRunAwaitingApproval && run.Status != ShellRunCompleted {
 		return errors.New("invalid initial Shell run")
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO shell_runs (id, plan_id, operation_id, command, working_directory, output_discarded, exit_code, stage_id, status, created_at_ns, updated_at_ns)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.PlanID, run.OperationID, run.Command, run.WorkingDirectory, boolInt(run.OutputDiscarded), run.ExitCode, run.StageID, run.Status, timestampOrNow(run.CreatedAt), timestampOrNow(run.UpdatedAt))
+	_, err := tx.ExecContext(ctx, `INSERT INTO shell_runs (id, plan_id, operation_id, command, working_directory, stdout, stderr, output_discarded, output_truncated, exit_code, stage_id, status, created_at_ns, updated_at_ns)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, run.ID, run.PlanID, run.OperationID, run.Command, run.WorkingDirectory,
+		run.Stdout, run.Stderr, boolInt(run.OutputDiscarded), boolInt(run.OutputTruncated), run.ExitCode, run.StageID, run.Status,
+		timestampOrNow(run.CreatedAt), timestampOrNow(run.UpdatedAt))
 	if err != nil {
 		return fmt.Errorf("insert Shell run: %w", err)
 	}
@@ -1101,7 +1109,11 @@ func validShellOriginalState(value, changeKind string) bool {
 func validShellRun(run ShellRunRecord) bool {
 	return validShellID(run.ID) && validShellID(run.PlanID) && validShellID(run.OperationID) && validShellID(run.StageID) &&
 		strings.TrimSpace(run.Command) != "" && len(run.Command) <= maxShellCommandBytes && utf8.ValidString(run.Command) &&
-		(run.WorkingDirectory == "." || validShellRelativePath(run.WorkingDirectory)) && run.ExitCode >= 0 && run.ExitCode <= 255 && validShellRunStatus(run.Status)
+		(run.WorkingDirectory == "." || validShellRelativePath(run.WorkingDirectory)) &&
+		len(run.Stdout) <= MaxShellOutputBytes && len(run.Stderr) <= MaxShellOutputBytes &&
+		utf8.ValidString(run.Stdout) && utf8.ValidString(run.Stderr) &&
+		(!run.OutputDiscarded || run.Stdout == "" && run.Stderr == "" && !run.OutputTruncated) &&
+		run.ExitCode >= 0 && run.ExitCode <= 255 && validShellRunStatus(run.Status)
 }
 
 func validShellRunStatus(status ShellRunStatus) bool {

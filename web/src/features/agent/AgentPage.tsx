@@ -193,7 +193,7 @@ export function analysisCardPresentation(
         scopePath: scopePath || '管理根目录',
         workingDir: workingDir === '.' ? scopePath || '管理根目录' : [scopePath, workingDir].filter(Boolean).join('/'),
         shellCommand: card.shellCommand ?? '',
-        notice: '命令只在隔离区运行。审核并批准文件变化后，还需确认写入原目录。',
+        notice: '命令在隔离副本运行。续聊会向配置模型发送确认卡中的命令、范围、工作目录、执行结果及文件变化路径、类型和状态；stdout/stderr 各限 16 KiB。FileSage 不会另行读取文件正文，但命令输出可能包含文件内容或其他敏感信息。文件变化经审核后提交。',
         confirmLabel: '运行并查看变化',
       };
     }

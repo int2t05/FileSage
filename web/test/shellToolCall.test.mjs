@@ -18,7 +18,7 @@ describe('Shell 工具调用摘要', () => {
     assert.match(component, /role=\{hasAttention \? 'alert' : 'status'\}/);
     assert.match(component, /showStatus = true/);
     assert.match(component, /\{showStatus && <span className=\{`agent-shell-tool-call-status/);
-    assert.match(component, /shouldShowShellResultSummary\(\{ executionStatus, resultMessage, outputDiscarded \}\)/);
+    assert.match(component, /shouldShowShellResultSummary\(\{ executionStatus, resultMessage, stdout, stderr, outputDiscarded, outputTruncated \}\)/);
     assert.match(component, /shouldShowShellResultMessage\(resultMessage\)/);
     assert.match(component, /没有命令输出/);
     assert.match(component, /!commandShownInSummary && <section className="agent-shell-tool-call-block" aria-label="Shell 命令">/);
@@ -31,9 +31,13 @@ describe('Shell 工具调用摘要', () => {
     assert.equal(shellCommandSummary(`printf '${'命'.repeat(100)}'`).length, 89);
   });
 
-  it('不展示命令正文输出，只显示结果说明、退出码或省略提示', () => {
+  it('折叠展示命令正文输出，摘要优先展示结果首行', () => {
     const base = { resultMessage: '已完成。', outputDiscarded: false, exitCode: 0, executionStatus: 'succeeded' };
     assert.equal(shellResultSummary(base), '已完成。');
+    assert.equal(shellResultSummary({ ...base, resultMessage: '已按审批清单提交全部文件变化。', stdout: '读取 3 个文件\n完成' }), '读取 3 个文件');
+    assert.equal(shellResultSummary({ ...base, resultMessage: '', stderr: '权限不足', executionStatus: 'failed' }), '权限不足');
+    assert.match(component, /stdout && <div className="agent-shell-tool-call-output"><small>stdout<\/small><pre>\{stdout\}<\/pre>/);
+    assert.match(component, /stderr && <div className="agent-shell-tool-call-output"><small>stderr<\/small><pre className="is-error">\{stderr\}<\/pre>/);
     assert.equal(shellResultSummary({ ...base, resultMessage: '', outputDiscarded: true }), '命令输出已省略 · 退出码 0');
     assert.equal(shellResultSummary({ ...base, resultMessage: '已按审批清单提交全部文件变化。', outputDiscarded: true }), '命令输出已省略 · 退出码 0');
     assert.equal(shellResultSummary({ ...base, resultMessage: '', outputDiscarded: false }), '无输出 · 退出码 0');

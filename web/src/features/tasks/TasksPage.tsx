@@ -802,7 +802,10 @@ function AgentOperationDetails({ operation, planId, planVersion, showShellStatus
         <ShellToolCall
           command={operation.command ?? ''}
           resultMessage={operation.resultMessage ?? ''}
+          stdout={operation.stdout ?? ''}
+          stderr={operation.stderr ?? ''}
           outputDiscarded={operation.outputDiscarded ?? false}
+          outputTruncated={operation.outputTruncated ?? false}
           exitCode={operation.exitCode}
           executionStatus={operation.executionStatus}
           scope={shellScope}
