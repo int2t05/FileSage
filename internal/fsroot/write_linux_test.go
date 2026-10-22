@@ -1213,6 +1213,21 @@ func TestReplaceAtomicIfUnchangedPublishesExpectedVersion(t *testing.T) {
 
 // TestWriteAtomicIfUnchangedRejectsExternalOpenWriter 保留已打开写入者对原文件的更新。
 func TestWriteAtomicIfUnchangedRejectsExternalOpenWriter(t *testing.T) {
+	testRejectsExternalOpenWriter(t, func(root *Root, expected Fingerprint) error {
+		return root.WriteAtomicIfUnchanged("note.txt", expected, []byte("replacement"), 0o600)
+	})
+}
+
+// TestWriteAtomicFromRejectsExternalOpenWriter 验证 Shell 流式写回同样保护已打开的原文件。
+func TestWriteAtomicFromRejectsExternalOpenWriter(t *testing.T) {
+	testRejectsExternalOpenWriter(t, func(root *Root, expected Fingerprint) error {
+		_, err := root.WriteAtomicFrom("note.txt", expected, strings.NewReader("replacement"), int64(len("replacement")), 0o600)
+		return err
+	})
+}
+
+func testRejectsExternalOpenWriter(t *testing.T, write func(*Root, Fingerprint) error) {
+	t.Helper()
 	rootPath := t.TempDir()
 	target := filepath.Join(rootPath, "note.txt")
 	const original = "approved"
@@ -1262,7 +1277,7 @@ func TestWriteAtomicIfUnchangedRejectsExternalOpenWriter(t *testing.T) {
 		t.Fatalf("external writer did not open the source: %v; stderr=%s", err, stderr.String())
 	}
 
-	writeErr := root.WriteAtomicIfUnchanged("note.txt", entry.Fingerprint(), []byte("replacement"), 0o600)
+	writeErr := write(root, entry.Fingerprint())
 	if err := os.WriteFile(writePath, []byte("go"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1283,6 +1298,10 @@ func TestWriteAtomicIfUnchangedRejectsExternalOpenWriter(t *testing.T) {
 	}
 	if data, err := os.ReadFile(target); err != nil || string(data) != externalUpdate {
 		t.Fatalf("source after external write = (%q, %v), want %q", data, err, externalUpdate)
+	}
+	entries, err := os.ReadDir(rootPath)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "note.txt" {
+		t.Fatalf("external conflict left temporary files: (%v, %v)", entries, err)
 	}
 }
 

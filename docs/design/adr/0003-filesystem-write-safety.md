@@ -33,6 +33,7 @@ Linux 替换已有文件先对当前文件申请读租约，阻止或检测外�
 
 - `internal/agent/move_file_linux_test.go` 的 `TestRenameRejectsExternalProcessChangeBetweenDigestAndCommit` 在源身份检查后、原子改名前启动独立测试进程改写源文件；冲突被检测、来源路径恢复。Linux 用例重复 20 次、Agent 全包 race 检查通过。该结果只覆盖同卷 Agent 改名的这一提交窗口。
 - `internal/fsroot/write_linux_test.go` 的 `TestWriteAtomicIfUnchangedRejectsExternalOpenWriter` 由独立进程持有原文件写句柄，再尝试替换；操作返回冲突，原路径仍指向原 inode，进程外更新可从原路径读取。该用例在 Linux 重复 20 次通过。
+- 同文件的 `TestWriteAtomicFromRejectsExternalOpenWriter` 在修复前复现 Shell 流式写回绕过租约并覆盖原路径；修复后改用与普通编辑相同的原子交换提交。两个入口的外部写句柄用例在隔离 Linux 环境各重复 20 次通过，原 inode 与进程外更新保留且无暂存残留；全量 Go 测试、针对性 race 和 `go vet` 通过。Agent Shell 修改已有文件的闭环在独立 systemd 测试单元中实际运行并通过。
 - `internal/fsroot/write_linux_test.go` 与 `move_tree_linux_test.go` 使用独立进程持有源文件写句柄，并验证快照后的已完成改写会在删除前触发冲突；目录移动先预检整棵树，避免预检发现冲突前清掉部分来源。七组关键移动用例在 Linux 重复 20 次通过，完整 Go 测试、`fsroot` 与 Agent race、`go vet` 通过。Linux 写租约需要文件系统支持。
 - `internal/trash/manager_test.go` 的 `TestPermanentRemovePreservesReplacementAfterAuditWrite` 在永久删除开始审计期间替换路径，确认操作返回冲突并保留两项文件；`internal/fsroot/write_linux_test.go` 覆盖过期条目、活动写句柄、普通文件、空目录和软链接删除。关键删除用例在 Linux 重复 20 次通过，`fsroot` 与 trash 全包、race、`go vet` 通过。
 - `internal/httpapi/write_test.go` 与 `batch_rename_test.go` 覆盖审计写入期间替换源路径，以及改名返回前目标身份变化；前者拒绝执行并结束失败审计，后者记为 `needs_review`，停止后续批次且不报告成功。改名后的身份核对不能消除系统调用窗口，也不自动恢复错误目标。Linux 全量 Go 测试、`httpapi`／`fsroot`／trash race 与全量 `go vet` 通过。

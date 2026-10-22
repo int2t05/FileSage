@@ -121,26 +121,22 @@ func (r *Root) WriteAtomicFrom(rel string, expected Fingerprint, source io.Reade
 	if err := r.checkFingerprint(rel, expected); err != nil {
 		return "", err
 	}
-	if err := r.root.Rename(tempRel, rel); err != nil {
+	expectedDigest, err := r.digestIfUnchanged(rel, expected)
+	if err != nil {
+		return "", err
+	}
+	var candidateDigest [sha256.Size]byte
+	copy(candidateDigest[:], digest.Sum(nil))
+	// 流式写回与普通编辑共用租约、原子交换及冲突恢复边界。
+	if err := platformReplaceAtomicIfUnchanged(r, rel, tempRel, expected, expectedDigest, candidateDigest, expectedSize, perm.Perm()); err != nil {
+		var recovery *WriteRecoveryError
+		if errors.As(err, &recovery) {
+			removeTemp = false
+		}
 		return "", err
 	}
 	removeTemp = false
-	parent := "."
-	if parentRel != "" {
-		parent = parentRel
-	}
-	directory, err := r.root.OpenFile(parent, os.O_RDONLY|directoryOpenFlag(), 0)
-	if err != nil {
-		return "", fmt.Errorf("open parent directory after write: %w", err)
-	}
-	if err := directory.Sync(); err != nil {
-		_ = directory.Close()
-		return "", fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
-	}
-	if err := directory.Close(); err != nil {
-		return "", fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
-	}
-	return hex.EncodeToString(digest.Sum(nil)), nil
+	return hex.EncodeToString(candidateDigest[:]), nil
 }
 
 // streamReaderEOF 拒绝候选在声明长度之外还包含数据。

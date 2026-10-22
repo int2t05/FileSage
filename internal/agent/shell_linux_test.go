@@ -48,7 +48,7 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 	}
 	model := &scriptedConversationModel{
 		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
-		replies: []string{`{"state":"ready","reply":"确认后会在隔离副本运行命令，并逐项展示文件变化。","goal":"创建只读归档目录并调整文档目录权限","operations":[{"action":"run_shell","filePath":"","targetPath":"","shellCommand":"cat docs/existing.txt && mkdir -p sealed/nested && printf approved > sealed/nested/note.txt && chmod 0555 sealed/nested && chmod 0555 sealed && chmod 0700 docs","workingDir":"."}]}`},
+		replies: []string{`{"state":"ready","reply":"确认后会在隔离副本运行命令，并逐项展示文件变化。","goal":"创建只读归档目录并调整文档目录权限","operations":[{"action":"run_shell","filePath":"","targetPath":"","shellCommand":"cat docs/existing.txt && printf updated > docs/existing.txt && mkdir -p sealed/nested && printf approved > sealed/nested/note.txt && chmod 0555 sealed/nested && chmod 0555 sealed && chmod 0700 docs","workingDir":"."}]}`},
 	}
 	conversationService := &ConversationService{store: metadata, root: root, plans: service, model: model}
 	conversation, err := conversationService.Create(ctx, "在隔离环境创建只读归档目录，并把 docs 设为仅所有者可访问")
@@ -74,14 +74,14 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 		t.Fatalf("ShellRun() = (%#v, %v)", run, err)
 	}
 	page, err := service.ShellChanges(ctx, plan.ID, store.MaxShellChangePageSize, 0)
-	if err != nil || page.Total != 4 {
-		t.Fatalf("ShellChanges() = (%#v, %v), want four reviewed changes", page, err)
+	if err != nil || page.Total != 5 {
+		t.Fatalf("ShellChanges() = (%#v, %v), want five reviewed changes", page, err)
 	}
 	paths := make(map[string]store.ShellChangeRecord, len(page.Changes))
 	for _, change := range page.Changes {
 		paths[change.Path] = change
 	}
-	for _, relative := range []string{"sealed", "sealed/nested", "sealed/nested/note.txt", "docs"} {
+	for _, relative := range []string{"sealed", "sealed/nested", "sealed/nested/note.txt", "docs", "docs/existing.txt"} {
 		if _, exists := paths[relative]; !exists {
 			t.Fatalf("review plan omitted %q: %#v", relative, paths)
 		}
@@ -125,8 +125,8 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 	if content, err := os.ReadFile(filepath.Join(rootPath, "sealed", "nested", "note.txt")); err != nil || string(content) != "approved" {
 		t.Fatalf("approved content = (%q, %v)", content, err)
 	}
-	if content, err := os.ReadFile(filepath.Join(docsPath, "existing.txt")); err != nil || string(content) != "keep" {
-		t.Fatalf("unmodified content = (%q, %v)", content, err)
+	if content, err := os.ReadFile(filepath.Join(docsPath, "existing.txt")); err != nil || string(content) != "updated" {
+		t.Fatalf("edited content = (%q, %v)", content, err)
 	}
 }
 
