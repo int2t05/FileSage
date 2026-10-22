@@ -34,6 +34,35 @@ type replaceAfterRenameFileSystem struct {
 	mutate func(string) error
 }
 
+type replaceBeforeDeleteFileSystem struct {
+	*fsroot.Root
+	rootPath string
+	replaced bool
+}
+
+// replaceTarget 模拟条件删除边界上的外部路径替换。
+func (files *replaceBeforeDeleteFileSystem) replaceTarget() error {
+	if files.replaced {
+		return nil
+	}
+	files.replaced = true
+	target := filepath.Join(files.rootPath, "hello.txt")
+	if err := os.Remove(target); err != nil {
+		return err
+	}
+	return os.WriteFile(target, []byte("replacement"), 0o644)
+}
+
+// RemoveEntryIfUnchanged 在安全删除前替换路径，验证旧审批不会删新文件。
+func (files *replaceBeforeDeleteFileSystem) RemoveEntryIfUnchanged(expected fsroot.Entry) error {
+	if expected.Path == "hello.txt" {
+		if err := files.replaceTarget(); err != nil {
+			return err
+		}
+	}
+	return files.Root.RemoveEntryIfUnchanged(expected)
+}
+
 // RenameNoReplace 在真实改名后注入目标变化。
 func (fileSystem *replaceAfterRenameFileSystem) RenameNoReplace(oldPath, newPath string) error {
 	if err := fileSystem.Root.RenameNoReplace(oldPath, newPath); err != nil {
@@ -771,6 +800,34 @@ func TestDeleteOnlyRemovesSingleEntryAndRequiresVersion(t *testing.T) {
 	}
 }
 
+func TestPermanentDeletePreservesReplacementAfterVersionCheckWithoutTrash(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("conditional entry deletion is validated on Linux")
+	}
+	var files *replaceBeforeDeleteFileSystem
+	rootPath, handler := newMutationHandlerWithFileSystem(t, func(rootPath string, root *fsroot.Root) fileSystem {
+		files = &replaceBeforeDeleteFileSystem{Root: root, rootPath: rootPath}
+		return files
+	})
+	version := versionFromListing(t, handler, "hello.txt")
+	query := url.Values{
+		"path":             {"hello.txt"},
+		"version":          {version},
+		"confirmPermanent": {"true"},
+	}
+	response := performRequest(handler, http.MethodDelete, "/api/v1/files?"+query.Encode(), nil)
+	if response.Code != http.StatusConflict && response.Code != http.StatusNotImplemented {
+		t.Fatalf("delete replaced entry status = %d, want conflict or unsupported: %s", response.Code, response.Body.String())
+	}
+	if !files.replaced {
+		t.Fatalf("test did not replace the file at the delete boundary: status=%d body=%s", response.Code, response.Body.String())
+	}
+	data, err := os.ReadFile(filepath.Join(rootPath, "hello.txt"))
+	if err != nil || string(data) != "replacement" {
+		t.Fatalf("replacement file was not preserved: data=%q err=%v", data, err)
+	}
+}
+
 func TestDeleteSymlinkDeletesOnlyTheLinkAndStaleVersionConflicts(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("mutation version identity is validated on Linux")
@@ -923,6 +980,10 @@ func TestSameOriginRejectsProtocolMismatchAndMalformedOrigins(t *testing.T) {
 }
 
 func newMutationHandler(t *testing.T) (string, http.Handler) {
+	return newMutationHandlerWithFileSystem(t, nil)
+}
+
+func newMutationHandlerWithFileSystem(t *testing.T, wrap func(string, *fsroot.Root) fileSystem) (string, http.Handler) {
 	t.Helper()
 	rootPath := t.TempDir()
 	if err := os.Mkdir(filepath.Join(rootPath, "notes"), 0o755); err != nil {
@@ -939,7 +1000,11 @@ func newMutationHandler(t *testing.T) (string, http.Handler) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = root.Close() })
-	return rootPath, New(root, nil)
+	files := fileSystem(root)
+	if wrap != nil {
+		files = wrap(rootPath, root)
+	}
+	return rootPath, New(files, nil)
 }
 
 func performJSONRequest(handler http.Handler, method, target, body string) *httptest.ResponseRecorder {

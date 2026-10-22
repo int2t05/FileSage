@@ -35,7 +35,7 @@ type fileSystem interface {
 	OpenRead(relativePath string) (io.ReadCloser, fsroot.Entry, error)
 	Mkdir(relativePath string, perm fs.FileMode) error
 	RenameNoReplace(oldPath, newPath string) error
-	Remove(relativePath string) error
+	RemoveEntryIfUnchanged(fsroot.Entry) error
 }
 
 type indexedFileSystem interface {
@@ -1189,7 +1189,7 @@ func (api *API) deleteFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if err := api.files.Remove(relativePath); err != nil {
+	if err := api.files.RemoveEntryIfUnchanged(entry); err != nil {
 		writeFileError(w, err)
 		return
 	}

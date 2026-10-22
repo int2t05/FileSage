@@ -57,8 +57,9 @@ func (files unavailableVolumeFileSystem) RenameNoReplace(oldPath, newPath string
 	return files.root.RenameNoReplace(oldPath, newPath)
 }
 
-func (files unavailableVolumeFileSystem) Remove(relativePath string) error {
-	return files.root.Remove(relativePath)
+// RemoveEntryIfUnchanged 委托给真实根目录的条件删除实现。
+func (files unavailableVolumeFileSystem) RemoveEntryIfUnchanged(entry fsroot.Entry) error {
+	return files.root.RemoveEntryIfUnchanged(entry)
 }
 
 func (index *testFileIndexer) Status(ctx context.Context) (store.FileIndexStatus, error) {

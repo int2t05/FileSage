@@ -125,6 +125,11 @@ func (fileSystem *batchRenameTestFileSystem) RenameNoReplace(oldPath, newPath st
 	return nil
 }
 
+// RemoveEntryIfUnchanged 对纯内存测试文件系统失败关闭。
+func (*batchRenameTestFileSystem) RemoveEntryIfUnchanged(fsroot.Entry) error {
+	return fsroot.ErrNoReplaceUnsupported
+}
+
 type batchRenameTestIndexer struct {
 	refreshes int
 }
