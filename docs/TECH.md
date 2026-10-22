@@ -63,7 +63,9 @@ HTTP 仅将错误响应和超过 2 秒的请求写入结构化日志，字段包
 | PostgreSQL | 多进程和并发写能力强，成熟查询能力 | 另装、配置、升级和备份服务；对单用户单机暂时没有已测出的必要负载 | 若后续多进程部署或 SQLite 写入实测成为瓶颈，再迁移 |
 | 不建持久索引／每次遍历 | 状态始终即时读取真实文件系统；组件最少 | 大目录搜索、媒体筛选和外部改动协调成本高；无法高效恢复长任务状态 | 不适合 PRD 的搜索、并发和任务恢复 |
 
-文件系统仍是权威数据。SQLite 的目录记录可全量扫描重建；任务、审批及审计记录必须事务保存，但只含操作元数据和结果，不保存旧文件全文／差异。选用 `modernc.org/sqlite` 纯 Go 驱动，以免服务构建依赖 CGo；驱动内置的 SQLite 核心也纳入版本审查和 SBOM。WAL 允许多读者和单写者并行，并要求同机共享内存；文件变化监听用 Linux inotify 及时更新，遇队列溢出、卸载或重启后执行一致性扫描。名称和路径查询使用 SQLite 索引／FTS5；真实规模基准决定短词回退策略。拍摄日期目前由 `github.com/bep/imagemeta` 0.17.2 从支持图片的 EXIF／XMP 元数据读取，并在 JPEG、TIFF 和 RAW 格式尝试 IPTC；迁移前完成的索引代次会标记为不含拍摄元数据，须等待一次完整新扫描后才可筛选。[SQLite WAL 并发与网络文件系统限制](https://www.sqlite.org/wal.html)、[SQLite FTS5 trigram](https://www.sqlite.org/fts5.html)、[inotify 丢事件与重建缓存](https://man7.org/linux/man-pages/man7/inotify.7.html)、[modernc.org/sqlite 驱动和嵌入版本信息](https://pkg.go.dev/modernc.org/sqlite)、[imagemeta 上游](https://github.com/bep/imagemeta)。
+文件系统仍是权威数据。SQLite 保存可重建目录索引，以及必须事务持久化的任务、审批和审计元数据；不保存旧文件全文／差异。使用 `modernc.org/sqlite` 纯 Go 驱动，内嵌 SQLite 纳入版本审查和 SBOM。WAL 只在本机目录使用，支持并行读和单写事务。
+
+Linux inotify 提示文件变化，队列溢出、卸载或重启后以全量扫描校准。名称和路径查询使用 SQLite 索引／FTS5；当前目录的普通排序与筛选在索引过期时读取真实文件系统，手动文件操作的成功响应前触发校准。递归查询和拍摄日期仍依赖完整索引代次。拍摄日期由 `github.com/bep/imagemeta` v1.1.0 读取支持图片的 EXIF／XMP，并在 JPEG、TIFF 和 RAW 格式尝试 IPTC；缺少拍摄元数据的旧索引需完整重建。[SQLite WAL](https://www.sqlite.org/wal.html)、[FTS5 trigram](https://www.sqlite.org/fts5.html)、[inotify](https://man7.org/linux/man-pages/man7/inotify.7.html)、[SQLite 驱动](https://pkg.go.dev/modernc.org/sqlite)、[imagemeta](https://github.com/bep/imagemeta)。
 
 后台任务先用同进程有界 worker pool + SQLite 持久任务表。任务需有状态机、租约／心跳、取消请求、每项结果和幂等提交标识；重启后恢复未完成任务时先核对文件状态，绝不把“再次运行整个批次”当作恢复。暂不加 Redis 队列；Asynq 展示了 Redis 队列的成熟任务模式，但也引入独立 Redis 运维。若一台主机上出现多个 FileSage 服务进程，再重新评估。[Asynq 本地采集](https://github.com/hibiken/asynq/blob/d135f1439bee74e989b7f9b41ecd542cc87f024a/README.md)、[Go SQLite 驱动对照：cgo 与纯 Go](https://github.com/mattn/go-sqlite3/blob/dbbe931904f2ee06546448fbe7cf7780f61bc110/README.md)、[modernc SQLite 及其依赖／许可说明](https://github.com/modernc-org/sqlite/blob/0fc3f90d9e280a7356d8609520bc2ba081bfc248/README.md)。
 
@@ -118,13 +120,13 @@ Shell 暂存方案在计划审计中提供真实文件差异；直接修改原�
 
 2026-10-20 的首轮索引测试使用 Linux Mint 22.3、Go 1.27.2、i5-1135G7、16 GiB 内存和 NVMe／ext4；测试进程以 `nice +10` 绑定回环，未配置 cgroup 限额。100,000 个零字节文件（一个 10,000 项目录和九组各 10,000 项文件）生成 100,011 条索引：准备耗时 8 秒，目录首屏 p95 为 13.31 ms，单字符递归搜索 p95 为 90 ms，20 路并发目录读取 p95 为 168.20 ms，查询期间 RSS 为 57,024 KiB。该合成数据结果不代表 LAN、慢盘、真实文件或受限服务的性能。
 
-2026-10-21 在 SATA／ext4 管理卷、NVMe 上的 SQLite 与相同规模合成目录中对比排序索引，每项查询采样 50 次。索引准备从 10.117 秒增至 13.119 秒；目录首屏 p95 从 161.65 ms 降至 2.08 ms，单字符递归搜索从 169.52 ms 降至 1.89 ms；数据库增加 5,693,440 字节。隔离的 v28→v29 迁移保留 5,000 条索引记录，完整性检查通过，查询计划使用新索引；v28 服务重启后的目录与搜索 API 冒烟通过。生产服务现运行 v29；2026-10-22 只读检查的 `integrity_check` 为 `ok`，外键违规为 0。性能结果仅适用于合成样本与单机测试环境。
+2026-10-21 在 SATA／ext4 管理卷、NVMe 上的 SQLite 与相同规模合成目录中对比排序索引，每项查询采样 50 次。索引准备从 10.117 秒增至 13.119 秒；目录首屏 p95 从 161.65 ms 降至 2.08 ms，单字符递归搜索从 169.52 ms 降至 1.89 ms；数据库增加 5,693,440 字节。隔离的 v28→v29 迁移保留 5,000 条索引记录，完整性检查通过，查询计划使用新索引；v28 服务重启后的目录与搜索 API 冒烟通过。生产服务现运行 v30；2026-10-22 只读检查的 `integrity_check` 为 `ok`，外键违规为 0。性能结果仅适用于合成样本与单机测试环境。
 
 ## 决策状态与验证门槛
 
 | ID | 选择 | 当前证据 | 剩余验证 |
 | --- | --- | --- | --- |
-| ADR-0001 | Go 模块化单体；格式工具使用受限子进程 | [`33fefd0`](https://github.com/int2t05/FileSage/commit/33fefd0) 的 CI 通过；Go 1.27.3 Linux amd64 构建和发布包冒烟通过，持久服务当前运行该提交。 | 独立主机安装、升级和整机重启。 |
+| ADR-0001 | Go 模块化单体；格式工具使用受限子进程 | [`8af7ca8`](https://github.com/int2t05/FileSage/commit/8af7ca8) 的 CI 通过；Go 1.27.3 Linux amd64 构建和发布包冒烟通过，持久服务当前运行该提交。 | 独立主机安装、升级和整机重启。 |
 | ADR-0002 | 服务本机 SQLite WAL；目录索引可重建 | 生产库 v30 的完整性及外键检查通过；v29→v30 迁移、索引查询计划和隔离恢复已验证。 | 独立主机及独立介质恢复、真实数据恢复和容量基准。 |
 | ADR-0003 | 文件系统为权威数据；限制软／硬链接写语义 | Linux 并发、跨卷操作、只读、满盘和卸载测试通过；独立进程测试验证原子覆盖拒绝并保留外部写入、同卷 Agent 改名冲突恢复，以及跨卷移动对已打开写句柄和快照后改写的保护。隔离内核探针确认租约检查与删除间存在外部访问边界。 | 其他写入类型的跨进程竞争、冲突恢复边界和真实介质故障。 |
 | ADR-0004 | tus 续传至有界私有暂存，校验后发布 | 20 GiB 单文件／暂存上限、128 个未完成上传上限、重启续传和取消释放均有测试。 | 大文件吞吐、批量容量及浏览器断网恢复。 |
@@ -132,7 +134,7 @@ Shell 暂存方案在计划审计中提供真实文件差异；直接修改原�
 | ADR-0006 | Bubblewrap 暂存 Shell、差异审阅与统一提交；能力不足时拒绝执行 | Shell、Office、PDF 与 OCR 在持有 `CAP_LEASE` 的 systemd 环境完成隔离测试；真实模型 Shell 回执续聊通过，过期差异会安全失效。 | 生产根目录写入与主机重启恢复。 |
 | ADR-0007 | React、TypeScript、Vite、Radix Primitives、Lucide | CI 与 Release 同时检查 TS 6 兼容编译器和 TS 7 原生编译器；生产构建及 320／360／390 CSS px 页面检查通过。 | 实体手机、键盘和完整无障碍验收。 |
 | ADR-0008 | Agent 文本编辑先生成私有候选，再审批与写回 | Linux 集成测试覆盖候选、冲突和清理失败。 | 真实业务文档编辑流程。 |
-| ADR-0009 | 持久会话、类型化工具步骤；默认 `bypasspermission` | 多轮对话、计划门禁、工具回执、Shell 审计和重启恢复通过测试或隔离 E2E；照片归档、分类、去重和归档操作有合成文件真实模型验证；持久服务真实模型 Shell 回执续聊通过。 | 真实管理目录的文件变更审批与执行。 |
+| ADR-0009 | 持久会话、类型化工具步骤；默认 `bypasspermission` | 多轮对话、计划门禁、工具回执、Shell 审计和重启恢复通过测试或隔离 E2E；照片归档、分类、去重和归档操作有合成文件真实模型验证；持久服务真实模型完成审批后的跨盘移动及同会话结果追问。 | 真实业务文件的审批与执行。 |
 | AUD-01 | 默认回环；局域网须显式绑定可信私有地址 | Host／Origin 防护通过；当前服务绑定私有 LAN 地址且健康。 | 防火墙由部署者核验；服务不提供认证或 HTTPS。 |
 | AUD-02 | 专用非 root 服务账户，按需访问管理卷 | `filesage` 服务账户、systemd 和 ext4 子卷挂载已核验。 | 整机重启、卸载和权限变化后的恢复。 |
 | AUD-03 | 以测量基线而非宣传验收性能 | 100,000 项合成索引 A/B 结果见性能基线章节。 | LAN、真实数据、大文件吞吐、OCR 并发和资源峰值。 |

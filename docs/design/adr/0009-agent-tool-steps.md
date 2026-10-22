@@ -2,7 +2,7 @@
 
 ## 状态
 
-**已采纳。**计划门禁、会话流程和限长 Shell 输出回执已部署。systemd 的 `CAP_LEASE` 曾使 Bubblewrap 拒绝启动；Shell、Office、PDF 和 OCR 调用已在启动沙箱前清除子进程 ambient capabilities，并通过服务器 systemd 约束测试和真实模型 Shell 续聊复验。真实管理根目录写入和实体手机验收仍待完成。
+**已采纳。**计划门禁、会话流程和限长 Shell 输出回执已部署。systemd 的 `CAP_LEASE` 曾使 Bubblewrap 拒绝启动；Shell、Office、PDF 和 OCR 调用已在启动沙箱前清除子进程 ambient capabilities，并通过服务器 systemd 约束测试和真实模型 Shell 续聊复验。持久服务已用合成文件完成真实模型审批后改名与跨盘移动；真实业务文件和实体手机仍待验收。
 
 ## 背景
 

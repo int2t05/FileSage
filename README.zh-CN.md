@@ -13,8 +13,8 @@ Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。�
 
 ## 项目状态
 
-MVP 开发中，尚无稳定版或预编译安装包。已验证能力和待验项见
-[验收范围](docs/ACCEPTANCE.md)。
+公开 MVP 已作为测试服务运行，尚无稳定版或预编译安装包。后续工作见
+[项目进度](docs/IMPLEMENTATION_PLAN.md)，已验证范围见[验收范围](docs/ACCEPTANCE.md)。
 
 ## 能力
 

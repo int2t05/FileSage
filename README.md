@@ -12,9 +12,9 @@ mounted disks and lets you review AI-proposed file changes before they run.
 
 ## Status
 
-Early MVP development. There is no stable release or prebuilt package yet. See
-the [acceptance scope](docs/ACCEPTANCE.md) for verified capabilities and
-remaining checks.
+The public MVP runs as a test service; there is no stable release or prebuilt
+package yet. Track [progress and remaining work](docs/IMPLEMENTATION_PLAN.md)
+and see the [acceptance scope](docs/ACCEPTANCE.md) for verification evidence.
 
 ## What it does
 
