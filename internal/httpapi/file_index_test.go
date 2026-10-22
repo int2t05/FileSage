@@ -1,3 +1,4 @@
+// 本文件验证文件分页、索引回退和写后可见性。
 package httpapi
 
 import (
@@ -79,6 +80,114 @@ func (index *testFileIndexer) Query(ctx context.Context, query store.FileIndexQu
 
 func (index *testFileIndexer) Refresh(context.Context) {
 	index.state = store.FileIndexStale
+}
+
+// TestCurrentDirectoryReadsLiveFilesWhileIndexIsStale 验证校准期间显示真实目录。
+func TestCurrentDirectoryReadsLiveFilesWhileIndexIsStale(t *testing.T) {
+	ctx := context.Background()
+	managedRoot := t.TempDir()
+	for _, name := range []string{"a.txt", "b.txt"} {
+		if err := os.WriteFile(filepath.Join(managedRoot, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root, err := fsroot.Open(managedRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	metadata, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	generation, err := metadata.BeginFileIndexScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.CompleteFileIndexScan(ctx, generation); err != nil {
+		t.Fatal(err)
+	}
+
+	index := &testFileIndexer{data: metadata, state: store.FileIndexStale}
+	handler := NewWithAgentAndIndex(root, nil, nil, nil, index, nil, coordination.New())
+	first := requestFilePage(t, handler, "limit=1")
+	if first.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, body = %s", first.Code, first.Body.String())
+	}
+	firstPage := decodeListing(t, first)
+	if len(firstPage.Entries) != 1 || firstPage.Entries[0].Name != "a.txt" || !firstPage.HasMore || firstPage.NextCursor == "" || firstPage.IndexState != string(store.FileIndexStale) {
+		t.Fatalf("first live page = %+v", firstPage)
+	}
+
+	index.state = store.FileIndexReady
+	second := requestFilePage(t, handler, url.Values{"limit": {"1"}, "cursor": {firstPage.NextCursor}}.Encode())
+	if second.Code != http.StatusOK {
+		t.Fatalf("second page status = %d, body = %s", second.Code, second.Body.String())
+	}
+	secondPage := decodeListing(t, second)
+	if len(secondPage.Entries) != 1 || secondPage.Entries[0].Name != "b.txt" || secondPage.HasMore {
+		t.Fatalf("second live page = %+v", secondPage)
+	}
+}
+
+// TestSuccessfulMutationRefreshesIndexBeforeResponse 验证成功响应发出前刷新索引。
+func TestSuccessfulMutationRefreshesIndexBeforeResponse(t *testing.T) {
+	ctx := context.Background()
+	root, err := fsroot.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	metadata, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	generation, err := metadata.BeginFileIndexScan(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := metadata.CompleteFileIndexScan(ctx, generation); err != nil {
+		t.Fatal(err)
+	}
+
+	index := &testFileIndexer{data: metadata, state: store.FileIndexReady}
+	handler := NewWithAgentAndIndex(root, nil, nil, nil, index, nil, coordination.New())
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/files/directories", strings.NewReader(`{"parent":"","name":"probe"}`))
+	request.Header.Set("Origin", "http://example.com")
+	request.Header.Set("Content-Type", "application/json")
+	observed := false
+	response := &headerObserver{ResponseRecorder: httptest.NewRecorder(), onHeader: func(status int) {
+		if status != http.StatusCreated {
+			return
+		}
+		observed = true
+		pageResponse := requestFilePage(t, handler, "")
+		if pageResponse.Code != http.StatusOK {
+			t.Fatalf("listing at write response = (%d, %s)", pageResponse.Code, pageResponse.Body.String())
+		}
+		page := decodeListing(t, pageResponse)
+		if len(page.Entries) != 1 || page.Entries[0].Name != "probe" || page.Entries[0].Kind != fsroot.KindDirectory {
+			t.Fatalf("listing at write response = %+v", page)
+		}
+	}}
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || !observed {
+		t.Fatalf("write response = (%d, observed=%t, %s)", response.Code, observed, response.Body.String())
+	}
+}
+
+// headerObserver 在响应头写出时模拟客户端立即读取目录。
+type headerObserver struct {
+	*httptest.ResponseRecorder
+	onHeader func(int)
+}
+
+// WriteHeader 观察响应头并保留原始测试响应。
+func (writer *headerObserver) WriteHeader(status int) {
+	writer.onHeader(status)
+	writer.ResponseRecorder.WriteHeader(status)
 }
 
 func TestListFilePageUsesStableRecursiveCursor(t *testing.T) {

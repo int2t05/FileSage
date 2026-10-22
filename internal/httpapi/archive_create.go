@@ -247,7 +247,6 @@ func (api *API) createArchive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, archiveCreateResponse{Path: publish.target, Name: publish.name})
-	api.refreshArchiveCreateIndex()
 }
 
 func decodeArchiveCreateRequest(w http.ResponseWriter, r *http.Request) (archiveCreateRequest, bool) {

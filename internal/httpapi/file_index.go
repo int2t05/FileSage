@@ -97,6 +97,10 @@ func (api *API) listFilePage(w http.ResponseWriter, r *http.Request) {
 			query.state = "stale"
 		}
 	}
+	// 当前目录校准期间读取真实文件系统，立即反映刚完成的文件操作。
+	if query.scope == "current" && query.offset == 0 && !query.needsCapturedDateIndex() && query.state != string(store.FileIndexReady) {
+		query.generation = 0
+	}
 
 	var entries []filePageEntry
 	var hasMore bool
@@ -599,6 +603,7 @@ func toFileEntry(entry fsroot.Entry, capturedAt *time.Time) fileEntry {
 	return response
 }
 
+// refreshIndexAfterMutation 在成功响应发出前标记旧索引过期。
 func refreshIndexAfterMutation(next http.Handler, index fileIndexer) http.Handler {
 	if index == nil {
 		return next
@@ -608,14 +613,15 @@ func refreshIndexAfterMutation(next http.Handler, index fileIndexer) http.Handle
 			next.ServeHTTP(w, r)
 			return
 		}
-		writer := &statusWriter{ResponseWriter: w}
+		writer := &statusWriter{ResponseWriter: w, onSuccess: func() { index.Refresh(context.Background()) }}
 		next.ServeHTTP(writer, r)
-		if writer.status >= http.StatusOK && writer.status < http.StatusMultipleChoices {
-			index.Refresh(context.Background())
+		if writer.status == 0 {
+			writer.WriteHeader(http.StatusOK)
 		}
 	})
 }
 
+// isIndexedMutation 只识别会改变受管文件树的已注册路由。
 func isIndexedMutation(r *http.Request) bool {
 	switch r.Method {
 	case http.MethodPut:
@@ -625,28 +631,49 @@ func isIndexedMutation(r *http.Request) bool {
 	case http.MethodDelete:
 		return strings.HasPrefix(r.URL.Path, "/api/v1/files") || strings.HasPrefix(r.URL.Path, "/api/v1/trash")
 	case http.MethodPost:
-		if strings.HasPrefix(r.URL.Path, "/api/v1/files/directories") || strings.HasPrefix(r.URL.Path, "/api/v1/files/copy") || strings.HasPrefix(r.URL.Path, "/api/v1/files/move") || strings.HasPrefix(r.URL.Path, "/api/v1/files/rename") || strings.HasPrefix(r.URL.Path, "/api/v1/files/batch-rename") || r.URL.Path == "/api/v1/files/batch-copy" || r.URL.Path == "/api/v1/files/batch-move" || r.URL.Path == "/api/v1/files/archive/extract" || strings.HasPrefix(r.URL.Path, "/api/v1/trash/") && strings.HasSuffix(r.URL.Path, "/restore") {
+		switch r.URL.Path {
+		case "/api/v1/files/directories", "/api/v1/files/symlinks",
+			"/api/v1/files/copy", "/api/v1/files/copy-directory",
+			"/api/v1/files/move", "/api/v1/files/move-directory",
+			"/api/v1/files/rename", "/api/v1/files/batch-rename",
+			"/api/v1/files/batch-copy", "/api/v1/files/batch-move",
+			"/api/v1/files/batch-trash", "/api/v1/files/archive/create",
+			"/api/v1/files/archive/extract":
 			return true
 		}
-		return strings.HasPrefix(r.URL.Path, "/api/v1/agent/plans/") && strings.HasSuffix(r.URL.Path, "/execute")
+		if strings.HasPrefix(r.URL.Path, "/api/v1/trash/") && strings.HasSuffix(r.URL.Path, "/restore") {
+			return true
+		}
+		return strings.HasPrefix(r.URL.Path, "/api/v1/agent/plans/") && (strings.HasSuffix(r.URL.Path, "/execute") || strings.HasSuffix(r.URL.Path, "/start"))
 	default:
 		return false
 	}
 }
 
+// statusWriter 在首次成功响应头前触发索引校准。
 type statusWriter struct {
 	http.ResponseWriter
-	status int
+	status    int
+	onSuccess func()
 }
 
 func (w *statusWriter) WriteHeader(status int) {
-	w.status = status
+	if status < http.StatusOK {
+		w.ResponseWriter.WriteHeader(status)
+		return
+	}
+	if w.status == 0 {
+		w.status = status
+		if status < http.StatusMultipleChoices && w.onSuccess != nil {
+			w.onSuccess()
+		}
+	}
 	w.ResponseWriter.WriteHeader(status)
 }
 
 func (w *statusWriter) Write(data []byte) (int, error) {
 	if w.status == 0 {
-		w.status = http.StatusOK
+		w.WriteHeader(http.StatusOK)
 	}
 	return w.ResponseWriter.Write(data)
 }
