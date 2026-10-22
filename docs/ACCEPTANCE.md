@@ -6,7 +6,7 @@
 
 | 范围 | 证据 | 限制 |
 | --- | --- | --- |
-| 开源与 CI | `main` 为 `65eae56`，[主线 CI 通过](https://github.com/int2t05/FileSage/actions/runs/39781587889)，包含 Go/Web 测试、race、漏洞与依赖审计、Chromium E2E、Linux 发布包冒烟。开放 PR 为 0，远端仅保留 `main`。 | 尚无 GitHub Release。 |
+| 开源与 CI | 生产代码 `33fefd0` 的[主线 CI 通过](https://github.com/int2t05/FileSage/actions/runs/39777246990)，包含 Go/Web 测试、race、漏洞与依赖审计、Chromium E2E、Linux 发布包冒烟。开放 PR 为 0，远端仅保留 `main`。 | 尚无 GitHub Release。 |
 | 持久服务 | 服务器运行代码 `33fefd0`；服务健康、网页和文件 API 返回 HTTP 200；模型 `glm-5.3-flash` 可用；SQLite v30 完整性检查通过。管理根与 `home` 子挂载分属两块 ext4 磁盘。 | 仅用合成数据；服务无账号密码，仅供可信局域网。 |
 | 文件与传输 | 浏览器 E2E 验证 6 MiB 上传与下载 SHA-256；续传、改名、回收站和冲突有自动化覆盖。2026-10-22 持久服务将合成文件跨物理盘移动，校验内容与源路径，再清除样本。 | LAN 大文件吞吐、真实用户文件和真实介质故障未验收。 |
 | Agent | 持久服务真实模型完成审批后的合成文件改名；同会话 Shell 输出回执续聊正确。Shell、Office、PDF 与 OCR 沙箱在生产同等 systemd 能力下通过。 | 其余工具的真实文件操作及并发／失败恢复组合未验收。 |
