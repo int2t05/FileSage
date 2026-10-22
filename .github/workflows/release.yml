@@ -46,6 +46,7 @@ jobs:
           npm audit --registry=https://registry.npmjs.org/ --audit-level=high
           npm test
           npm run typecheck
+          npm run typecheck:native
           npm run build
           npx playwright install --with-deps chromium
           npm run e2e

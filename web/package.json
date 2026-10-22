@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "typecheck:native": "node node_modules/@typescript/native/bin/tsc --noEmit",
     "test": "node --test test/*.test.mjs",
     "e2e": "playwright test"
   },
