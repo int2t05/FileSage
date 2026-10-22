@@ -29,6 +29,22 @@ type mutateAfterRenameAudit struct {
 	outcome string
 }
 
+type replaceAfterRenameFileSystem struct {
+	*fsroot.Root
+	mutate func(string) error
+}
+
+// RenameNoReplace 在真实改名后注入目标变化。
+func (fileSystem *replaceAfterRenameFileSystem) RenameNoReplace(oldPath, newPath string) error {
+	if err := fileSystem.Root.RenameNoReplace(oldPath, newPath); err != nil {
+		return err
+	}
+	if fileSystem.mutate != nil {
+		return fileSystem.mutate(newPath)
+	}
+	return nil
+}
+
 func (audit *mutateAfterRenameAudit) BeginManualAudit(context.Context, store.AuditRecord) (int64, error) {
 	audit.started = true
 	if audit.mutate != nil {
@@ -222,6 +238,43 @@ func TestRenameRejectsReplacementDuringAuditWrite(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "renamed.txt")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("renamed target exists after conflict: %v", err)
+	}
+}
+
+func TestRenameReportsNeedsReviewWhenTargetChangesBeforeReturn(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("file identity validation is required")
+	}
+	rootPath := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootPath, "hello.txt"), []byte("approved contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := fsroot.Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	fileSystem := &replaceAfterRenameFileSystem{Root: root, mutate: func(newPath string) error {
+		if err := os.Rename(filepath.Join(rootPath, newPath), filepath.Join(rootPath, "approved-item.txt")); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(rootPath, newPath), []byte("external replacement"), 0o600)
+	}}
+	audit := &mutateAfterRenameAudit{}
+	handler := NewWithTaskStore(fileSystem, audit, nil, coordination.New())
+	version := versionFromListing(t, handler, "hello.txt")
+	response := performJSONRequest(handler, http.MethodPost, "/api/v1/files/rename", `{"path":"hello.txt","name":"renamed.txt","version":"`+version+`"}`)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("rename status = %d, want 409: %s", response.Code, response.Body.String())
+	}
+	if audit.outcome != "needs_review" {
+		t.Fatalf("audit outcome = %q, want needs_review", audit.outcome)
+	}
+	for name, want := range map[string]string{"approved-item.txt": "approved contents", "renamed.txt": "external replacement"} {
+		contents, err := os.ReadFile(filepath.Join(rootPath, name))
+		if err != nil || string(contents) != want {
+			t.Errorf("%s = (%q, %v), want %q", name, contents, err, want)
+		}
 	}
 }
 

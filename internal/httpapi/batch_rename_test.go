@@ -25,6 +25,7 @@ type batchRenameTestFileSystem struct {
 	listError     error
 	failRename    string
 	failRenameErr error
+	afterRename   func(string, string) error
 	renameCalls   int
 }
 
@@ -118,6 +119,9 @@ func (fileSystem *batchRenameTestFileSystem) RenameNoReplace(oldPath, newPath st
 	for updatedPath, updatedEntry := range updates {
 		fileSystem.entries[updatedPath] = updatedEntry
 	}
+	if fileSystem.afterRename != nil {
+		return fileSystem.afterRename(oldPath, newPath)
+	}
 	return nil
 }
 
@@ -147,6 +151,7 @@ type batchRenameAuditStub struct {
 	finishErr    error
 	onBegin      func() error
 	finished     int
+	outcomes     []string
 	finishCtxErr error
 }
 
@@ -162,8 +167,9 @@ func (stub *batchRenameAuditStub) BeginManualAudit(context.Context, store.AuditR
 	return 1, nil
 }
 
-func (stub *batchRenameAuditStub) FinishManualAudit(ctx context.Context, _ int64, _, _ string) error {
+func (stub *batchRenameAuditStub) FinishManualAudit(ctx context.Context, _ int64, outcome, _ string) error {
 	stub.finished++
+	stub.outcomes = append(stub.outcomes, outcome)
 	stub.finishCtxErr = ctx.Err()
 	return stub.finishErr
 }
@@ -246,6 +252,61 @@ func TestBatchRenameRejectsReplacementDuringAuditWrite(t *testing.T) {
 	}
 	if audit.finished != 1 {
 		t.Fatalf("finished audits = %d, want 1", audit.finished)
+	}
+}
+
+func TestBatchRenameReportsUncertainResultWhenTargetChangesAfterRename(t *testing.T) {
+	entry := batchRenameTestEntry("old.txt", fsroot.KindFile)
+	next := batchRenameTestEntry("next.txt", fsroot.KindFile)
+	fileSystem := newBatchRenameTestFileSystem(entry, next)
+	fileSystem.afterRename = func(_, target string) error {
+		current := fileSystem.entries[target]
+		current.Inode++
+		fileSystem.entries[target] = current
+		return nil
+	}
+	audit := &batchRenameAuditStub{}
+	handler := NewWithTaskStore(fileSystem, audit, nil, coordination.New())
+	response := performJSONRequest(handler, http.MethodPost, "/api/v1/files/batch-rename", batchRenameBody(t,
+		batchRenameInputFor(entry, "new.txt"), batchRenameInputFor(next, "next-new.txt"),
+	))
+	if response.Code != http.StatusMultiStatus {
+		t.Fatalf("rename status = %d, want 207: %s", response.Code, response.Body.String())
+	}
+	result := decodeBatchRenameResponse(t, response)
+	if result.Status != "partial" || len(result.Items) != 2 || result.Items[0].Status != "failed" || !strings.Contains(result.Items[0].Message, "核对") || result.Items[1].Status != "not_started" {
+		t.Fatalf("uncertain rename result = %#v", result)
+	}
+	if _, exists := fileSystem.entries["next-new.txt"]; exists {
+		t.Fatal("later item was renamed after the result became uncertain")
+	}
+	if len(audit.outcomes) != 1 || audit.outcomes[0] != "needs_review" {
+		t.Fatalf("audit outcomes = %v, want needs_review", audit.outcomes)
+	}
+}
+
+func TestRenameReportsNeedsReviewWhenTargetChangesAfterRename(t *testing.T) {
+	entry := batchRenameTestEntry("old.txt", fsroot.KindFile)
+	fileSystem := newBatchRenameTestFileSystem(entry)
+	fileSystem.afterRename = func(_, target string) error {
+		current := fileSystem.entries[target]
+		current.Inode++
+		fileSystem.entries[target] = current
+		return nil
+	}
+	audit := &batchRenameAuditStub{}
+	index := &batchRenameTestIndexer{}
+	handler := NewWithAgentAndIndexAndConversation(fileSystem, audit, nil, nil, index, nil, nil, coordination.New())
+	body := `{"path":"old.txt","name":"new.txt","version":"` + versionForEntry(entry) + `"}`
+	response := performJSONRequest(handler, http.MethodPost, "/api/v1/files/rename", body)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("rename status = %d, want 409: %s", response.Code, response.Body.String())
+	}
+	if len(audit.outcomes) != 1 || audit.outcomes[0] != "needs_review" {
+		t.Fatalf("audit outcomes = %v, want needs_review", audit.outcomes)
+	}
+	if index.refreshes != 1 {
+		t.Fatalf("index refreshes = %d, want 1 after uncertain rename", index.refreshes)
 	}
 }
 

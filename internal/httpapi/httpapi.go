@@ -1071,7 +1071,8 @@ func (api *API) renameFile(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 
-	if _, err := api.verifyEntryVersion(request.Path, request.Version); err != nil {
+	source, err := api.verifyEntryVersion(request.Path, request.Version)
+	if err != nil {
 		writeFileError(w, err)
 		return
 	}
@@ -1080,7 +1081,8 @@ func (api *API) renameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 审计写入后重新核对版本，避免等待期间的路径替换继续执行。
-	if _, err := api.verifyEntryVersion(request.Path, request.Version); err != nil {
+	source, err = api.verifyEntryVersion(request.Path, request.Version)
+	if err != nil {
 		if !finishFileAudit(api, w, r, auditID, "failed", "源文件状态已变化，未执行重命名。") {
 			return
 		}
@@ -1092,6 +1094,17 @@ func (api *API) renameFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeFileError(w, err)
+		return
+	}
+	moved, err := api.fileEntry(newPath)
+	if err != nil || !sameRenamedEntry(source, moved) {
+		if api.index != nil {
+			api.index.Refresh(context.Background())
+		}
+		if !finishFileAudit(api, w, r, auditID, "needs_review", "重命名后文件状态无法确认，请核对目录。") {
+			return
+		}
+		writeError(w, http.StatusConflict, "重命名结果状态已变化，请刷新并核对源路径和目标路径。")
 		return
 	}
 	if !finishFileAudit(api, w, r, auditID, "succeeded", "重命名完成。") {
@@ -1888,7 +1901,15 @@ type versionFields struct {
 
 // versionForEntry 用条目状态生成不可读的并发校验令牌。
 func versionForEntry(entry fsroot.Entry) string {
-	fields := versionFields{
+	fields := versionFieldsForEntry(entry)
+	serialized, _ := json.Marshal(fields)
+	digest := sha256.Sum256(serialized)
+	return "v1." + base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+// versionFieldsForEntry 提取用于并发校验的稳定条目字段。
+func versionFieldsForEntry(entry fsroot.Entry) versionFields {
+	return versionFields{
 		Name:                  entry.Name,
 		Path:                  entry.Path,
 		Kind:                  entry.Kind,
@@ -1916,9 +1937,17 @@ func versionForEntry(entry fsroot.Entry) string {
 		LinkLinks:             entry.LinkLinks,
 		LinkIdentityAvailable: entry.LinkIdentityAvailable,
 	}
-	serialized, _ := json.Marshal(fields)
-	digest := sha256.Sum256(serialized)
-	return "v1." + base64.RawURLEncoding.EncodeToString(digest[:])
+}
+
+// sameRenamedEntry 确认目标仍是被选中的条目，忽略改名必然变化的路径与 ctime。
+func sameRenamedEntry(expected, actual fsroot.Entry) bool {
+	expectedFields := versionFieldsForEntry(expected)
+	actualFields := versionFieldsForEntry(actual)
+	expectedFields.Name = actualFields.Name
+	expectedFields.Path = actualFields.Path
+	expectedFields.ChangedUnix = actualFields.ChangedUnix
+	expectedFields.ChangedNanosecond = actualFields.ChangedNanosecond
+	return expectedFields == actualFields
 }
 
 func writeFileError(w http.ResponseWriter, err error) {

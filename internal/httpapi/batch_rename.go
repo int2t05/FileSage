@@ -114,7 +114,8 @@ func (api *API) batchRename(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 审计写入后重新核对版本，避免等待期间的路径替换继续执行。
-		if _, err := api.verifyEntryVersion(target.request.Path, target.request.Version); err != nil {
+		source, err := api.verifyEntryVersion(target.request.Path, target.request.Version)
+		if err != nil {
 			if !finishFileAudit(api, w, r, auditID, "failed", "源文件状态已变化，未执行重命名。") {
 				return
 			}
@@ -131,6 +132,17 @@ func (api *API) batchRename(w http.ResponseWriter, r *http.Request) {
 			response.Status = "partial"
 			response.Items[index].Status = "failed"
 			response.Items[index].Message = batchRenameFailureMessage(err)
+			writeJSON(w, http.StatusMultiStatus, response)
+			return
+		}
+		moved, err := api.fileEntry(target.targetPath)
+		if err != nil || !sameRenamedEntry(source, moved) {
+			if !finishFileAudit(api, w, r, auditID, "needs_review", "重命名后文件状态无法确认，请核对目录。") {
+				return
+			}
+			response.Status = "partial"
+			response.Items[index].Status = "failed"
+			response.Items[index].Message = "重命名结果无法确认，请刷新并核对源路径和目标路径。"
 			writeJSON(w, http.StatusMultiStatus, response)
 			return
 		}
