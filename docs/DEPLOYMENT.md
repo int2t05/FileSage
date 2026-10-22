@@ -7,6 +7,7 @@ FileSage 直接读写服务器原生文件系统。首次部署先使用独立�
 Release 包适用于 Linux amd64，不需要在服务器安装 Go 或 Node.js。从 [GitHub Releases](https://github.com/int2t05/FileSage/releases) 下载 tar 包和校验文件，放在同一目录后先校验再解压：
 
 ```sh
+set -eu
 sha256sum -c filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
 tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
 cd filesage_vX.Y.Z_linux_amd64
@@ -89,6 +90,8 @@ sudo install -d -o filesage -g filesage -m 0750 /srv/filesage-files
 
 unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需的独立挂载相符；systemd 不会从 `EnvironmentFile` 展开目录变量。模板启用 `ProtectSystem=strict`，并通过 `ReadWritePaths=/srv/filesage-files` 开放默认管理根目录；`StateDirectory=filesage` 自动保持可写。更改 `FILESAGE_ROOT` 时同步调整 `ReadWritePaths`，更改 `FILESAGE_DATA_DIR` 时也将数据目录加入白名单。数据库目录必须位于管理根目录之外。
 
+模板固定 `UMask=0022`，使服务在不同主机上创建用户文件时保持一致的 POSIX 权限行为；SQLite 状态目录、上传暂存和 Agent 临时目录使用 `0700`，临时文件使用 `0600`。
+
 模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界包含 Bubblewrap 所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`，以及在 ACL／专用组授权的异主文件上设置读写租约所需的 `CAP_LEASE`。`CAP_LEASE` 不绕过文件读写权限，但可对进程能打开的文件设置租约；应用只在管理根目录内的文件操作中使用它，保留其余 systemd 文件系统限制。若 drop-in 重设 `CapabilityBoundingSet` 或 `AmbientCapabilities`，应保留这三项边界并授予 `AmbientCapabilities=CAP_LEASE`；空值会清除模板中的 ambient 能力。部署后可用 `systemctl show filesage.service -p CapabilityBoundingSet -p AmbientCapabilities` 核对能力配置。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
 
 unit 会等待 `network-online.target` 再启动。启用当前网络管理器对应的 wait-online 服务，确保固定监听地址已配置；例如 NetworkManager 使用 `NetworkManager-wait-online.service`，systemd-networkd 使用 `systemd-networkd-wait-online.service`。
@@ -118,22 +121,55 @@ sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor -p C
 
 ## 更新版本
 
-保持现有环境文件、管理根目录和数据目录不变。若版本包含数据库迁移，先按“备份与恢复”完成停服一致性备份并校验校验和；备份后停止服务、替换二进制和 Web 文件，再启动并检查健康接口与服务日志：
+保持现有环境文件、管理根目录、数据目录和服务器专用 drop-in 不变。先校验发布包并解压。若版本包含数据库迁移，先按“备份与恢复”完成停服一致性备份并校验校验和；迁移失败时修复前向版本或恢复完整快照，不要单独回退旧二进制。
 
 ```sh
+sha256sum -c filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
+tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
+
+app=/usr/local/lib/filesage
+release="$PWD/filesage_vX.Y.Z_linux_amd64"
+rollback="$app/rollback-before-vX.Y.Z"
+stage="$app/.release-vX.Y.Z"
+test -x "$release/filesage"
+test -s "$release/web/index.html"
+test ! -e "$rollback"
+
+sudo install -d -o root -g root -m 0700 "$rollback"
+sudo install -d -o root -g root -m 0755 "$stage/web"
+sudo install -o root -g root -m 0755 "$release/filesage" "$stage/filesage"
+sudo cp -R "$release/web/." "$stage/web/"
+sudo chown -R root:root "$stage"
+
 sudo systemctl stop filesage.service
-sudo install -o root -g root -m 0755 ./filesage /usr/local/lib/filesage/filesage
-sudo cp -R web/. /usr/local/lib/filesage/web/
+sudo mv "$app/filesage" "$rollback/filesage"
+sudo mv "$app/web" "$rollback/web"
+sudo mv "$stage/filesage" "$app/filesage"
+sudo mv "$stage/web" "$app/web"
 sudo systemctl start filesage.service
 curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
-sudo journalctl -u filesage.service -n 100 --no-pager
+sudo rmdir "$stage"
 ```
 
-若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。迁移后的旧二进制可能不兼容新 schema；若启动失败，应保留日志并修复前向版本，不要直接回退旧二进制。v27 清除历史 Shell 输出并截断 WAL 中旧页；v28 增加最多 4 KiB 的 Agent 会话上下文摘要，不保存文件正文；v29 为目录列表默认排序与递归搜索新增索引。v29 迁移在事务内执行，不改写现有文件索引记录。
+若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。没有数据库迁移且健康检查失败时，确认旧版本与现有 schema 兼容后可恢复程序副本：
 
-更新前可将当前二进制和 `web/` 暂存为 `rollback-before-<新提交>`，只保留一份立即可用的程序回退副本。更早的完整数据恢复快照独立保留，不随程序备份清理。新服务通过健康检查后清理更早的程序备份；数据库迁移后只有确认 schema 兼容才能回退二进制。
+```sh
+set -eu
+sudo systemctl stop filesage.service
+sudo install -d -o root -g root -m 0700 "$stage/failed"
+sudo mv "$app/filesage" "$stage/failed/filesage"
+sudo mv "$app/web" "$stage/failed/web"
+sudo mv "$rollback/filesage" "$app/filesage"
+sudo mv "$rollback/web" "$app/web"
+sudo systemctl start filesage.service
+curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
+```
 
-从源码目录更新时，将复制命令中的 `web/` 改为 `web/dist/`。
+若 schema 已迁移且旧版本不兼容，应修复前向版本或恢复完整快照。检查 `sudo journalctl -u filesage.service -n 100 --no-pager`；确认服务稳定后保留一份立即可用的程序回退副本，再清理更早的重复程序备份。完整数据恢复快照独立保留。
+
+若发布包的 systemd 模板有变化，先审阅 `systemctl cat filesage.service`，将本机主 unit 另行备份后再更新；保留服务器专用 drop-in 和环境文件。运行 `systemd-analyze verify` 与 `systemctl daemon-reload` 后再重启服务。
+
+从源码构建时，将上面的 `release` 路径指向构建输出，并将 `web/` 指向 `web/dist/`。
 
 ## 备份与恢复
 

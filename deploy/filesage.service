@@ -18,6 +18,8 @@ ExecStart=/usr/local/lib/filesage/filesage
 Restart=on-failure
 RestartSec=5s
 TimeoutStopSec=15s
+# 固定 POSIX 创建模式，避免受主机 system manager 配置影响。
+UMask=0022
 # 为隔离 Shell 子任务委托聚合资源控制器。
 Delegate=cpu memory pids
 # 默认只允许写入管理根目录；StateDirectory 自动保持可写。
