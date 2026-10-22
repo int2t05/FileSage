@@ -2,7 +2,7 @@
 
 ## 状态
 
-**已决定；Linux 链接、并发和双卷操作测试通过，专用服务账户及 ext4 子卷已部署。外部进程竞态和介质故障恢复仍待验证。**
+**已决定；Linux 链接、并发和双卷操作测试通过，专用服务账户及 ext4 子卷已部署。Linux 覆盖已有文件前申请读租约；永久删除前复核确认的目录项状态，并对普通文件取得写租约。打开的外部写句柄或状态变化会使操作停止。隔离内核验证确认租约检查与 `unlink` 之间仍有不可原子化的外部访问窗口；此限制适用于跨卷清理、替换旧文件和永久删除。其他写入口竞态和介质故障恢复仍待验证。**
 
 ## 背景
 
@@ -12,7 +12,7 @@
 
 所有应用写入口集中到文件操作服务。使用 Go 1.27.3+ 的 `os.Root`，所有 API 路径为根目录相对路径；允许根目录内挂载点，拒绝越界软链接。写入先构造新内容并校验，再从同一文件系统暂存区原子替换；移动跨文件系统时分阶段复制、校验、目标发布、源删除并持久记录进度。所有批准包含路径、方案和源状态指纹，执行时重验。
 
-Linux 替换已有文件使用 `renameat2(RENAME_EXCHANGE)` 交换候选与当前目标，再核验被交换出的源文件身份和内容摘要；冲突时尝试原子交换回去。不支持交换的文件系统会拒绝覆盖，回滚失败会保留临时路径并报告给用户。成功后移除旧目录项，不保留历史副本。此机制可发现发布窗口内的路径替换和内容改写；其他进程已持有写句柄并在复核后继续写入的情况仍需单独验收。
+Linux 替换已有文件先对当前文件申请读租约，阻止或检测外部写入者，再使用 `renameat2(RENAME_EXCHANGE)` 交换候选与目标并复核被交换出的源身份和内容摘要；冲突时尝试原子交换回去。无法申请租约或文件系统不支持租约时拒绝覆盖。不支持交换的文件系统同样拒绝覆盖，回滚失败会保留临时路径并报告给用户。成功后移除旧目录项，不保留历史副本。最终租约检查与移除旧目录项仍非原子操作，不能保证与非协作外部访问形成全局事务。
 
 对多链接 inode（`nlink > 1`），所有内容编辑、覆盖和 Shell 写回都拒绝，包括手动编辑。按路径重命名和删除链接项仍可用；这些操作只影响对应目录项。内部软链接可用于查看和浏览；涉及写入时解析为明确目标并按 `(device, inode)` 协调，删除软链接只删除链接本身。若目标无法可靠解析至根目录内的直接路径，拒绝写入并提示用户从目标路径执行。
 
@@ -31,6 +31,13 @@ Linux 替换已有文件使用 `renameat2(RENAME_EXCHANGE)` 交换候选与当�
 
 ## 证据
 
+- `internal/agent/move_file_linux_test.go` 的 `TestRenameRejectsExternalProcessChangeBetweenDigestAndCommit` 在源身份检查后、原子改名前启动独立测试进程改写源文件；冲突被检测、来源路径恢复。Linux 用例重复 20 次、Agent 全包 race 检查通过。该结果只覆盖同卷 Agent 改名的这一提交窗口。
+- `internal/fsroot/write_linux_test.go` 的 `TestWriteAtomicIfUnchangedRejectsExternalOpenWriter` 由独立进程持有原文件写句柄，再尝试替换；操作返回冲突，原路径仍指向原 inode，进程外更新可从原路径读取。该用例在 Linux 重复 20 次通过。
+- `internal/fsroot/write_linux_test.go` 与 `move_tree_linux_test.go` 使用独立进程持有源文件写句柄，并验证快照后的已完成改写会在删除前触发冲突；目录移动先预检整棵树，避免预检发现冲突前清掉部分来源。七组关键移动用例在 Linux 重复 20 次通过，完整 Go 测试、`fsroot` 与 Agent race、`go vet` 通过。Linux 写租约需要文件系统支持。
+- `internal/trash/manager_test.go` 的 `TestPermanentRemovePreservesReplacementAfterAuditWrite` 在永久删除开始审计期间替换路径，确认操作返回冲突并保留两项文件；`internal/fsroot/write_linux_test.go` 覆盖过期条目、活动写句柄、普通文件、空目录和软链接删除。关键删除用例在 Linux 重复 20 次通过，`fsroot` 与 trash 全包、race、`go vet` 通过。
+- `internal/httpapi/write_test.go` 与 `batch_rename_test.go` 在审计写入期间替换源路径，确认单项及批量重命名复核版本、拒绝执行并结束失败审计。Linux 全量 Go 测试、`httpapi`／`fsroot`／trash race 与全量 `go vet` 通过。
+- 隔离内核探针在服务器 `/tmp` ext4 上取得写租约后启动阻塞打开请求；探针先检查租约并删除目录项，再释放租约。请求随后成功打开并写入 `st_nlink=0` 的 inode，确认租约检查与 `unlink` 之间存在不可原子化的外部访问窗口。独立验证使用临时目录，未访问生产服务或真实用户文件。
+- [Linux `F_SETLEASE`／`F_GETLEASE`](https://man7.org/linux/man-pages/man2/F_SETLEASE.2const.html) 说明文件租约会在冲突访问时被打破并可能阻塞调用方；该机制不使目录项删除与租约状态检查成为一个原子事务。
 - [Go traversal-resistant file API](https://go.dev/blog/osroot) 与[GO-2026-4970 漏洞公告](https://pkg.go.dev/vuln/GO-2026-4970)（访问 2026-10-15）：说明目录句柄路径 API 的能力及版本修复要求。
 - [Linux `openat2`](https://man7.org/linux/man-pages/man2/openat2.2.html)（访问 2026-10-15）：`RESOLVE_IN_ROOT` 将绝对路径／软链接按指定根解析；不能禁用所有挂载点，因为管理根目录允许多卷。
 - [Linux rename](https://man7.org/linux/man-pages/man2/rename.2.html)、[软链接](https://man7.org/linux/man-pages/man7/symlink.7.html)、[chmod](https://man7.org/linux/man-pages/man2/chmod.2.html)、[chown](https://man7.org/linux/man-pages/man2/chown.2.html)：官方手册用于提交和权限实现。

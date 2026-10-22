@@ -145,6 +145,7 @@ type batchRenameAuditStub struct {
 	taskReader
 	beginErr     error
 	finishErr    error
+	onBegin      func() error
 	finished     int
 	finishCtxErr error
 }
@@ -152,6 +153,11 @@ type batchRenameAuditStub struct {
 func (stub *batchRenameAuditStub) BeginManualAudit(context.Context, store.AuditRecord) (int64, error) {
 	if stub.beginErr != nil {
 		return 0, stub.beginErr
+	}
+	if stub.onBegin != nil {
+		if err := stub.onBegin(); err != nil {
+			return 0, err
+		}
 	}
 	return 1, nil
 }
@@ -213,6 +219,33 @@ func TestBatchRenameRequiresAuditBeforeChangingPaths(t *testing.T) {
 				t.Fatalf("renamed = %v, rename calls = %d", renamed, fileSystem.renameCalls)
 			}
 		})
+	}
+}
+
+func TestBatchRenameRejectsReplacementDuringAuditWrite(t *testing.T) {
+	entry := batchRenameTestEntry("old.txt", fsroot.KindFile)
+	fileSystem := newBatchRenameTestFileSystem(entry)
+	audit := &batchRenameAuditStub{onBegin: func() error {
+		entry := fileSystem.entries["old.txt"]
+		entry.Inode++
+		fileSystem.entries["old.txt"] = entry
+		return nil
+	}}
+	handler := NewWithTaskStore(fileSystem, audit, nil, coordination.New())
+	request := batchRenameBody(t, batchRenameInputFor(entry, "new.txt"))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/files/batch-rename", strings.NewReader(request)))
+	if response.Code != http.StatusMultiStatus {
+		t.Fatalf("rename status = %d, want partial result: %s", response.Code, response.Body.String())
+	}
+	if fileSystem.renameCalls != 0 || fileSystem.entries["old.txt"].Inode != entry.Inode+1 {
+		t.Fatalf("changed entry was renamed: calls=%d entries=%+v", fileSystem.renameCalls, fileSystem.entries)
+	}
+	if _, exists := fileSystem.entries["new.txt"]; exists {
+		t.Fatal("renamed target exists after version conflict")
+	}
+	if audit.finished != 1 {
+		t.Fatalf("finished audits = %d, want 1", audit.finished)
 	}
 }
 

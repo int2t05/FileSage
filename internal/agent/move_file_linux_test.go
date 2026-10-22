@@ -7,7 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -262,8 +264,8 @@ func TestMoveFileRejectsOpenHandleChangeAfterApproval(t *testing.T) {
 	}
 }
 
-// TestRenameRejectsOpenHandleChangeBetweenDigestAndCommit 验证摘要校验后的改写不会被重命名。
-func TestRenameRejectsOpenHandleChangeBetweenDigestAndCommit(t *testing.T) {
+// TestRenameRejectsExternalProcessChangeBetweenDigestAndCommit 验证提交前的进程外改写会使重命名冲突。
+func TestRenameRejectsExternalProcessChangeBetweenDigestAndCommit(t *testing.T) {
 	ctx := context.Background()
 	rootPath := t.TempDir()
 	parent := filepath.Join(rootPath, "documents")
@@ -300,21 +302,26 @@ func TestRenameRejectsOpenHandleChangeBetweenDigestAndCommit(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 第三次取消检查位于 Linux 同卷移动已校验打开文件描述符之后、原子改名前。
-	mutation := &openHandleMutationContext{Context: ctx, path: sourcePath, approved: approvedInfo, triggerAt: 3}
-	t.Cleanup(func() {
-		if mutation.handle != nil {
-			_ = mutation.handle.Close()
-		}
-	})
+	externalData := strings.Repeat("x", int(approvedInfo.Size()))
+	mutation := &externalWriterMutationContext{Context: ctx, path: sourcePath, triggerAt: 3, done: make(chan struct{})}
 	tool := agentTools()["rename"]
 	updated, err := tool.execute(service, mutation, plan.ID, approved.ScopePath, approved.Operations[0])
-	if !mutation.triggered || mutation.triggeredAt.Load() != mutation.triggerAt || mutation.err != nil {
-		t.Fatalf("race setup was not applied at commit boundary: triggered=%t call=%d err=%v", mutation.triggered, mutation.triggeredAt.Load(), mutation.err)
+	if mutation.triggeredAt.Load() != mutation.triggerAt {
+		t.Fatalf("race setup was not applied at commit boundary: call=%d", mutation.triggeredAt.Load())
+	}
+	select {
+	case <-mutation.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("external writer did not finish")
+	}
+	triggered, setupErr := mutation.result()
+	if !triggered || setupErr != nil {
+		t.Fatalf("external writer setup failed: triggered=%t err=%v", triggered, setupErr)
 	}
 	if !errors.Is(err, fsroot.ErrConflict) || updated.Status != store.PlanFailed || updated.Operations[0].Status != store.OperationFailed {
-		t.Fatalf("rename after open-handle change = (%#v, %v), want failed conflict", updated, err)
+		t.Fatalf("rename after external process change = (%#v, %v), want failed conflict", updated, err)
 	}
-	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != mutation.data {
+	if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
 		t.Fatalf("external source content changed: %q (%v)", content, err)
 	}
 	currentInfo, err := os.Stat(sourcePath)
@@ -330,43 +337,98 @@ func TestRenameRejectsOpenHandleChangeBetweenDigestAndCommit(t *testing.T) {
 	}
 }
 
-// openHandleMutationContext 在指定取消检查处通过已打开句柄改写源文件。
-type openHandleMutationContext struct {
+// externalWriterMutationContext 在指定提交检查处启动独立进程改写源文件。
+type externalWriterMutationContext struct {
 	context.Context
 	path        string
-	approved    os.FileInfo
 	triggerAt   int32
 	calls       atomic.Int32
 	triggeredAt atomic.Int32
 	once        sync.Once
-	handle      *os.File
+	mu          sync.Mutex
 	triggered   bool
-	data        string
 	err         error
+	done        chan struct{}
 }
 
-// Err 在指定检查处、返回取消状态前触发一次受控的源文件改写。
-func (ctx *openHandleMutationContext) Err() error {
+// Err 在指定检查处启动独立写入进程，计数需支持 database/sql 并发调用。
+func (ctx *externalWriterMutationContext) Err() error {
 	call := ctx.calls.Add(1)
 	if call == ctx.triggerAt {
 		ctx.triggeredAt.Store(call)
 		ctx.once.Do(func() {
+			defer close(ctx.done)
+			processContext, cancel := context.WithTimeout(ctx.Context, 10*time.Second)
+			defer cancel()
+			command := exec.CommandContext(processContext, os.Args[0], "-test.run=^TestExternalWriterProcessHelper$")
+			command.Env = externalWriterHelperEnvironment(ctx.path)
+			var setupErr error
+			if output, err := command.CombinedOutput(); err != nil {
+				setupErr = fmt.Errorf("external writer process: %w: %s", err, strings.TrimSpace(string(output)))
+			}
+			ctx.mu.Lock()
 			ctx.triggered = true
-			ctx.handle, ctx.err = os.OpenFile(ctx.path, os.O_RDWR, 0)
-			if ctx.err != nil {
-				return
-			}
-			ctx.data = strings.Repeat("x", int(ctx.approved.Size()))
-			if _, ctx.err = ctx.handle.WriteAt([]byte(ctx.data), 0); ctx.err != nil {
-				return
-			}
-			if ctx.err = ctx.handle.Sync(); ctx.err != nil {
-				return
-			}
-			ctx.err = os.Chtimes(ctx.path, ctx.approved.ModTime(), ctx.approved.ModTime())
+			ctx.err = setupErr
+			ctx.mu.Unlock()
 		})
 	}
 	return ctx.Context.Err()
+}
+
+// result 在子进程完成后安全读取测试结果。
+func (ctx *externalWriterMutationContext) result() (bool, error) {
+	ctx.mu.Lock()
+	defer ctx.mu.Unlock()
+	return ctx.triggered, ctx.err
+}
+
+// TestExternalWriterProcessHelper 由竞态测试子进程调用，模拟应用锁之外的写入者。
+func TestExternalWriterProcessHelper(t *testing.T) {
+	if os.Getenv("FILESAGE_TEST_EXTERNAL_WRITER_HELPER") != "1" {
+		return
+	}
+	path := os.Getenv("FILESAGE_TEST_EXTERNAL_WRITER_PATH")
+	if path == "" {
+		t.Fatal("external writer path is required")
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+	opened, err := handle.Stat()
+	if err != nil || !os.SameFile(before, opened) {
+		t.Fatalf("external writer opened a different file: info=%v err=%v", opened, err)
+	}
+	data := strings.Repeat("x", int(before.Size()))
+	if _, err := handle.WriteAt([]byte(data), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// externalWriterHelperEnvironment 仅向辅助进程传递本次测试参数。
+func externalWriterHelperEnvironment(path string) []string {
+	const prefix = "FILESAGE_TEST_EXTERNAL_WRITER_"
+	environment := make([]string, 0, len(os.Environ())+2)
+	for _, value := range os.Environ() {
+		if !strings.HasPrefix(value, prefix) {
+			environment = append(environment, value)
+		}
+	}
+	return append(environment,
+		"FILESAGE_TEST_EXTERNAL_WRITER_HELPER=1",
+		"FILESAGE_TEST_EXTERNAL_WRITER_PATH="+path,
+	)
 }
 
 // rewriteThroughOpenHandlePreservingIdentityAndMtime 原地改写并保留文件身份、大小和修改时间。

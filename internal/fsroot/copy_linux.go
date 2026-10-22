@@ -324,7 +324,7 @@ func platformRemoveFileIfUnchanged(ctx context.Context, root *Root, relativePath
 	if err := verifyOpenedDirectory(root, parentPath, parent); err != nil {
 		return false, "", err
 	}
-	fd, err := unix.Openat(int(parent.Fd()), name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	fd, err := unix.Openat(int(parent.Fd()), name, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		if errors.Is(err, unix.ELOOP) {
 			return false, "", ErrNotRegularFile
@@ -387,6 +387,11 @@ func platformRemoveFileIfUnchanged(ctx context.Context, root *Root, relativePath
 		journalErr := root.removeMoveRecoveryRecord(record.ID)
 		return false, "", errors.Join(err, cleanupErr, journalErr)
 	}
+	if err := verifyMoveFileSourceEntry(parent, name, file, expected); err != nil {
+		cleanupErr := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine)
+		journalErr := root.removeMoveRecoveryRecord(record.ID)
+		return false, "", errors.Join(err, cleanupErr, journalErr)
+	}
 	if err := unix.Renameat2(int(parent.Fd()), name, int(quarantine.Fd()), "source", unix.RENAME_NOREPLACE); err != nil {
 		cleanupErr := removeEmptyFileMoveQuarantine(parent, quarantineName, quarantine)
 		journalErr := root.removeMoveRecoveryRecord(record.ID)
@@ -410,17 +415,29 @@ func platformRemoveFileIfUnchanged(ctx context.Context, root *Root, relativePath
 	if err := verifyMoveQuarantineDirectory(parent, quarantineName, quarantine); err != nil {
 		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
 	}
-	if err := verifyQuarantinedMoveFile(ctx, quarantine, quarantinePath, expected, expectedSHA256); err != nil {
+	if _, err := unix.FcntlInt(file.Fd(), unix.F_SETLEASE, unix.F_WRLCK); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, conflictError("move source is open", relativePath, err))
+	}
+	if err := requireFileWriteLease(file); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, conflictError("move", relativePath, err))
+	}
+	if err := verifyQuarantinedMoveFile(ctx, file, quarantine, quarantinePath, expected, expectedSHA256); err != nil {
 		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
 	}
 	if err := ctx.Err(); err != nil {
 		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := requireFileWriteLease(file); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, conflictError("move", relativePath, err))
 	}
 	if err := verifyOpenedDirectory(root, parentPath, parent); err != nil {
 		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
 	}
 	if err := verifyMoveQuarantineDirectory(parent, quarantineName, quarantine); err != nil {
 		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, err)
+	}
+	if err := requireFileWriteLease(file); err != nil {
+		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, conflictError("move", relativePath, err))
 	}
 	if err := unix.Unlinkat(int(quarantine.Fd()), "source", 0); err != nil {
 		return restoreFileMoveQuarantine(root, parent, name, quarantineName, quarantine, quarantinePath, record.ID, fmt.Errorf("remove isolated source: %w", err))
@@ -495,17 +512,46 @@ func verifyMoveQuarantineDirectory(parent *os.File, name string, directory *os.F
 	return nil
 }
 
-// verifyQuarantinedMoveFile 核验隔离文件身份、大小、元数据和复制摘要。
-func verifyQuarantinedMoveFile(ctx context.Context, quarantine *os.File, quarantinePath string, expected Fingerprint, expectedSHA256 string) error {
-	fd, err := unix.Openat(int(quarantine.Fd()), "source", unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+// verifyMoveFileSourceEntry 确认源目录项仍指向已审批的打开文件。
+func verifyMoveFileSourceEntry(parent *os.File, name string, file *os.File, expected Fingerprint) error {
+	info, err := file.Stat()
 	if err != nil {
-		if errors.Is(err, unix.ELOOP) {
-			return ErrNotRegularFile
-		}
 		return err
 	}
-	file := os.NewFile(uintptr(fd), "source")
-	defer file.Close()
+	if !info.Mode().IsRegular() || !sameFingerprint(fingerprintFromInfo(info), expected) {
+		return conflictError("move", name, nil)
+	}
+	opened, err := statxFD(int(file.Fd()))
+	if err != nil {
+		return err
+	}
+	current, err := statxAt(int(parent.Fd()), name, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
+	if !sameSnapshotObject(opened, current) {
+		return conflictError("move", name, nil)
+	}
+	return nil
+}
+
+// requireFileWriteLease 确认文件写租约尚未被外部访问打破。
+func requireFileWriteLease(file *os.File) error {
+	lease, err := unix.FcntlInt(file.Fd(), unix.F_GETLEASE, 0)
+	if err != nil {
+		return err
+	}
+	if lease != unix.F_WRLCK {
+		return ErrConflict
+	}
+	return nil
+}
+
+// verifyQuarantinedMoveFile 在写租约保护下核验隔离项和复制摘要。
+func verifyQuarantinedMoveFile(ctx context.Context, file, quarantine *os.File, quarantinePath string, expected Fingerprint, expectedSHA256 string) error {
+	if err := requireFileWriteLease(file); err != nil {
+		return conflictError("move", quarantinePath, err)
+	}
 	info, err := file.Stat()
 	if err != nil {
 		return err
@@ -513,11 +559,25 @@ func verifyQuarantinedMoveFile(ctx context.Context, quarantine *os.File, quarant
 	if !info.Mode().IsRegular() || !sameFingerprintAfterRename(fingerprintFromInfo(info), expected) {
 		return conflictError("move", quarantinePath, nil)
 	}
+	opened, err := statxFD(int(file.Fd()))
+	if err != nil {
+		return err
+	}
+	current, err := statxAt(int(quarantine.Fd()), "source", unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
+	if !sameSnapshotObject(opened, current) {
+		return conflictError("move", quarantinePath, nil)
+	}
 	digest, err := hex.DecodeString(expectedSHA256)
 	if err != nil || len(digest) != sha256.Size {
 		return ErrConflict
 	}
 	actualDigest := sha256.New()
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
 	count, err := io.Copy(actualDigest, contextReader{ctx: ctx, reader: file})
 	if err != nil {
 		return err
@@ -525,7 +585,7 @@ func verifyQuarantinedMoveFile(ctx context.Context, quarantine *os.File, quarant
 	if count != expected.Size || !sameFingerprintAfterRename(fingerprintFromInfoAfterRead(file), expected) || subtle.ConstantTimeCompare(actualDigest.Sum(nil), digest) != 1 {
 		return conflictError("move", quarantinePath, nil)
 	}
-	return nil
+	return requireFileWriteLease(file)
 }
 
 // restoreFileMoveQuarantine 恢复来源；无法恢复时返回实际保留路径。
