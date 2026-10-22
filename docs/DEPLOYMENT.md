@@ -12,7 +12,7 @@ tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
 cd filesage_vX.Y.Z_linux_amd64
 ```
 
-包内含 `filesage`、预构建页面 `web/`、systemd 模板、环境示例、部署说明和许可证文件。推送已审阅的 `vMAJOR.MINOR.PATCH` 标签会触发构建和发布；当前仓库尚无稳定版 Release。
+包内含 `filesage`、预构建页面 `web/`、systemd 模板、环境示例、部署说明和许可证文件。推送指向 `main` 历史的已审阅 `vMAJOR.MINOR.PATCH` 标签会触发构建和发布；当前仓库尚无稳定版 Release。
 
 ## 从源码构建
 
