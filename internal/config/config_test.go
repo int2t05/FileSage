@@ -19,6 +19,12 @@ func TestNewRequiresSeparateAbsoluteDirectories(t *testing.T) {
 	if cfg.ListenAddr != "127.0.0.1:8080" {
 		t.Fatalf("ListenAddr = %q", cfg.ListenAddr)
 	}
+	if cfg.UploadMaxBytes != defaultUploadMaxBytes {
+		t.Fatalf("UploadMaxBytes = %d, want %d", cfg.UploadMaxBytes, defaultUploadMaxBytes)
+	}
+	if cfg.UploadStagingMaxBytes != defaultUploadStagingMaxBytes {
+		t.Fatalf("UploadStagingMaxBytes = %d, want %d", cfg.UploadStagingMaxBytes, defaultUploadStagingMaxBytes)
+	}
 	if got, want := strings.Join(cfg.AllowedHosts, ","), "127.0.0.1,localhost,::1"; got != want {
 		t.Fatalf("AllowedHosts = %q, want %q", got, want)
 	}
@@ -64,6 +70,8 @@ func TestLoadAddsConfiguredAllowedHosts(t *testing.T) {
 	t.Setenv("FILESAGE_AGENT_MODEL", " qwen3:8b ")
 	t.Setenv("FILESAGE_AGENT_PROVIDER", " ollama ")
 	t.Setenv("FILESAGE_AGENT_API_KEY", " local-secret ")
+	t.Setenv("FILESAGE_UPLOAD_MAX_BYTES", "")
+	t.Setenv("FILESAGE_UPLOAD_STAGING_MAX_BYTES", "")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +81,92 @@ func TestLoadAddsConfiguredAllowedHosts(t *testing.T) {
 	}
 	if cfg.AgentModel.BaseURL != "http://127.0.0.1:11434/v1" || cfg.AgentModel.Model != "qwen3:8b" || cfg.AgentModel.Provider != "ollama" || cfg.AgentModel.APIKey != "local-secret" {
 		t.Fatalf("AgentModel = %#v", cfg.AgentModel)
+	}
+}
+
+func TestLoadConfiguresUploadSizeLimit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  int64
+	}{
+		{name: "default", value: "", want: defaultUploadMaxBytes},
+		{name: "custom", value: "1048576", want: 1 << 20},
+		{name: "unlimited", value: "0", want: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			state := t.TempDir()
+			t.Setenv("FILESAGE_ROOT", root)
+			t.Setenv("FILESAGE_DATA_DIR", filepath.Join(state, "data"))
+			t.Setenv("FILESAGE_WEB_DIR", "")
+			t.Setenv("FILESAGE_LISTEN_ADDR", "127.0.0.1:8080")
+			t.Setenv("FILESAGE_ALLOWED_HOSTS", "")
+			t.Setenv("FILESAGE_UPLOAD_MAX_BYTES", test.value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.UploadMaxBytes != test.want {
+				t.Fatalf("UploadMaxBytes = %d, want %d", cfg.UploadMaxBytes, test.want)
+			}
+		})
+	}
+
+	for _, value := range []string{"-1", "invalid"} {
+		t.Run("invalid "+value, func(t *testing.T) {
+			t.Setenv("FILESAGE_UPLOAD_MAX_BYTES", value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted FILESAGE_UPLOAD_MAX_BYTES=%q", value)
+			}
+		})
+	}
+}
+
+func TestLoadConfiguresUploadStagingLimit(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value string
+		want  int64
+	}{
+		{name: "default", value: "", want: defaultUploadStagingMaxBytes},
+		{name: "custom", value: "1048576", want: 1 << 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			state := t.TempDir()
+			t.Setenv("FILESAGE_ROOT", root)
+			t.Setenv("FILESAGE_DATA_DIR", filepath.Join(state, "data"))
+			t.Setenv("FILESAGE_WEB_DIR", "")
+			t.Setenv("FILESAGE_LISTEN_ADDR", "127.0.0.1:8080")
+			t.Setenv("FILESAGE_ALLOWED_HOSTS", "")
+			t.Setenv("FILESAGE_UPLOAD_STAGING_MAX_BYTES", test.value)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.UploadStagingMaxBytes != test.want {
+				t.Fatalf("UploadStagingMaxBytes = %d, want %d", cfg.UploadStagingMaxBytes, test.want)
+			}
+		})
+	}
+
+	for _, value := range []string{"0", "-1", "invalid"} {
+		t.Run("invalid "+value, func(t *testing.T) {
+			root := t.TempDir()
+			state := t.TempDir()
+			t.Setenv("FILESAGE_ROOT", root)
+			t.Setenv("FILESAGE_DATA_DIR", filepath.Join(state, "data"))
+			t.Setenv("FILESAGE_WEB_DIR", "")
+			t.Setenv("FILESAGE_LISTEN_ADDR", "127.0.0.1:8080")
+			t.Setenv("FILESAGE_ALLOWED_HOSTS", "")
+			t.Setenv("FILESAGE_UPLOAD_STAGING_MAX_BYTES", value)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted FILESAGE_UPLOAD_STAGING_MAX_BYTES=%q", value)
+			}
+		})
 	}
 }
 

@@ -10,15 +10,21 @@ import (
 	"strings"
 )
 
-const defaultListenAddr = "127.0.0.1:8080"
+const (
+	defaultListenAddr            = "127.0.0.1:8080"
+	defaultUploadMaxBytes        = 20 << 30
+	defaultUploadStagingMaxBytes = 20 << 30
+)
 
 type Config struct {
-	RootDir      string
-	DataDir      string
-	WebDir       string
-	ListenAddr   string
-	AllowedHosts []string
-	AgentModel   AgentModelConfig
+	RootDir               string
+	DataDir               string
+	WebDir                string
+	ListenAddr            string
+	AllowedHosts          []string
+	UploadMaxBytes        int64
+	UploadStagingMaxBytes int64
+	AgentModel            AgentModelConfig
 }
 
 // AgentModelConfig 仅在内存中保存模型连接参数。
@@ -35,6 +41,14 @@ func Load() (Config, error) {
 	webDir := strings.TrimSpace(os.Getenv("FILESAGE_WEB_DIR"))
 	listenAddr := strings.TrimSpace(os.Getenv("FILESAGE_LISTEN_ADDR"))
 	allowedHosts := os.Getenv("FILESAGE_ALLOWED_HOSTS")
+	uploadMaxBytes, err := parseUploadMaxBytes(os.Getenv("FILESAGE_UPLOAD_MAX_BYTES"))
+	if err != nil {
+		return Config{}, err
+	}
+	uploadStagingMaxBytes, err := parseUploadStagingMaxBytes(os.Getenv("FILESAGE_UPLOAD_STAGING_MAX_BYTES"))
+	if err != nil {
+		return Config{}, err
+	}
 	if listenAddr == "" {
 		listenAddr = defaultListenAddr
 	}
@@ -42,6 +56,8 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	cfg.UploadMaxBytes = uploadMaxBytes
+	cfg.UploadStagingMaxBytes = uploadStagingMaxBytes
 	cfg.AgentModel = AgentModelConfig{
 		BaseURL:  strings.TrimSpace(os.Getenv("FILESAGE_AGENT_BASE_URL")),
 		Model:    strings.TrimSpace(os.Getenv("FILESAGE_AGENT_MODEL")),
@@ -108,7 +124,35 @@ func newConfig(rootDir, dataDir, webDir, listenAddr, allowedHostsValue string) (
 		return Config{}, err
 	}
 
-	return Config{RootDir: rootPath, DataDir: dataPath, WebDir: webPath, ListenAddr: listenAddr, AllowedHosts: allowedHosts}, nil
+	return Config{
+		RootDir: rootPath, DataDir: dataPath, WebDir: webPath, ListenAddr: listenAddr,
+		AllowedHosts: allowedHosts, UploadMaxBytes: defaultUploadMaxBytes,
+		UploadStagingMaxBytes: defaultUploadStagingMaxBytes,
+	}, nil
+}
+
+// parseUploadMaxBytes 解析单文件上传上限；零表示不限制。
+func parseUploadMaxBytes(value string) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return defaultUploadMaxBytes, nil
+	}
+	limit, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || limit < 0 {
+		return 0, fmt.Errorf("FILESAGE_UPLOAD_MAX_BYTES must be a non-negative integer")
+	}
+	return limit, nil
+}
+
+// parseUploadStagingMaxBytes 解析暂存区总容量，必须大于零。
+func parseUploadStagingMaxBytes(value string) (int64, error) {
+	if strings.TrimSpace(value) == "" {
+		return defaultUploadStagingMaxBytes, nil
+	}
+	limit, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("FILESAGE_UPLOAD_STAGING_MAX_BYTES must be a positive integer")
+	}
+	return limit, nil
 }
 
 // resolveWebDir 解析可选构建目录，并避免将用户文件或服务状态公开为静态资源。

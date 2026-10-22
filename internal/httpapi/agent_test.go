@@ -138,6 +138,45 @@ func TestAgentExecuteRequiresExpectedPlanVersion(t *testing.T) {
 	}
 }
 
+func TestAgentPlanRevisionSupportsMaximumPlanSize(t *testing.T) {
+	stub := &agentServiceStub{plan: store.PlanRecord{ID: "plan-1", TaskID: "task-1", Version: 2, Status: store.PlanAwaitingApproval}}
+	handler := NewWithAgent(nil, nil, nil, stub, nil, nil)
+	operations := make([]agentPlanRevisionOperation, store.MaxAgentPlanOperations)
+	for index := range operations {
+		operations[index] = agentPlanRevisionOperation{
+			Action: "create_directory", SourcePath: "", TargetPath: "整理/目录", Reason: "按用户目标创建目录",
+			Evidence: strings.Repeat("e", 2048),
+		}
+	}
+	body, err := json.Marshal(agentPlanRevisionRequest{ExpectedPlanVersion: 1, Operations: operations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) <= 16<<10 {
+		t.Fatalf("request body = %d bytes, want to exceed the former 16 KiB limit", len(body))
+	}
+	request := httptest.NewRequest(http.MethodPut, "http://filesage.local/api/v1/agent/plans/plan-1/revision", strings.NewReader(string(body)))
+	request.Header.Set("Origin", "http://filesage.local")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || stub.revisions != 1 || len(stub.proposals) != store.MaxAgentPlanOperations {
+		t.Fatalf("revision status=%d calls=%d proposals=%d body=%s", response.Code, stub.revisions, len(stub.proposals), response.Body.String())
+	}
+
+	operations = append(operations, operations[0])
+	body, err = json.Marshal(agentPlanRevisionRequest{ExpectedPlanVersion: 1, Operations: operations})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPut, "http://filesage.local/api/v1/agent/plans/plan-1/revision", strings.NewReader(string(body)))
+	request.Header.Set("Origin", "http://filesage.local")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || stub.revisions != 1 {
+		t.Fatalf("oversized revision status=%d calls=%d body=%s", response.Code, stub.revisions, response.Body.String())
+	}
+}
+
 func TestAgentEveryWriteRouteChecksOrigin(t *testing.T) {
 	stub := &agentServiceStub{plan: store.PlanRecord{
 		ID: "plan-1", TaskID: "task-1", Version: 1, Status: store.PlanApproved,

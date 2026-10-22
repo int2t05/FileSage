@@ -169,6 +169,33 @@ func (r *Root) Remove(rel string) error {
 	return nil
 }
 
+// RemoveEntryIfUnchanged 按确认时的条目状态永久删除单个文件、软链接或空目录。
+func (r *Root) RemoveEntryIfUnchanged(expected Entry) error {
+	rel := expected.Path
+	if err := validateMutationPath(rel); err != nil || hasTrashComponent(rel) {
+		return ErrInvalidPath
+	}
+	if expected.Symlink {
+		if !expected.LinkIdentityAvailable {
+			return ErrIdentityUnavailable
+		}
+	} else {
+		if !expected.IdentityAvailable {
+			return ErrIdentityUnavailable
+		}
+		if !expected.ChangeTimeAvailable {
+			return ErrIdentityUnavailable
+		}
+		if expected.Kind != KindFile && expected.Kind != KindDirectory {
+			return ErrNotRegularFile
+		}
+	}
+	if err := r.rejectSymlinkParents(rel); err != nil {
+		return err
+	}
+	return platformRemoveEntryIfUnchanged(r, expected)
+}
+
 // WriteAtomicIfUnchanged 仅在状态与快照相符时提交完整内容。
 // 零值快照只创建新文件；已存在文件必须提供可用身份快照。
 func (r *Root) WriteAtomicIfUnchanged(rel string, expected Fingerprint, data []byte, perm fs.FileMode) error {

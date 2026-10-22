@@ -9,7 +9,7 @@
 .trash-refresh-button:hover:not(:disabled) { background: #f2f5f1; }
 .trash-refresh-button:disabled,
 .trash-clear-button:disabled { opacity: .56; cursor: not-allowed; }
-.trash-info-note { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 15px; padding: 10px 12px; border: 1px solid #e4e9e2; border-radius: var(--radius-md); background: #fbfcfa; color: #697469; font-size: 11px; line-height: 1.65; }
+.trash-info-note { display: flex; align-items: flex-start; gap: 9px; margin-bottom: 15px; padding: 10px 12px; border: 1px solid #e4e9e2; border-radius: var(--radius-md); background: var(--color-surface-subtle); color: #697469; font-size: 11px; line-height: 1.65; }
 .trash-info-note svg { flex: 0 0 auto; margin-top: 1px; color: var(--color-accent); }
 .trash-notice,
 .trash-error { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid #dbe8de; border-radius: var(--radius-md); background: #f5faf6; color: #4f7058; font-size: 11px; line-height: 1.6; }
@@ -25,7 +25,7 @@
 .trash-toolbar small { color: #8a9389; font-size: 10px; }
 .trash-clear-button { min-height: 36px; border-color: #ead6d2; background: #fffafa; color: var(--color-danger); white-space: nowrap; }
 .trash-clear-button:hover:not(:disabled) { background: var(--color-danger-soft); }
-.trash-state { display: grid; justify-items: center; gap: 7px; min-height: 230px; padding: 40px 18px; border: 1px dashed #d9dfd7; border-radius: var(--radius-lg); background: #fbfcfa; text-align: center; }
+.trash-state { display: grid; justify-items: center; gap: 7px; min-height: 230px; padding: 40px 18px; border: 1px dashed #d9dfd7; border-radius: var(--radius-lg); background: var(--color-surface-subtle); text-align: center; }
 .trash-state > svg { color: #929b91; }
 .trash-state > strong { margin-top: 3px; color: #4d574c; font-size: 13px; }
 .trash-state > p { max-width: 360px; margin: 0; color: #858e83; font-size: 11px; line-height: 1.6; }
@@ -72,7 +72,7 @@
 .trash-dialog-error { color: var(--color-danger) !important; }
 .trash-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 .trash-dialog-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 0 12px; border: 1px solid var(--color-line); border-radius: var(--radius-md); background: #fff; color: #667064; font-size: 11px; font-weight: 600; cursor: pointer; }
-.trash-dialog-actions button:hover:not(:disabled) { background: #f3f5f2; }
+.trash-dialog-actions button:hover:not(:disabled) { background: var(--color-surface-muted); }
 .trash-dialog-actions button.is-danger { border-color: var(--color-danger); background: var(--color-danger); color: #fff; }
 .trash-dialog-actions button.is-danger:hover:not(:disabled) { background: #9c4138; }
 .trash-dialog-actions button:disabled { opacity: .58; cursor: wait; }

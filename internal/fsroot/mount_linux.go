@@ -24,7 +24,7 @@ func platformRegisterMounts(rootPath string) ([]registeredMount, error) {
 	}
 	defer file.Close()
 
-	paths := make(map[string]map[uint64]struct{})
+	paths := make(map[string]map[uint64]bool)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 4096), 1<<20)
 	for scanner.Scan() {
@@ -43,9 +43,9 @@ func platformRegisterMounts(rootPath string) ([]registeredMount, error) {
 		}
 		relative = filepath.ToSlash(relative)
 		if paths[relative] == nil {
-			paths[relative] = make(map[uint64]struct{})
+			paths[relative] = make(map[uint64]bool)
 		}
-		paths[relative][id] = struct{}{}
+		paths[relative][id] = mountOptionsReadOnly(fields[5])
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("read mount table: %w", err)
@@ -62,11 +62,29 @@ func platformRegisterMounts(rootPath string) ([]registeredMount, error) {
 		if err != nil {
 			return nil, fmt.Errorf("inspect mount %q: %w", relative, err)
 		}
-		if _, visible := paths[relative][currentID]; visible {
-			mounts = append(mounts, registeredMount{path: relative, id: currentID})
+		if readOnly, visible := paths[relative][currentID]; visible {
+			mounts = append(mounts, registeredMount{path: relative, id: currentID, readOnly: readOnly})
 		}
 	}
 	return mounts, nil
+}
+
+// platformRootReadOnly 检查管理根目录所在文件系统状态。
+func platformRootReadOnly(rootPath string) (bool, error) {
+	var stat unix.Statfs_t
+	if err := unix.Statfs(rootPath, &stat); err != nil {
+		return false, err
+	}
+	return stat.Flags&unix.ST_RDONLY != 0, nil
+}
+
+func mountOptionsReadOnly(options string) bool {
+	for _, option := range strings.Split(options, ",") {
+		if option == "ro" {
+			return true
+		}
+	}
+	return false
 }
 
 // platformMountIDAt 返回路径当前所在的挂载实例。

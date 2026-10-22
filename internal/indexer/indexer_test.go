@@ -122,7 +122,55 @@ func TestDecodeCaptureDateFromJPEG(t *testing.T) {
 	}
 }
 
+func TestDecodeCaptureDateFromTIFF(t *testing.T) {
+	got := decodeCaptureDate(bytes.NewReader(tiffWithCaptureDate("2020:01:02 03:04:05")), imagemeta.TIFF)
+	want := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+	if got == nil || !got.Equal(want) {
+		t.Fatalf("capture date = %v, want %v", got, want)
+	}
+}
+
+func TestImageFormatFromExtension(t *testing.T) {
+	tests := []struct {
+		name string
+		want imagemeta.ImageFormat
+		ok   bool
+	}{
+		{name: "camera.JPG", want: imagemeta.JPEG, ok: true},
+		{name: "scan.tiff", want: imagemeta.TIFF, ok: true},
+		{name: "image.png", want: imagemeta.PNG, ok: true},
+		{name: "image.webp", want: imagemeta.WebP, ok: true},
+		{name: "image.heic", want: imagemeta.HEIF, ok: true},
+		{name: "image.heif", want: imagemeta.HEIF, ok: true},
+		{name: "image.avif", want: imagemeta.AVIF, ok: true},
+		{name: "image.dng", want: imagemeta.DNG, ok: true},
+		{name: "image.cr2", want: imagemeta.CR2, ok: true},
+		{name: "image.nef", want: imagemeta.NEF, ok: true},
+		{name: "image.arw", want: imagemeta.ARW, ok: true},
+		{name: "image.pef", want: imagemeta.PEF, ok: true},
+		{name: "image.gif", want: imagemeta.ImageFormatAuto},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := imageFormat(tt.name)
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("imageFormat(%q) = (%v, %v), want (%v, %v)", tt.name, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+// jpegWithCaptureDate 将 TIFF 样本封装为 JPEG EXIF 段。
 func jpegWithCaptureDate(value string) []byte {
+	payload := append([]byte("Exif\x00\x00"), tiffWithCaptureDate(value)...)
+	segmentLength := uint16(len(payload) + 2)
+	jpeg := []byte{0xff, 0xd8, 0xff, 0xe1, byte(segmentLength >> 8), byte(segmentLength)}
+	jpeg = append(jpeg, payload...)
+	return append(jpeg, 0xff, 0xda)
+}
+
+// tiffWithCaptureDate 构造含拍摄时间的最小 TIFF 样本。
+func tiffWithCaptureDate(value string) []byte {
 	tiff := make([]byte, 64)
 	copy(tiff, "II")
 	binary.LittleEndian.PutUint16(tiff[2:4], 42)
@@ -138,10 +186,5 @@ func jpegWithCaptureDate(value string) []byte {
 	binary.LittleEndian.PutUint32(tiff[32:36], 20)
 	binary.LittleEndian.PutUint32(tiff[36:40], 44)
 	copy(tiff[44:64], value+"\x00")
-
-	payload := append([]byte("Exif\x00\x00"), tiff...)
-	segmentLength := uint16(len(payload) + 2)
-	jpeg := []byte{0xff, 0xd8, 0xff, 0xe1, byte(segmentLength >> 8), byte(segmentLength)}
-	jpeg = append(jpeg, payload...)
-	return append(jpeg, 0xff, 0xda)
+	return tiff
 }

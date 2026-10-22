@@ -2,14 +2,18 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"filesage/internal/fsroot"
+	"filesage/internal/logging"
 	"filesage/internal/store"
 )
 
@@ -58,6 +62,42 @@ func TestStartPlanUsesPersistedDefaultBypassAfterReview(t *testing.T) {
 	}
 }
 
+func TestAgentToolStepLogsStatusWithoutUserPaths(t *testing.T) {
+	ctx := logging.WithRequestID(context.Background(), "request-test-id")
+	previousLogger := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(logging.NewRequestIDHandler(slog.NewTextHandler(&output, nil))))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	_, _, service := permissionFixture(t)
+	const privatePath = "private-folder-token"
+	plan, err := service.Propose(ctx, Proposal{
+		RequestText: "建立文件夹", Action: "create_directory", TargetPath: privatePath,
+		Reason: "按用户请求建立文件夹",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, err := service.Execute(ctx, plan.ID, approved.Version)
+	if err != nil || completed.Operations[0].Status != store.OperationSucceeded {
+		t.Fatalf("Execute() = (%#v, %v)", completed, err)
+	}
+
+	logs := output.String()
+	for _, expected := range []string{"agent tool step started", "agent tool step completed", "request_id=request-test-id", "plan_id=", "operation_id=", "action=create_directory", "status=succeeded", "duration_ms="} {
+		if !strings.Contains(logs, expected) {
+			t.Errorf("tool logs %q do not include %q", logs, expected)
+		}
+	}
+	if strings.Contains(logs, privatePath) {
+		t.Fatalf("tool logs expose a managed path: %s", logs)
+	}
+}
+
 func TestStartPlanRejectsBypassWhenPermissionIsDisabled(t *testing.T) {
 	ctx := context.Background()
 	metadata, root, service := permissionFixture(t)
@@ -97,6 +137,21 @@ func TestAgentToolCatalogRequiresExplicitBoundedCapabilities(t *testing.T) {
 	}
 	if !seen["run_shell"] || !seen["rename"] || !seen["trash"] {
 		t.Fatalf("catalog is missing bounded file or Shell tools: %#v", seen)
+	}
+}
+
+func TestPlanOperationLimitsKeepOneGlobalBoundAndToolSpecificCaps(t *testing.T) {
+	if got := maxProposalOperations([]Proposal{{Action: "create_directory"}}); got != store.MaxAgentPlanOperations {
+		t.Fatalf("general proposal limit = %d, want %d", got, store.MaxAgentPlanOperations)
+	}
+	if got := maxProposalOperations([]Proposal{{Action: "create_archive"}}); got != 1 {
+		t.Fatalf("archive proposal limit = %d, want 1", got)
+	}
+	if got := maxProposalOperations([]Proposal{{Action: "archive_photo", ConversationID: "conversation"}}); got != store.MaxAgentPlanOperations {
+		t.Fatalf("conversation photo archive limit = %d, want %d", got, store.MaxAgentPlanOperations)
+	}
+	if got := maxStoredPlanOperations([]store.OperationRecord{{Action: "create_directory"}}); got != store.MaxAgentPlanOperations {
+		t.Fatalf("stored general plan limit = %d, want %d", got, store.MaxAgentPlanOperations)
 	}
 }
 

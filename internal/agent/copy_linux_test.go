@@ -94,6 +94,66 @@ func TestCopyFileRejectsChangedSourceAndOccupiedTarget(t *testing.T) {
 		}
 	})
 
+	t.Run("open handle after approval invalidates execution", func(t *testing.T) {
+		rootPath := t.TempDir()
+		if err := os.Mkdir(filepath.Join(rootPath, "destination"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		sourcePath := filepath.Join(rootPath, "source.txt")
+		if err := os.WriteFile(sourcePath, []byte("approved"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		metadata, root, service := openAgentTestServices(t, filepath.Join(t.TempDir(), "filesage.sqlite"), rootPath)
+		defer root.Close()
+		defer metadata.Close()
+		plan, err := service.Propose(ctx, copyFileProposal("source.txt", "destination/copy.txt"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve"); err != nil {
+			t.Fatal(err)
+		}
+		approvedInfo, err := os.Stat(sourcePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		approvedEntry, err := root.LstatEntry("source.txt")
+		if err != nil {
+			t.Fatal(err)
+		}
+		handle, externalData := rewriteThroughOpenHandlePreservingIdentityAndMtime(t, sourcePath, approvedInfo)
+		defer handle.Close()
+		currentEntry, err := root.LstatEntry("source.txt")
+		if err != nil || !currentEntry.ChangeTimeAvailable || currentEntry.ChangedAt.Equal(approvedEntry.ChangedAt) {
+			t.Fatalf("same-inode rewrite did not change ctime: entry=%#v err=%v", currentEntry, err)
+		}
+
+		updated, err := service.Execute(ctx, plan.ID)
+		if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated || updated.Operations[0].Approval != store.ApprovalInvalidated {
+			t.Fatalf("copy after open-handle change = (%#v, %v), want invalidated conflict", updated, err)
+		}
+		if content, err := os.ReadFile(sourcePath); err != nil || string(content) != externalData {
+			t.Fatalf("external source changed: content=%q err=%v", content, err)
+		}
+		if _, err := os.Stat(filepath.Join(rootPath, "destination", "copy.txt")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("stale source was copied: %v", err)
+		}
+		events, err := metadata.AuditForTask(ctx, plan.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var staleAudit bool
+		for _, event := range events {
+			if event.PlanID == plan.ID && event.OperationID == plan.Operations[0].ID && event.EventType == "operation_invalidated" && event.Outcome == "stale" {
+				staleAudit = true
+				break
+			}
+		}
+		if !staleAudit {
+			t.Fatalf("open-handle conflict has no stale audit record: %#v", events)
+		}
+	})
+
 	t.Run("occupied target is preserved", func(t *testing.T) {
 		rootPath := t.TempDir()
 		if err := os.Mkdir(filepath.Join(rootPath, "destination"), 0o755); err != nil {

@@ -1611,6 +1611,25 @@ ALTER TABLE agent_conversations ADD COLUMN context_summary TEXT NOT NULL DEFAULT
 	CHECK (length(CAST(context_summary AS BLOB)) <= 4096);
 `,
 	},
+	{
+		version: 29,
+		// 用复合索引覆盖默认目录排序和递归搜索排序。
+		sql: `
+DROP INDEX file_index_generation_parent_name;
+CREATE INDEX file_index_generation_parent_order_name
+ON file_index_generation_entries(
+	generation, parent_path,
+	(CASE WHEN kind = 'directory' THEN 0 ELSE 1 END),
+	name COLLATE NOCASE, relative_path
+);
+CREATE INDEX file_index_generation_order_name
+ON file_index_generation_entries(
+	generation,
+	(CASE WHEN kind = 'directory' THEN 0 ELSE 1 END),
+	name COLLATE NOCASE, relative_path
+);
+`,
+	},
 }
 
 // migrate 顺序应用迁移，并清理旧 Shell 输出的 SQLite 残留。

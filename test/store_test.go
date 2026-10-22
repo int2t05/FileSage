@@ -31,8 +31,8 @@ func TestStoreMigratesAndPersistsMetadataAcrossReopen(t *testing.T) {
 	if err := db.Health(ctx); err != nil {
 		t.Fatalf("Health() error = %v", err)
 	}
-	if version, err := db.SchemaVersion(ctx); err != nil || version != 28 {
-		t.Fatalf("SchemaVersion() = (%d, %v), want (28, nil)", version, err)
+	if version, err := db.SchemaVersion(ctx); err != nil || version != 29 {
+		t.Fatalf("SchemaVersion() = (%d, %v), want (29, nil)", version, err)
 	}
 
 	if err := db.UpsertFileIndex(ctx, store.FileIndexRecord{
@@ -141,8 +141,8 @@ func TestStoreMigratesAndPersistsMetadataAcrossReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reopen Open() error = %v", err)
 	}
-	if version, err := db.SchemaVersion(ctx); err != nil || version != 28 {
-		t.Fatalf("reopened SchemaVersion() = (%d, %v), want (28, nil)", version, err)
+	if version, err := db.SchemaVersion(ctx); err != nil || version != 29 {
+		t.Fatalf("reopened SchemaVersion() = (%d, %v), want (29, nil)", version, err)
 	}
 
 	fileRecord, err := db.FileIndex(ctx, "documents/contract.pdf")

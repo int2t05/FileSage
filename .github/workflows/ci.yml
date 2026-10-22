@@ -27,7 +27,14 @@ jobs:
             printf '%s\n' "$unformatted_go_files"
             exit 1
           fi
+      - name: Verify systemd service unit
+        run: |
+          # 固定生产路径需要可执行文件，CI 用无副作用占位程序满足静态校验。
+          sudo install -D -m 0755 /usr/bin/true /usr/local/lib/filesage/filesage
+          systemd-analyze verify deploy/filesage.service
       - run: go test -count=1 ./...
+      - name: Check Agent request-context logging for races
+        run: go test -race -count=1 ./internal/logging ./internal/httpapi ./internal/agent
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go build ./...
@@ -59,3 +66,13 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - run: npm run e2e
+      - name: Build and smoke-test Linux release package
+        working-directory: .
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/filesage ./cmd/filesage
+          output="$(bash scripts/package-release.sh v0.0.0 "$GITHUB_SHA")"
+          printf '%s\n' "$output"
+          archive="$(printf '%s\n' "$output" | sed -n 's/^archive=//p')"
+          bash scripts/smoke-release-package.sh "$archive" filesage_v0.0.0_linux_amd64

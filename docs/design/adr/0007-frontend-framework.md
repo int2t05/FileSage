@@ -2,7 +2,7 @@
 
 ## 状态
 
-**Accepted（2026-10-15）。**用户指定 React，并授权按建议定稿其余设计选项。
+**已采纳。**React、TypeScript、Vite、Radix Primitives 与 Lucide 已用于当前前端。
 
 ## 决策
 

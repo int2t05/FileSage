@@ -3,6 +3,8 @@ package fsroot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,15 +17,28 @@ type FileCopyResult struct {
 	Published bool
 }
 
-// FileMoveResult 记录目标发布、源删除和跨卷复制摘要。
+// FileMoveResult 记录移动结果及冲突时保留的来源路径。
 type FileMoveResult struct {
-	Published     bool
-	SourceRemoved bool
-	SHA256        string
+	Published      bool
+	SourceRemoved  bool
+	SourceRetained string
+	SHA256         string
+}
+
+// MoveRecoverySummary 汇总启动时恢复、清理与待人工核查的移动记录。
+type MoveRecoverySummary struct {
+	Restored int
+	Cleaned  int
+	Pending  int
 }
 
 // CopyFileNoReplace 只复制状态未变化的普通文件，目标始终禁止覆盖。
 func (r *Root) CopyFileNoReplace(ctx context.Context, source, destination string, expected Fingerprint) (FileCopyResult, error) {
+	return r.copyFileNoReplace(ctx, source, destination, expected, "")
+}
+
+// copyFileNoReplace 按可选摘要校验后原子发布副本。
+func (r *Root) copyFileNoReplace(ctx context.Context, source, destination string, expected Fingerprint, expectedSHA256 string) (FileCopyResult, error) {
 	if err := validateFileOperationPaths(source, destination, expected); err != nil {
 		return FileCopyResult{}, err
 	}
@@ -44,11 +59,25 @@ func (r *Root) CopyFileNoReplace(ctx context.Context, source, destination string
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return FileCopyResult{}, fmt.Errorf("inspect copy target %q: %w", destination, err)
 	}
-	return platformCopyFileNoReplace(ctx, r, source, destination, expected)
+	return platformCopyFileNoReplace(ctx, r, source, destination, expected, expectedSHA256)
 }
 
-// MoveFileNoReplace 同卷原子移动；跨卷先复制并核验，再删除未变化的源文件。
+// MoveFileNoReplace 同卷原子移动并复核来源；跨卷复制后复核再删除源文件。
 func (r *Root) MoveFileNoReplace(ctx context.Context, source, destination string, expected Fingerprint) (FileMoveResult, error) {
+	return r.moveFileNoReplace(ctx, source, destination, expected, "")
+}
+
+// MoveFileNoReplaceWithSHA256 仅在内容与调用方提供的摘要一致时提交来源。
+func (r *Root) MoveFileNoReplaceWithSHA256(ctx context.Context, source, destination string, expected Fingerprint, expectedSHA256 string) (FileMoveResult, error) {
+	digest, err := hex.DecodeString(expectedSHA256)
+	if err != nil || len(digest) != sha256.Size {
+		return FileMoveResult{}, fmt.Errorf("move content digest: %w", fs.ErrInvalid)
+	}
+	return r.moveFileNoReplace(ctx, source, destination, expected, expectedSHA256)
+}
+
+// moveFileNoReplace 按可选摘要校验后移动文件。
+func (r *Root) moveFileNoReplace(ctx context.Context, source, destination string, expected Fingerprint, expectedSHA256 string) (FileMoveResult, error) {
 	if err := validateFileOperationPaths(source, destination, expected); err != nil {
 		return FileMoveResult{}, err
 	}
@@ -77,13 +106,13 @@ func (r *Root) MoveFileNoReplace(ctx context.Context, source, destination string
 		if err := ctx.Err(); err != nil {
 			return FileMoveResult{}, err
 		}
-		if err := r.RenameNoReplace(source, destination); err != nil {
-			return FileMoveResult{}, err
-		}
-		return FileMoveResult{Published: true, SourceRemoved: true}, nil
+		return platformMoveFileSameMountNoReplace(ctx, r, source, destination, expected, expectedSHA256)
+	}
+	if err := platformRequireMoveRecovery(r); err != nil {
+		return FileMoveResult{}, err
 	}
 
-	copyResult, err := r.CopyFileNoReplace(ctx, source, destination, expected)
+	copyResult, err := r.copyFileNoReplace(ctx, source, destination, expected, expectedSHA256)
 	outcome := FileMoveResult{Published: copyResult.Published, SHA256: copyResult.SHA256}
 	if err != nil {
 		return outcome, err
@@ -91,8 +120,9 @@ func (r *Root) MoveFileNoReplace(ctx context.Context, source, destination string
 	if err := ctx.Err(); err != nil {
 		return outcome, err
 	}
-	removed, err := platformRemoveFileIfUnchanged(r, source, expected)
+	removed, retained, err := platformRemoveFileIfUnchanged(ctx, r, source, destination, expected, copyResult.SHA256)
 	outcome.SourceRemoved = removed
+	outcome.SourceRetained = retained
 	return outcome, err
 }
 
