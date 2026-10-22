@@ -76,6 +76,7 @@ npm run e2e
 - [产品需求](docs/PRD.md) · [技术决策与 ADR](docs/TECH.md)
 - [UI/UX 设计](docs/design/UIUX.md) · [图标展示页](docs/design/icon-study.html) · [交互原型](docs/design/prototype/README.md)
 - [功能验收与格式支持](docs/ACCEPTANCE.md)
+- [项目进度与后续工作](docs/IMPLEMENTATION_PLAN.md)
 - [竞品与实现调研](reference/README.md)
 - [参与贡献](CONTRIBUTING.md) · [安全问题反馈](SECURITY.md)
 

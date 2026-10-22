@@ -88,6 +88,7 @@ vulnerability scanning and a Linux package smoke test.
 - [Product requirements](docs/PRD.md) · [technical decisions and ADRs](docs/TECH.md)
 - [UI/UX](docs/design/UIUX.md) · [icon gallery](docs/design/icon-study.html) · [interactive prototype](docs/design/prototype/README.md)
 - [Feature acceptance and format support](docs/ACCEPTANCE.md)
+- [Project progress and remaining work](docs/IMPLEMENTATION_PLAN.md)
 - [Competitor and implementation research](reference/README.md)
 - [Contributing](CONTRIBUTING.md) · [security reporting](SECURITY.md)
 
