@@ -6,7 +6,7 @@
 
 | 范围 | 结果 | 边界 |
 | --- | --- | --- |
-| GitHub 主线 | 当前主线提交 `e6c0afc` 的[主线 CI](https://github.com/int2t05/FileSage/actions/runs/39722544926) 全部通过。PR #1、#2、#4、#8、#9 已合并，重复或过期的 #3、#5、#6、#7 已关闭；开放 PR 为 0，远端仅保留 `main` 分支。 | 主线检查通过不代表已发布稳定版；目前没有 GitHub Release。 |
+| GitHub 主线 | 代码基线提交 `5a11290` 的[主线 CI](https://github.com/int2t05/FileSage/actions/runs/39721625805) 全部通过。PR #1、#2、#4、#8、#9 已合并，重复或过期的 #3、#5、#6、#7 已关闭；开放 PR 为 0，远端仅保留 `main` 分支。 | 主线检查通过不代表已发布稳定版；目前没有 GitHub Release。 |
 | Linux 发布候选 | 以 `5a11290b8bd8e85eafe52e59a95b9aab8144b9a5` 验收。GitHub CI 的 Go/Web 检查、race、漏洞扫描、npm 审计、测试、类型检查、生产构建、Chromium E2E 和 Linux 发布包冒烟均通过。Linux 原生构建包大小 14,946,537 字节，SHA-256 为 `fbb5a634d5ae506545b99090a6d7b8b9653aad8382d4134b8c0719b4e37669f7`；在隔离数据目录通过启动／写入／重启／读取冒烟。 | 使用合成文件和固定测试模型；尚未创建正式 Release。 |
 | 持久服务器 | 已部署 `5a11290`，Go 1.27.3；systemd 服务运行，LAN 健康接口返回 `ok`，网页 HTTP 200。`CAP_LEASE` 已加入服务能力集。SQLite schema v29，`integrity_check` 为 `ok`，外键违规为 0；管理根下的 ext4 卷已挂载并纳入 systemd 挂载依赖。另在 `/dev/sda` ext4 上以独立临时根运行已部署二进制，通过健康检查、建目录、文本原子创建／覆盖、版本校验改名、移入回收站及删除后 404；临时服务与数据已清理。 | 生产管理根目录的 Agent 文件写入、主机防火墙和路由器端口转发仍未验收。 |
 | 备份与恢复 | 隔离根目录和数据目录的恢复演练中，篡改并删除测试数据后恢复、重启，API 可读到原文件。当前唯一回退点 `/usr/local/lib/filesage/rollback-before-5a11290` 包含上一版本二进制、网页、systemd 与环境配置及 SQLite v29 快照；快照完整性检查通过。 | 恢复演练为同机同盘；未验证独立主机、独立备份介质、整机故障或介质损坏。 |
