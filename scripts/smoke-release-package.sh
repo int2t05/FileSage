@@ -36,6 +36,8 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$smoke/extract" "$smoke/root" "$smoke/data" "$smoke/empty-path"
+root="$smoke/root"
+data="$smoke/data"
 tar -xzf "$archive" -C "$smoke/extract"
 package="$smoke/extract/$bundle"
 test -x "$package/filesage"
@@ -53,8 +55,8 @@ port=18089
 name="release-smoke-$$"
 start_server() {
   PATH="$smoke/empty-path" \
-  FILESAGE_ROOT="$smoke/root" \
-  FILESAGE_DATA_DIR="$smoke/data" \
+  FILESAGE_ROOT="$root" \
+  FILESAGE_DATA_DIR="$data" \
   FILESAGE_WEB_DIR="$package/web" \
   FILESAGE_LISTEN_ADDR="127.0.0.1:$port" \
     "$package/filesage" >> "$smoke/server.log" 2>&1 &
@@ -112,4 +114,36 @@ for attempt in $(seq 1 20); do
 done
 test "$listed" = 1
 test -d "$smoke/root/$name"
-echo "Release package smoke test passed (start, write, restart, read)."
+
+kill -TERM "$server_pid"
+wait "$server_pid"
+server_pid=
+
+printf 'FileSage synthetic restore sample\n' > "$root/$name/restore.txt"
+backup="$smoke/backup"
+restore="$smoke/restore"
+mkdir -p "$backup" "$restore/root" "$restore/data"
+tar --acls --xattrs --numeric-owner -cpf "$backup/managed-root.tar" -C "$root" .
+tar --acls --xattrs --numeric-owner -cpf "$backup/service-data.tar" -C "$data" .
+(cd "$backup" && sha256sum managed-root.tar service-data.tar > SHA256SUMS)
+(cd "$backup" && sha256sum -c SHA256SUMS)
+tar --acls --xattrs --numeric-owner -xpf "$backup/managed-root.tar" -C "$restore/root"
+tar --acls --xattrs --numeric-owner -xpf "$backup/service-data.tar" -C "$restore/data"
+cmp "$root/$name/restore.txt" "$restore/root/$name/restore.txt"
+
+root="$restore/root"
+data="$restore/data"
+start_server
+wait_for_server
+
+listed=0
+for attempt in $(seq 1 20); do
+  if curl -fsS --get --data-urlencode "path=$name" "http://127.0.0.1:$port/api/v1/files" -o "$smoke/list-after-restore.json" \
+    && grep -q 'restore.txt' "$smoke/list-after-restore.json"; then
+    listed=1
+    break
+  fi
+  sleep 1
+done
+test "$listed" = 1
+echo "Release package smoke test passed (start, write, restart, backup, restore, read)."
