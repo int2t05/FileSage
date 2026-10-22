@@ -51,6 +51,7 @@ type executionPaths struct {
 	programDir   string
 	bwrap        string
 	prlimit      string
+	setpriv      string
 	readOnlyDir  []bindMount
 	readOnlyFile []bindMount
 	loaderPath   string
@@ -74,7 +75,7 @@ var (
 	defaultErr       error
 )
 
-// New 查找 LibreOffice、Bubblewrap 和 prlimit；缺少任一依赖时不启用转换。
+// New 查找 Office 转换与隔离工具；缺少依赖时不启用转换。
 func New() (*Converter, error) {
 	paths, err := discoverPaths()
 	if err != nil {
@@ -102,7 +103,7 @@ func Convert(ctx context.Context, data []byte, extension string) ([]byte, error)
 }
 
 func newConverter(paths executionPaths, options converterOptions) (*Converter, error) {
-	if paths.oosplash == "" || paths.programDir == "" || paths.bwrap == "" || paths.prlimit == "" {
+	if paths.oosplash == "" || paths.programDir == "" || paths.bwrap == "" || paths.prlimit == "" || paths.setpriv == "" {
 		return nil, ErrUnavailable
 	}
 	timeout := options.timeout

@@ -31,6 +31,7 @@ const (
 type toolPaths struct {
 	bwrap   string
 	prlimit string
+	setpriv string
 	mounts  []systemMount
 }
 
@@ -60,9 +61,8 @@ func platformCheckAvailability(ctx context.Context) error {
 	}
 	probeCommand := "test -x /bin/sh && test -d /proc && test -c /dev/null && test ! -e /home && test ! -e /root && test ! -e /etc/passwd && test \"$(wc -l < /proc/net/route)\" -le 1 && ! printf x >/probe 2>/dev/null && printf ok >/tmp/probe"
 	args := sandboxArgs(tools, 8<<20, ".", probeCommand, true)
-	limits := []string{"--cpu=2:3", "--as=536870912:536870912", fmt.Sprintf("--nproc=%d:%d", processLimit, processLimit), "--fsize=1048576:1048576", "--", tools.bwrap}
-	limits = append(limits, args...)
-	cmd := exec.CommandContext(probeCtx, tools.prlimit, limits...)
+	limits := []string{"--cpu=2:3", "--as=536870912:536870912", fmt.Sprintf("--nproc=%d:%d", processLimit, processLimit), "--fsize=1048576:1048576"}
+	cmd := exec.CommandContext(probeCtx, tools.prlimit, limitedSandboxArgs(tools, limits, args)...)
 	cgroup, err := cgroups.createSandboxCgroup(DefaultLimits())
 	if err != nil {
 		return err
@@ -167,9 +167,8 @@ func platformExecute(ctx context.Context, req Request) (Result, error) {
 		fmt.Sprintf("--as=%d:%d", req.Limits.AddressSpaceBytes, req.Limits.AddressSpaceBytes),
 		fmt.Sprintf("--nproc=%d:%d", processLimit, processLimit),
 		fmt.Sprintf("--fsize=%d:%d", req.Limits.FileSizeBytes, req.Limits.FileSizeBytes),
-		"--", tools.bwrap,
 	}
-	prlimitArgs = append(prlimitArgs, args...)
+	prlimitArgs = limitedSandboxArgs(tools, prlimitArgs, args)
 	runCtx, cancel := context.WithTimeout(ctx, req.Limits.WallTime)
 	defer cancel()
 	cmd := exec.CommandContext(runCtx, tools.prlimit, prlimitArgs...)
@@ -464,7 +463,11 @@ func discoverTools() (toolPaths, error) {
 	if err != nil {
 		return toolPaths{}, err
 	}
-	paths := toolPaths{bwrap: bwrap, prlimit: prlimit}
+	setpriv, err := trustedExecutable("setpriv")
+	if err != nil {
+		return toolPaths{}, err
+	}
+	paths := toolPaths{bwrap: bwrap, prlimit: prlimit, setpriv: setpriv}
 	seen := make(map[string]struct{})
 	for _, target := range []string{"/bin", "/usr/bin", "/lib", "/lib64", "/usr/lib"} {
 		resolved, err := filepath.EvalSymlinks(target)
@@ -493,7 +496,14 @@ func discoverTools() (toolPaths, error) {
 	return paths, nil
 }
 
-// trustedExecutable 验证 Bubblewrap 和 prlimit 来自不可写系统目录。
+// limitedSandboxArgs 清除服务能力后再启动 Bubblewrap。
+func limitedSandboxArgs(tools toolPaths, limits, sandboxArgs []string) []string {
+	args := append([]string(nil), limits...)
+	args = append(args, "--", tools.setpriv, "--ambient-caps=-all", "--", tools.bwrap)
+	return append(args, sandboxArgs...)
+}
+
+// trustedExecutable 验证隔离执行工具来自不可写系统目录。
 func trustedExecutable(name string) (string, error) {
 	resolved, err := exec.LookPath(name)
 	if err != nil {

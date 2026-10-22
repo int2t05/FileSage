@@ -111,6 +111,10 @@ func discoverPaths() (executionPaths, error) {
 	if err != nil {
 		return executionPaths{}, fmt.Errorf("%w: prlimit was not found", ErrUnavailable)
 	}
+	setpriv, err := exec.LookPath("setpriv")
+	if err != nil {
+		return executionPaths{}, fmt.Errorf("%w: setpriv was not found", ErrUnavailable)
+	}
 	bwrap, err = filepath.EvalSymlinks(bwrap)
 	if err != nil {
 		return executionPaths{}, fmt.Errorf("%w: bubblewrap path is invalid", ErrUnavailable)
@@ -119,9 +123,13 @@ func discoverPaths() (executionPaths, error) {
 	if err != nil {
 		return executionPaths{}, fmt.Errorf("%w: prlimit path is invalid", ErrUnavailable)
 	}
+	setpriv, err = filepath.EvalSymlinks(setpriv)
+	if err != nil {
+		return executionPaths{}, fmt.Errorf("%w: setpriv path is invalid", ErrUnavailable)
+	}
 
 	paths := executionPaths{
-		oosplash: oosplash, programDir: programDir, bwrap: bwrap, prlimit: prlimit,
+		oosplash: oosplash, programDir: programDir, bwrap: bwrap, prlimit: prlimit, setpriv: setpriv,
 	}
 	if err := addReadOnlyDir(&paths, installDir, installDir); err != nil {
 		return executionPaths{}, err
@@ -239,7 +247,7 @@ func runConverter(ctx context.Context, paths executionPaths, workDir string, for
 func runSandbox(ctx context.Context, paths executionPaths, args []string) error {
 	commandArgs := []string{
 		"--as=" + strconv.FormatInt(officeAddressSpaceLimit, 10), "--cpu=45", "--fsize=" + strconv.FormatInt(MaxOutputBytes, 10),
-		"--nofile=128", "--nproc=512", "--", paths.bwrap,
+		"--nofile=128", "--nproc=512", "--", paths.setpriv, "--ambient-caps=-all", "--", paths.bwrap,
 	}
 	commandArgs = append(commandArgs, args...)
 	command := exec.CommandContext(ctx, paths.prlimit, commandArgs...)

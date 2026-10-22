@@ -169,7 +169,7 @@ func writeOfficePreviewError(w http.ResponseWriter, err error) {
 	case errors.Is(err, office.ErrUnsupportedFormat):
 		writeError(w, http.StatusUnsupportedMediaType, "仅支持 DOCX 和 PPTX 文件的 PDF 预览。")
 	case errors.Is(err, office.ErrUnavailable):
-		writeError(w, http.StatusServiceUnavailable, "Office PDF 预览未启用；请安装 LibreOffice、Bubblewrap 和 prlimit 后重启服务。")
+		writeError(w, http.StatusServiceUnavailable, "Office PDF 预览未启用；请安装 LibreOffice、Bubblewrap、prlimit 和 util-linux 后重启服务。")
 	case errors.Is(err, office.ErrInputTooLarge), errors.Is(err, office.ErrExpandedTooLarge), errors.Is(err, office.ErrOutputTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "Office 文件或派生预览超过安全处理上限。")
 	case errors.Is(err, context.DeadlineExceeded):

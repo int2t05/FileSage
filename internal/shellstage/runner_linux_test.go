@@ -84,6 +84,14 @@ func TestExecuteKeepsHostAndBaselineOutsideSandbox(t *testing.T) {
 	}
 }
 
+func TestLimitedSandboxArgsClearsAmbientCapabilities(t *testing.T) {
+	got := limitedSandboxArgs(toolPaths{setpriv: "/usr/bin/setpriv", bwrap: "/usr/bin/bwrap"}, []string{"--cpu=2:3"}, []string{"--unshare-user"})
+	want := []string{"--cpu=2:3", "--", "/usr/bin/setpriv", "--ambient-caps=-all", "--", "/usr/bin/bwrap", "--unshare-user"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("limited sandbox args = %v, want %v", got, want)
+	}
+}
+
 // TestExecuteRestoresWorkspaceAfterPermissionChange 验证 chmod 000 后仍能恢复私有暂存内容。
 func TestExecuteRestoresWorkspaceAfterPermissionChange(t *testing.T) {
 	requireSandbox(t)

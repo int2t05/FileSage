@@ -26,6 +26,7 @@ var pdfTextPathOnce sync.Once
 var pdfTextPath string
 var pdfTextBwrapPath string
 var pdfTextPrlimitPath string
+var pdfTextSetprivPath string
 var pdfTextPathErr error
 
 // extractPDF 使用无网络沙箱从 PDF 提取限定页数的 UTF-8 正文。
@@ -50,6 +51,7 @@ func extractPDF(ctx context.Context, data []byte, enableOCR bool) ([]byte, error
 	defer cancel()
 	args := []string{
 		"--as=" + strconv.Itoa(pdfTextAddressSpace), "--cpu=15", "--fsize=67108864", "--nofile=128", "--nproc=512", "--",
+		pdfTextSetprivPath, "--ambient-caps=-all", "--",
 		pdfTextBwrapPath,
 		"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
 		"--cap-drop", "ALL", "--tmpfs", "/", "--dir", "/usr", "--ro-bind", "/usr", "/usr",
@@ -131,6 +133,11 @@ func discoverPDFTextPaths() {
 	pdfTextPrlimitPath, pdfTextPathErr = trustedSystemExecutable("prlimit")
 	if pdfTextPathErr != nil {
 		pdfTextPathErr = fmt.Errorf("%w: prlimit was not found", ErrUnavailable)
+		return
+	}
+	pdfTextSetprivPath, pdfTextPathErr = trustedSystemExecutable("setpriv")
+	if pdfTextPathErr != nil {
+		pdfTextPathErr = fmt.Errorf("%w: setpriv was not found", ErrUnavailable)
 	}
 }
 

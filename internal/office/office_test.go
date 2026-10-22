@@ -140,7 +140,11 @@ func TestConverterRejectsMissingDependenciesAndOversizedInput(t *testing.T) {
 	if _, err := newConverter(executionPaths{}, converterOptions{}); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("missing dependencies error = %v, want unavailable", err)
 	}
-	converter, err := newConverter(executionPaths{oosplash: "/oosplash", programDir: "/usr/lib/libreoffice/program", bwrap: "/bwrap", prlimit: "/prlimit"}, converterOptions{})
+	withoutSetpriv := executionPaths{oosplash: "/oosplash", programDir: "/usr/lib/libreoffice/program", bwrap: "/bwrap", prlimit: "/prlimit"}
+	if _, err := newConverter(withoutSetpriv, converterOptions{}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("missing setpriv error = %v, want unavailable", err)
+	}
+	converter, err := newConverter(executionPaths{oosplash: "/oosplash", programDir: "/usr/lib/libreoffice/program", bwrap: "/bwrap", prlimit: "/prlimit", setpriv: "/setpriv"}, converterOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

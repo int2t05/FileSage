@@ -277,6 +277,7 @@ func newPDFOCRCommand(ctx context.Context, executable string, commandArgs []stri
 	args := []string{
 		"--as=" + strconv.Itoa(pdfOCRAddressSpace), "--cpu=" + strconv.Itoa(cpuSeconds),
 		"--fsize=" + strconv.FormatInt(fileSize, 10), "--nofile=128", "--nproc=512", "--",
+		pdfTextSetprivPath, "--ambient-caps=-all", "--",
 		pdfTextBwrapPath,
 		"--unshare-all", "--unshare-user", "--disable-userns", "--die-with-parent", "--new-session",
 		"--cap-drop", "ALL", "--tmpfs", "/", "--dir", "/usr", "--ro-bind", "/usr", "/usr",

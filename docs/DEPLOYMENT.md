@@ -92,7 +92,7 @@ unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需�
 
 模板固定 `UMask=0022`，使服务在不同主机上创建用户文件时保持一致的 POSIX 权限行为；SQLite 状态目录、上传暂存和 Agent 临时目录使用 `0700`，临时文件使用 `0600`。
 
-模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界包含 Bubblewrap 所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`，以及在 ACL／专用组授权的异主文件上设置读写租约所需的 `CAP_LEASE`。`CAP_LEASE` 不绕过文件读写权限，但可对进程能打开的文件设置租约；应用只在管理根目录内的文件操作中使用它，保留其余 systemd 文件系统限制。若 drop-in 重设 `CapabilityBoundingSet` 或 `AmbientCapabilities`，应保留这三项边界并授予 `AmbientCapabilities=CAP_LEASE`；空值会清除模板中的 ambient 能力。部署后可用 `systemctl show filesage.service -p CapabilityBoundingSet -p AmbientCapabilities` 核对能力配置。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
+模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界包含 Bubblewrap 所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`，以及在 ACL／专用组授权的异主文件上设置读写租约所需的 `CAP_LEASE`。`CAP_LEASE` 不绕过文件读写权限，但可对进程能打开的文件设置租约；应用只在管理根目录内的文件操作中使用它，保留其余 systemd 文件系统限制。若 drop-in 重设 `CapabilityBoundingSet` 或 `AmbientCapabilities`，应保留这三项边界并授予 `AmbientCapabilities=CAP_LEASE`；空值会清除模板中的 ambient 能力。部署后可用 `systemctl show filesage.service -p CapabilityBoundingSet -p AmbientCapabilities` 核对能力配置。FileSage 启动 Bubblewrap 前通过 util-linux 的 `setpriv` 清除子进程 ambient capabilities，避免把文件租约能力传给沙箱；不要改用 setuid Bubblewrap。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
 
 unit 会等待 `network-online.target` 再启动。启用当前网络管理器对应的 wait-online 服务，确保固定监听地址已配置；例如 NetworkManager 使用 `NetworkManager-wait-online.service`，systemd-networkd 使用 `systemd-networkd-wait-online.service`。
 
@@ -246,8 +246,8 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health # 按 FILE
 | `ffmpeg` | 视频海报 |
 | `heif-dec` 或 `heif-convert`、`dcraw_emu`、`prlimit` | HEIF／HEIC 与 RAW 图片预览 |
 | `7z`、`7zz` 或 `7za` | 7z／RAR 浏览，7z 归档创建 |
-| LibreOffice、Bubblewrap（`bwrap`）、`prlimit` | PPTX 预览；Bubblewrap 和 systemd cgroup v2 委托也用于 Agent Shell |
-| Poppler `pdftotext`、`pdftoppm`、`pdfinfo` | Office／PDF 正文提取与 OCR 流程 |
+| LibreOffice、Bubblewrap（`bwrap`）、`prlimit`、util-linux（`setpriv`） | PPTX 预览；Bubblewrap 和 systemd cgroup v2 委托也用于 Agent Shell |
+| Poppler `pdftotext`、`pdftoppm`、`pdfinfo`，Bubblewrap、`prlimit`、`setpriv` | Office／PDF 正文提取与 OCR 流程 |
 | Tesseract 与 `chi_sim`、`eng` 语言包 | 用户主动启用的中文／英文扫描件 OCR |
 
 ## 网络与数据安全

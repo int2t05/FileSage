@@ -55,6 +55,7 @@ func TestSandboxArgsHideHostRootAndHome(t *testing.T) {
 		programDir: "/usr/lib/libreoffice/program",
 		bwrap:      "/usr/bin/bwrap",
 		prlimit:    "/usr/bin/prlimit",
+		setpriv:    "/usr/bin/setpriv",
 		readOnlyDir: []bindMount{
 			{source: "/usr/lib/libreoffice", target: "/usr/lib/libreoffice"},
 			{source: "/usr/lib/x86_64-linux-gnu", target: "/usr/lib/x86_64-linux-gnu"},
@@ -130,6 +131,10 @@ func fakeConverter(t *testing.T, script string, timeout time.Duration) (*Convert
 	if err != nil {
 		t.Skip("prlimit is required for Linux subprocess tests")
 	}
+	setpriv, err := exec.LookPath("setpriv")
+	if err != nil {
+		t.Skip("setpriv is required for Linux subprocess tests")
+	}
 	dependencyDir := t.TempDir()
 	bwrap := filepath.Join(dependencyDir, "fake-bwrap")
 	if err := os.WriteFile(bwrap, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
@@ -141,6 +146,7 @@ func fakeConverter(t *testing.T, script string, timeout time.Duration) (*Convert
 		programDir: "/usr/lib/libreoffice/program",
 		bwrap:      bwrap,
 		prlimit:    prlimit,
+		setpriv:    setpriv,
 		readOnlyDir: []bindMount{{
 			source: dependencyDir,
 			target: "/usr/lib/libreoffice",
