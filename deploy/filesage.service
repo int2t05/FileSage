@@ -1,6 +1,8 @@
 [Unit]
 Description=FileSage file management service
-After=network.target
+# 等待网络管理器完成地址配置后再绑定服务地址。
+Wants=network-online.target
+After=network-online.target
 # 与环境文件中的 FILESAGE_ROOT 保持一致；其他挂载卷也应列在此处。
 RequiresMountsFor=/srv/filesage-files
 
@@ -18,6 +20,25 @@ RestartSec=5s
 TimeoutStopSec=15s
 # 为隔离 Shell 子任务委托聚合资源控制器。
 Delegate=cpu memory pids
+# 默认只允许写入管理根目录；StateDirectory 自动保持可写。
+ReadWritePaths=/srv/filesage-files
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateDevices=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+# 为 Bubblewrap 的无特权用户命名空间保留隔离所需能力。
+# 为异主 ACL 文件协调内核租约；不改变文件读写权限。
+AmbientCapabilities=CAP_LEASE
+CapabilityBoundingSet=CAP_SYS_ADMIN CAP_NET_ADMIN CAP_LEASE
+ProtectClock=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target

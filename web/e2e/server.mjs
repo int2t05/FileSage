@@ -47,25 +47,40 @@ async function answerModel(request, response) {
   }
   try {
     const body = JSON.parse(await readBody(request));
+    const systemMessage = body.messages?.find((message) => message.role === 'system')?.content;
+    if (body.model === 'filesage-e2e' && typeof systemMessage === 'string' && systemMessage.includes('单文件重命名分析器')) {
+      const content = JSON.stringify({ supported: true, targetName: 'renamed.md', reasonCode: 'title' });
+      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+      return;
+    }
     const userMessage = body.messages?.findLast((message) => message.role === 'user')?.content;
-    const isFollowup = typeof userMessage === 'string' && userMessage.includes(followupName);
-    const isSeparateConversation = typeof userMessage === 'string' && userMessage.includes(separateConversationName);
-    const target = isFollowup ? followupName : isSeparateConversation ? separateConversationName : targetName;
+    const renameSourcePath = typeof userMessage === 'string'
+      ? userMessage.match(/agent-e2e-rename(?:-\d+)?\/source\.md/)?.[0]
+      : undefined;
+    const matchedTarget = typeof userMessage === 'string'
+      ? userMessage.match(/agent-e2e-(?:reviewed|followup|separate-session|rename)(?:-\d+)?/)?.[0]
+      : undefined;
+    const target = matchedTarget || targetName;
+    const isFollowup = target.startsWith(followupName);
+    const isSeparateConversation = target.startsWith(separateConversationName);
+    const isRename = target.startsWith('agent-e2e-rename');
     const hasMemory = body.messages?.some((message) => message.role === 'user'
       && message.content.includes('用户希望在同一会话持续处理文件。'));
+    const hasToolResult = body.messages?.some((message) => message.role === 'assistant'
+      && message.content.includes('目录已创建'));
     if (body.model !== 'filesage-e2e' || typeof userMessage !== 'string'
-      || !userMessage.includes(target) || isFollowup && !hasMemory) {
+      || !userMessage.includes(target) || isFollowup && (!hasMemory || !hasToolResult)) {
       response.writeHead(422, { 'Content-Type': 'application/json' }).end('{"error":"unexpected test prompt"}');
       return;
     }
     const content = JSON.stringify({
       state: 'ready',
-      reply: `将在管理根目录新建文件夹 ${target}，请确认。`,
+      reply: isRename ? '确认后会读取所列 Markdown 文件，并提出同目录重命名方案。' : `将在管理根目录新建文件夹 ${target}，请确认。`,
       contextSummary: '用户希望在同一会话持续处理文件。',
-      goal: isFollowup ? '继续处理后续文件整理' : isSeparateConversation ? '新会话创建验收文件夹' : '创建浏览器端到端验收文件夹',
-      action: 'create_directory',
-      filePath: '',
-      targetPath: target,
+      goal: isRename ? '根据 Markdown 标题提出同目录重命名建议' : isFollowup ? '继续处理后续文件整理' : isSeparateConversation ? '新会话创建验收文件夹' : '创建浏览器端到端验收文件夹',
+      action: isRename ? 'rename' : 'create_directory',
+      filePath: isRename ? renameSourcePath || '' : '',
+      targetPath: isRename ? '' : target,
     });
     response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
   } catch {

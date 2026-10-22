@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { describe, it } from 'node:test';
 import ts from 'typescript';
+import { MAX_AGENT_PLAN_OPERATIONS } from '../src/api/agentPlanLimits.ts';
 
 const source = await readFile(new URL('../src/features/agent/AgentPlanReview.tsx', import.meta.url), 'utf8');
 const agentPageSource = await readFile(new URL('../src/features/agent/AgentPage.tsx', import.meta.url), 'utf8');
@@ -19,7 +20,7 @@ const declarations = sourceFile.statements.filter((statement) => {
   return ts.isFunctionDeclaration(statement)
     && ['statusLabel', 'canExecute', 'canResumeBypassPlan', 'canStartPlanReview', 'executionProgress', 'canStopExecution', 'executionLabel', 'stepPresentationState', 'effectiveExecutionMode', 'shouldShowSafetyNotice', 'requiresTextCandidatePreview', 'canRejectPlan', 'operationPresentation', 'operationPresentationForOperation', 'canEditPlan', 'createPlanEditDrafts', 'cancelPlanEdit', 'shellScopeSummary'].includes(statement.name?.text ?? '');
 });
-const helperSource = `${sameDirectoryDeclaration.getText(pathSemanticsFile)}\n${declarations.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { isSameDirectoryPath, canExecute, canResumeBypassPlan, canStartPlanReview, executionProgress, canStopExecution, executionLabel, stepPresentationState, effectiveExecutionMode, shouldShowSafetyNotice, requiresTextCandidatePreview, canRejectPlan, operationPresentation, operationPresentationForOperation, canEditPlan, createPlanEditDrafts, cancelPlanEdit, shellScopeSummary };`;
+const helperSource = `const MAX_AGENT_PLAN_OPERATIONS = ${MAX_AGENT_PLAN_OPERATIONS};\n${sameDirectoryDeclaration.getText(pathSemanticsFile)}\n${declarations.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { isSameDirectoryPath, canExecute, canResumeBypassPlan, canStartPlanReview, executionProgress, canStopExecution, executionLabel, stepPresentationState, effectiveExecutionMode, shouldShowSafetyNotice, requiresTextCandidatePreview, canRejectPlan, operationPresentation, operationPresentationForOperation, canEditPlan, createPlanEditDrafts, cancelPlanEdit, shellScopeSummary };`;
 const { outputText } = ts.transpileModule(helperSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });
@@ -49,6 +50,13 @@ describe('Agent 计划与步骤展示', () => {
     assert.match(agentPageSource, /!canStartPlanReview\(plan\)/);
     assert.match(agentPageSource, /executeAgentPlan\(plan\.planId, plan\.planVersion\)/);
     assert.match(source, /canStartPlanReview\(plan\)/);
+  });
+
+  it('编辑器允许编辑完整的 256 步方案', () => {
+    const operations = Array.from({ length: MAX_AGENT_PLAN_OPERATIONS }, () => ({ action: 'create_directory', executionStatus: 'pending' }));
+    const plan = { proposalSource: 'conversation', status: 'awaiting_approval', operations };
+    assert.equal(helpers.canEditPlan(plan, true), true);
+    assert.equal(helpers.canEditPlan({ ...plan, operations: [...operations, operations[0]] }, true), false);
   });
 
   it('按步骤状态显示正在执行、等待、完成和失败', () => {

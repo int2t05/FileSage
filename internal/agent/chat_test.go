@@ -72,6 +72,25 @@ func TestChatClientDoesNotFollowRedirectOrExposeProviderBody(t *testing.T) {
 	if !errors.Is(err, ErrModelRequest) || strings.Contains(err.Error(), secret) || redirected {
 		t.Fatalf("complete error = %v, redirected = %t", err, redirected)
 	}
+	class, status := modelFailureLogDetails(err)
+	if class != "http_status" || status != http.StatusFound {
+		t.Fatalf("failure details = (%q, %d), want redirect status without provider body", class, status)
+	}
+}
+
+func TestChatClientClassifiesTransportFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	url := server.URL
+	server.Close()
+	client := newChatClient(config.AgentModelConfig{BaseURL: url, Model: "model"})
+	_, err := client.complete(context.Background(), []ChatMessage{{Role: "user", Content: "test"}})
+	if !errors.Is(err, ErrModelRequest) {
+		t.Fatalf("complete error = %v, want model request failure", err)
+	}
+	class, status := modelFailureLogDetails(err)
+	if class != "transport" || status != 0 {
+		t.Fatalf("failure details = (%q, %d), want transport failure without HTTP status", class, status)
+	}
 }
 
 func TestChatEndpointRequiresHTTPSForRemoteHosts(t *testing.T) {

@@ -165,7 +165,7 @@ func (manager *publicationManager) recoverCompleted(ctx context.Context) error {
 		result, loadErr := manager.loadResult(event.UploadID)
 		if loadErr == nil && result.Status == publicationSucceeded {
 			if err := manager.uploads.DiscardCompleted(event); err != nil {
-				slog.Warn("published upload staging cleanup failed", "upload_id", event.UploadID, "error", err)
+				slog.Warn("published upload staging cleanup failed", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 			}
 			continue
 		}
@@ -190,7 +190,7 @@ func (manager *publicationManager) enqueue(ctx context.Context, event upload.Eve
 		result.CreatedDirectories = append([]string(nil), prior.CreatedDirectories...)
 	}
 	if err := manager.persist(result); err != nil {
-		slog.Error("cannot persist queued upload", "upload_id", event.UploadID, "error", err)
+		slog.Error("cannot persist queued upload", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 		manager.clearScheduled(event.UploadID)
 		return
 	}
@@ -209,13 +209,13 @@ func (manager *publicationManager) recordReceiving(event upload.Event) {
 		return
 	}
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		slog.Error("cannot inspect upload state before recording reception", "upload_id", event.UploadID, "error", err)
+		slog.Error("cannot inspect upload state before recording reception", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 		return
 	}
 	result := newPublicationResult(event)
 	result.Status = publicationReceiving
 	if err := manager.persistLocked(result); err != nil {
-		slog.Error("cannot persist upload reception state", "upload_id", event.UploadID, "error", err)
+		slog.Error("cannot persist upload reception state", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 	}
 }
 
@@ -235,7 +235,7 @@ func (manager *publicationManager) recordTermination(event upload.Event) {
 	result.Status = publicationCancelled
 	result.Error = "上传已取消，暂存数据已移除。"
 	if err := manager.persist(result); err != nil {
-		slog.Error("cannot persist upload cancellation", "upload_id", event.UploadID, "error", err)
+		slog.Error("cannot persist upload cancellation", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 	}
 }
 
@@ -319,7 +319,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 				result.SHA256 = digest
 				result.Error = ""
 				if err := manager.persist(result); err != nil {
-					slog.Error("cannot persist recovered upload publication", "upload_id", event.UploadID, "error", err)
+					slog.Error("cannot persist recovered upload publication", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 					return
 				}
 				manager.cleanupPublished(event)
@@ -342,7 +342,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 		if pathExists(manager.root, candidate) {
 			result.CandidatePath = ""
 			if err := manager.persist(result); err != nil {
-				slog.Error("cannot clear occupied upload candidate", "upload_id", event.UploadID, "path", candidate, "error", err)
+				slog.Error("cannot clear occupied upload candidate", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 				return
 			}
 			continue
@@ -351,7 +351,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 		result.Status = publicationRunning
 		result.Error = ""
 		if err := manager.persist(result); err != nil {
-			slog.Error("cannot persist upload candidate before publication", "upload_id", event.UploadID, "path", candidate, "error", err)
+			slog.Error("cannot persist upload candidate before publication", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 			return
 		}
 
@@ -368,7 +368,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 		digest, writeErr := manager.root.WriteNewAtomicFrom(candidate, contextReader{ctx: ctx, source: reader}, size, 0o644)
 		closeErr := reader.Close()
 		if closeErr != nil {
-			slog.Warn("cannot close staged upload reader", "upload_id", event.UploadID, "error", closeErr)
+			slog.Warn("cannot close staged upload reader", "upload_id", event.UploadID, "reason", uploadLogReason(closeErr))
 		}
 		if (writeErr == nil || errors.Is(writeErr, fsroot.ErrPublishedNotDurable)) && manager.refreshIndex != nil {
 			manager.refreshIndex(context.Background())
@@ -376,7 +376,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 		if errors.Is(writeErr, fsroot.ErrConflict) {
 			result.CandidatePath = ""
 			if err := manager.persist(result); err != nil {
-				slog.Error("cannot clear conflicted upload candidate", "upload_id", event.UploadID, "error", err)
+				slog.Error("cannot clear conflicted upload candidate", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 				return
 			}
 			continue
@@ -388,7 +388,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 				result.SHA256 = digest
 				result.Error = "文件已发布，但目录同步失败；请检查目标目录后再处理。"
 				if err := manager.persist(result); err != nil {
-					slog.Error("cannot persist partially durable upload", "upload_id", event.UploadID, "path", candidate, "error", err)
+					slog.Error("cannot persist partially durable upload", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 				}
 				return
 			}
@@ -401,7 +401,7 @@ func (manager *publicationManager) publish(parent context.Context, event upload.
 		result.SHA256 = digest
 		result.Error = ""
 		if err := manager.persist(result); err != nil {
-			slog.Error("upload published but result persistence failed", "upload_id", event.UploadID, "path", candidate, "error", err)
+			slog.Error("upload published but result persistence failed", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 			return
 		}
 		manager.cleanupPublished(event)
@@ -422,7 +422,7 @@ func (manager *publicationManager) finishFailure(event upload.Event, result publ
 				result.Status = publicationCancelled
 				result.Error = "发布已取消，完整暂存文件仍保留，可重试。"
 				if err := manager.persist(result); err != nil {
-					slog.Error("cannot persist upload cancellation while deletion is pending", "upload_id", event.UploadID, "error", err)
+					slog.Error("cannot persist upload cancellation while deletion is pending", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 				}
 			}
 			return
@@ -443,16 +443,16 @@ func (manager *publicationManager) finishFailure(event upload.Event, result publ
 		result.Error = manager.safePublicationError(cause)
 	}
 	if err := manager.persist(result); err != nil {
-		slog.Error("cannot persist upload publication failure", "upload_id", event.UploadID, "error", err, "cause", cause)
+		slog.Error("cannot persist upload publication failure", "upload_id", event.UploadID, "reason", uploadLogReason(err), "cause_reason", uploadLogReason(cause))
 	}
 	if result.Status != publicationCancelled {
-		slog.Error("upload publication failed", "upload_id", event.UploadID, "target", result.TargetPath, "status", result.Status, "error", cause)
+		slog.Error("upload publication failed", "upload_id", event.UploadID, "status", result.Status, "reason", uploadLogReason(cause))
 	}
 }
 
 func (manager *publicationManager) cleanupPublished(event upload.Event) {
 	if err := manager.uploads.DiscardCompleted(event); err != nil {
-		slog.Warn("published upload staging cleanup failed", "upload_id", event.UploadID, "error", err)
+		slog.Warn("published upload staging cleanup failed", "upload_id", event.UploadID, "reason", uploadLogReason(err))
 	}
 }
 
@@ -913,6 +913,36 @@ func (manager *publicationManager) safePublicationError(err error) string {
 		return "服务器存储空间或配额不足，文件未发布；完整暂存文件保留，清理空间或调整配额后可重试。"
 	default:
 		return "发布失败：" + strings.TrimSpace(manager.uploads.SafeErrorMessage(err))
+	}
+}
+
+// uploadLogReason 将底层错误归类，避免把用户路径写入系统日志。
+func uploadLogReason(err error) string {
+	switch {
+	case err == nil:
+		return "unknown"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, fs.ErrPermission):
+		return "permission"
+	case errors.Is(err, fs.ErrNotExist):
+		return "missing_state"
+	case errors.Is(err, fsroot.ErrSymlinkPath), errors.Is(err, fsroot.ErrOutsideRoot), errors.Is(err, fsroot.ErrInvalidPath):
+		return "unsafe_path"
+	case errors.Is(err, fsroot.ErrConflict):
+		return "conflict"
+	case errors.Is(err, fsroot.ErrSizeMismatch):
+		return "size_mismatch"
+	case errors.Is(err, fsroot.ErrPublishedNotDurable):
+		return "published_not_durable"
+	case errors.Is(err, fsroot.ErrNoReplaceUnsupported):
+		return "atomic_publish_unsupported"
+	case errors.Is(err, fsroot.ErrNotDirectory):
+		return "not_directory"
+	case errors.Is(err, syscall.ENOSPC), errors.Is(err, syscall.EDQUOT):
+		return "storage_full"
+	default:
+		return "internal_failure"
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
@@ -539,7 +540,7 @@ func (s *Service) RevisePlan(ctx context.Context, planID string, expectedVersion
 	if err != nil {
 		return store.PlanRecord{}, err
 	}
-	if len(proposals) < 1 || len(proposals) > 20 {
+	if len(proposals) < 1 || len(proposals) > maxProposalOperations(proposals) {
 		return store.PlanRecord{}, ErrInvalid
 	}
 	if previous.Version != expectedVersion || previous.Status != store.PlanAwaitingApproval {
@@ -705,12 +706,13 @@ func (s *Service) Decide(ctx context.Context, planID, operationID, decision stri
 			if invalidateErr := s.store.InvalidateAgentOperation(ctx, plan.ID, op.ID, "文件状态已变化，方案失效", time.Now().UTC()); invalidateErr != nil {
 				return store.PlanRecord{}, fmt.Errorf("record invalidated approval: %w", invalidateErr)
 			}
-			_ = s.removeTextPayload(op)
+			invalidationErr := fmt.Errorf("approval invalidated: %w (%v)", ErrConflict, err)
+			invalidationErr = errors.Join(invalidationErr, s.removeInvalidatedTextPayload(ctx, op))
 			updated, readErr := s.store.Plan(ctx, plan.ID)
 			if readErr != nil {
 				return store.PlanRecord{}, readErr
 			}
-			return updated, fmt.Errorf("approval invalidated: %w (%v)", ErrConflict, err)
+			return updated, invalidationErr
 		}
 	} else if decision != "reject" {
 		return store.PlanRecord{}, ErrInvalid
@@ -789,11 +791,13 @@ func (s *Service) StartPlan(ctx context.Context, planID string, expectedVersion 
 				if invalidateErr := s.store.InvalidateAgentOperation(ctx, plan.ID, operation.ID, "审核时文件状态已变化，方案失效", at); invalidateErr != nil {
 					return store.PlanRecord{}, fmt.Errorf("record invalidated plan review: %w", invalidateErr)
 				}
+				invalidationErr := fmt.Errorf("plan review invalidated: %w (%v)", ErrConflict, snapshotErr)
+				invalidationErr = errors.Join(invalidationErr, s.removeInvalidatedTextPayload(ctx, operation))
 				updated, readErr := s.store.Plan(ctx, plan.ID)
 				if readErr != nil {
 					return store.PlanRecord{}, readErr
 				}
-				return updated, fmt.Errorf("plan review invalidated: %w (%v)", ErrConflict, snapshotErr)
+				return updated, invalidationErr
 			}
 		}
 		mode, err = s.store.ReviewAgentPlan(ctx, planID, expectedVersion, expectedMode, at, confirmPermanentDelete)
@@ -890,11 +894,13 @@ func (s *Service) ExecuteStep(ctx context.Context, planID, operationID string, e
 		if invalidateErr := s.store.InvalidateAgentOperation(ctx, plan.ID, operation.ID, "执行前文件状态已变化，方案失效", time.Now().UTC()); invalidateErr != nil {
 			return store.PlanRecord{}, fmt.Errorf("record invalidated step: %w", invalidateErr)
 		}
+		invalidationErr := fmt.Errorf("step invalidated: %w (%v)", ErrConflict, err)
+		invalidationErr = errors.Join(invalidationErr, s.removeInvalidatedTextPayload(ctx, operation))
 		updated, readErr := s.store.Plan(ctx, plan.ID)
 		if readErr != nil {
 			return store.PlanRecord{}, readErr
 		}
-		return updated, fmt.Errorf("step invalidated: %w (%v)", ErrConflict, err)
+		return updated, invalidationErr
 	}
 	if err := s.store.StartReviewedAgentOperation(ctx, plan.ID, operation.ID, plan.Version, time.Now().UTC()); err != nil {
 		return store.PlanRecord{}, err
@@ -911,11 +917,13 @@ func (s *Service) ExecuteStep(ctx context.Context, planID, operationID string, e
 		if invalidateErr := s.store.InvalidateAgentOperation(ctx, latest.ID, current.ID, "执行占用后文件状态变化，方案失效", time.Now().UTC()); invalidateErr != nil {
 			return store.PlanRecord{}, fmt.Errorf("record invalidated running step: %w", invalidateErr)
 		}
+		invalidationErr := fmt.Errorf("step invalidated after claim: %w (%v)", ErrConflict, err)
+		invalidationErr = errors.Join(invalidationErr, s.removeInvalidatedTextPayload(ctx, current))
 		updated, readErr := s.store.Plan(ctx, latest.ID)
 		if readErr != nil {
 			return store.PlanRecord{}, readErr
 		}
-		return updated, fmt.Errorf("step invalidated after claim: %w (%v)", ErrConflict, err)
+		return updated, invalidationErr
 	}
 	return s.executeOperation(ctx, latest.ID, latest.ScopePath, current)
 }
@@ -1005,12 +1013,13 @@ func (s *Service) Execute(ctx context.Context, planID string, expectedVersion ..
 			if invalidateErr != nil {
 				return store.PlanRecord{}, fmt.Errorf("record invalidated plan: %w", invalidateErr)
 			}
-			_ = s.removeTextPayload(current)
+			invalidationErr := fmt.Errorf("execution invalidated: %w (%v)", ErrConflict, snapshotErr)
+			invalidationErr = errors.Join(invalidationErr, s.removeInvalidatedTextPayload(ctx, current))
 			updated, readErr := s.store.Plan(ctx, plan.ID)
 			if readErr != nil {
 				return store.PlanRecord{}, readErr
 			}
-			return updated, fmt.Errorf("execution invalidated: %w (%v)", ErrConflict, snapshotErr)
+			return updated, invalidationErr
 		}
 		if err := s.store.StartAgentOperation(ctx, latest.ID, current.ID, time.Now().UTC()); err != nil {
 			release()
@@ -1031,12 +1040,13 @@ func (s *Service) Execute(ctx context.Context, planID string, expectedVersion ..
 			if invalidateErr != nil {
 				return store.PlanRecord{}, fmt.Errorf("record invalidated running plan: %w", invalidateErr)
 			}
-			_ = s.removeTextPayload(current)
+			invalidationErr := fmt.Errorf("execution invalidated after claim: %w (%v)", ErrConflict, snapshotErr)
+			invalidationErr = errors.Join(invalidationErr, s.removeInvalidatedTextPayload(ctx, current))
 			updated, readErr := s.store.Plan(ctx, plan.ID)
 			if readErr != nil {
 				return store.PlanRecord{}, readErr
 			}
-			return updated, fmt.Errorf("execution invalidated after claim: %w (%v)", ErrConflict, snapshotErr)
+			return updated, invalidationErr
 		}
 		updated, operationErr := s.executeOperation(ctx, latest.ID, latest.ScopePath, current)
 		release()
@@ -1089,11 +1099,57 @@ func (s *Service) removeCancelledTextPayloads(plan store.PlanRecord) error {
 }
 
 func (s *Service) executeOperation(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
+	startedAt := time.Now()
+	slog.InfoContext(ctx, "agent tool step started", "plan_id", planID, "operation_id", op.ID, "action", op.Action)
 	tool, ok := agentTools()[op.Action]
 	if !ok || tool.execute == nil {
+		slog.WarnContext(ctx, "agent tool step rejected", "plan_id", planID, "operation_id", op.ID, "action", op.Action, "reason", "tool_not_registered")
 		return store.PlanRecord{}, ErrUnsupported
 	}
-	return tool.execute(s, ctx, planID, scope, op)
+	plan, err := tool.execute(s, ctx, planID, scope, op)
+	status := "unknown"
+	for _, current := range plan.Operations {
+		if current.ID == op.ID {
+			status = string(current.Status)
+			break
+		}
+	}
+	level := slog.LevelInfo
+	if err != nil || status != string(store.OperationSucceeded) {
+		level = slog.LevelWarn
+	}
+	attributes := []slog.Attr{
+		slog.String("plan_id", planID),
+		slog.String("operation_id", op.ID),
+		slog.String("action", op.Action),
+		slog.String("status", status),
+		slog.Int64("duration_ms", time.Since(startedAt).Milliseconds()),
+	}
+	if err != nil {
+		attributes = append(attributes, slog.String("reason", agentOperationLogReason(err)))
+	}
+	slog.LogAttrs(ctx, level, "agent tool step completed", attributes...)
+	return plan, err
+}
+
+// agentOperationLogReason 用稳定错误类别关联日志，避免把用户路径写入系统日志。
+func agentOperationLogReason(err error) string {
+	switch {
+	case err == nil:
+		return "unknown"
+	case errors.Is(err, ErrConflict), errors.Is(err, store.ErrConflict), errors.Is(err, fsroot.ErrConflict), errors.Is(err, fsroot.ErrPathChanged):
+		return "conflict"
+	case errors.Is(err, ErrInvalid):
+		return "invalid_input"
+	case errors.Is(err, ErrUnsupported):
+		return "unsupported"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	default:
+		return "execution_failed"
+	}
 }
 
 func (s *Service) executeArchiveCreate(ctx context.Context, planID, scope string, op store.OperationRecord) (store.PlanRecord, error) {
@@ -1243,15 +1299,28 @@ func (s *Service) executeArchivePhoto(ctx context.Context, planID, scope string,
 	if json.Unmarshal([]byte(op.SourceStateJSON), &expected) != nil {
 		return s.finishArchivePhoto(ctx, planID, op, store.OperationPartial, "归档目录已创建但来源快照无效，需人工核查", ErrConflict)
 	}
-	outcome, moveErr := s.root.MoveFileNoReplace(ctx, op.SourcePath, op.TargetPath, expected)
+	sourceDigest, digestErr := s.hashApprovedFile(op)
+	if digestErr != nil {
+		status, message := store.OperationFailed, "照片状态已变化，未移动照片"
+		if len(created) > 0 {
+			status, message = store.OperationPartial, "年月目录已创建但照片未移动，需人工核查"
+		}
+		return s.finishArchivePhoto(ctx, planID, op, status, message, digestErr)
+	}
+	outcome, moveErr := s.root.MoveFileNoReplaceWithSHA256(ctx, op.SourcePath, op.TargetPath, expected, sourceDigest)
 	status, message, resultErr := store.OperationSucceeded, "照片已按拍摄日期归档", moveErr
 	switch {
 	case outcome.Published && outcome.SourceRemoved && moveErr == nil:
 		target, statErr := s.root.LstatEntry(op.TargetPath)
 		if statErr != nil || target.Symlink || target.Kind != fsroot.KindFile || target.Size != expected.Size || target.Mode.Perm() != expected.Mode.Perm() {
 			status, message, resultErr = store.OperationPartial, "照片已移动但目标状态无法确认，需人工核查", ErrConflict
-		} else if outcome.SHA256 == "" && !matchesRenameResult(target.Fingerprint(), op.SourceStateJSON) || outcome.SHA256 != "" && len(outcome.SHA256) != 64 {
-			status, message, resultErr = store.OperationPartial, "照片移动结果无法核验，需人工核查", ErrConflict
+		} else {
+			targetDigest, openedFingerprint, digestErr := s.hashFile(op.TargetPath)
+			if !matchesRenameResult(target.Fingerprint(), op.SourceStateJSON) || digestErr != nil ||
+				!sameFileFingerprint(target.Fingerprint(), openedFingerprint) || targetDigest != sourceDigest ||
+				outcome.SHA256 != "" && outcome.SHA256 != sourceDigest {
+				status, message, resultErr = store.OperationPartial, "照片移动结果无法核验，需人工核查", ErrConflict
+			}
 		}
 	case outcome.Published || outcome.SourceRemoved:
 		status, message = store.OperationPartial, "照片移动结果不完整，需核查源与目标"
@@ -1264,6 +1333,9 @@ func (s *Service) executeArchivePhoto(ctx context.Context, planID, scope string,
 		status, message = store.OperationFailed, "照片归档失败，未覆盖目标文件"
 	default:
 		status, message, resultErr = store.OperationPartial, "无法确认照片归档结果，需人工核查", ErrConflict
+	}
+	if outcome.SourceRetained != "" {
+		message = fmt.Sprintf("照片副本已发布；来源文件已隔离保留在 %q，请核对后处理。", outcome.SourceRetained)
 	}
 	return s.finishArchivePhoto(ctx, planID, op, status, message, resultErr)
 }
@@ -1421,6 +1493,15 @@ func (s *Service) removeTextPayload(op store.OperationRecord) error {
 	return s.textPayloads.remove(op.ID)
 }
 
+// removeInvalidatedTextPayload 清理失效候选并记录可诊断错误。
+func (s *Service) removeInvalidatedTextPayload(ctx context.Context, op store.OperationRecord) error {
+	if err := s.removeTextPayload(op); err != nil {
+		slog.WarnContext(ctx, "agent invalidated text candidate cleanup failed", "operation_id", op.ID, "action", op.Action, "error_type", fmt.Sprintf("%T", err))
+		return fmt.Errorf("remove invalidated text candidate: %w", err)
+	}
+	return nil
+}
+
 func textWriteTargetPath(op store.OperationRecord) string {
 	if op.Action == "create_file" {
 		return op.TargetPath
@@ -1439,54 +1520,6 @@ func textWriteSuccessMessage(action string) string {
 	}
 }
 
-func (s *Service) recordRenameOutcome(ctx context.Context, planID string, op store.OperationRecord, sourceDigest string, renameErr error) (store.PlanRecord, error) {
-	status, message, resultErr := store.OperationSucceeded, "文件已重命名", renameErr
-	switch {
-	case sourceDigest != "" && s.verifyRenamedFile(op, sourceDigest) == nil:
-		resultErr = nil
-	case renameErr == nil:
-		status, message, resultErr = store.OperationPartial, "重命名结果与批准的源文件状态不符，需人工核查", ErrConflict
-	case s.verifyRenameNotApplied(op) == nil:
-		status, message = store.OperationFailed, "重命名失败，文件未发生变化"
-	default:
-		status, message, resultErr = store.OperationPartial, "重命名结果无法确认，需人工核查", ErrConflict
-	}
-	if err := s.store.FinishAgentOperation(ctx, planID, op.ID, status, message, time.Now().UTC()); err != nil {
-		return store.PlanRecord{}, fmt.Errorf("record rename outcome: %w", err)
-	}
-	plan, err := s.store.Plan(ctx, planID)
-	if err != nil {
-		return store.PlanRecord{}, err
-	}
-	return plan, resultErr
-}
-
-func (s *Service) verifyRenamedFile(op store.OperationRecord, sourceDigest string) error {
-	target, err := s.root.LstatEntry(op.TargetPath)
-	if err != nil || target.Symlink || target.Kind != fsroot.KindFile || !matchesRenameResult(target.Fingerprint(), op.SourceStateJSON) {
-		return fmt.Errorf("rename target does not match approved source: %w", ErrConflict)
-	}
-	digest, fingerprint, err := s.hashFile(op.TargetPath)
-	if err != nil || !matchesRenameResult(fingerprint, op.SourceStateJSON) || digest != sourceDigest {
-		return fmt.Errorf("rename target content does not match approved source: %w", ErrConflict)
-	}
-	if _, err := s.root.LstatEntry(op.SourcePath); !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("rename source remains or cannot be checked: %w", ErrConflict)
-	}
-	return nil
-}
-
-func (s *Service) verifyRenameNotApplied(op store.OperationRecord) error {
-	source, err := s.root.LstatEntry(op.SourcePath)
-	if err != nil || source.Symlink || source.Kind != fsroot.KindFile || !matchesFingerprint(source.Fingerprint(), op.SourceStateJSON) {
-		return ErrConflict
-	}
-	if _, err := s.root.LstatEntry(op.TargetPath); !errors.Is(err, fs.ErrNotExist) {
-		return ErrConflict
-	}
-	return nil
-}
-
 // executeMoveFile 使用已审批的源快照执行不覆盖移动。
 func (s *Service) executeMoveFile(ctx context.Context, planID string, op store.OperationRecord) (store.PlanRecord, error) {
 	var sourceState fsroot.Fingerprint
@@ -1497,7 +1530,7 @@ func (s *Service) executeMoveFile(ctx context.Context, planID string, op store.O
 	if hashErr != nil {
 		return s.recordMoveFileOutcome(ctx, planID, op, fsroot.FileMoveResult{}, "", hashErr)
 	}
-	outcome, moveErr := s.root.MoveFileNoReplace(ctx, op.SourcePath, op.TargetPath, sourceState)
+	outcome, moveErr := s.root.MoveFileNoReplaceWithSHA256(ctx, op.SourcePath, op.TargetPath, sourceState, sourceDigest)
 	return s.recordMoveFileOutcome(ctx, planID, op, outcome, sourceDigest, moveErr)
 }
 
@@ -1818,8 +1851,9 @@ func agentInodeKey(entry fsroot.Entry) string {
 	return ""
 }
 
+// isFileTargetAction 返回需要校验目标目录的文件操作。
 func isFileTargetAction(action string) bool {
-	return action == "move_file" || action == "copy_file"
+	return action == "rename" || action == "move_file" || action == "copy_file"
 }
 
 // fileMoveWording 按源和目标父目录区分重命名与移动文案。
@@ -1860,6 +1894,9 @@ func (s *Service) recordMoveFileOutcome(ctx context.Context, planID string, op s
 		}
 	case outcome.Published || outcome.SourceRemoved:
 		status, message = store.OperationPartial, action+"结果不完整；请核查源文件和目标文件"
+		if outcome.SourceRetained != "" {
+			message = fmt.Sprintf("目标副本已发布；来源文件已隔离保留在 %q，请核对后处理。", outcome.SourceRetained)
+		}
 		if resultErr == nil {
 			resultErr = ErrConflict
 		}
@@ -2742,13 +2779,13 @@ func agentArchiveReadLimits() fsroot.ArchiveReadLimits {
 
 func maxProposalOperations(proposals []Proposal) int {
 	if len(proposals) == 0 {
-		return 20
+		return store.MaxAgentPlanOperations
 	}
 	for _, proposal := range proposals {
 		if isArchiveAction(proposal.Action) {
 			return 1
 		}
-		if proposal.Action != "archive_photo" || proposal.ConversationID == "" {
+		if proposal.Action == "archive_photo" && proposal.ConversationID == "" {
 			return 20
 		}
 	}
@@ -3224,18 +3261,12 @@ func parentPath(relativePath string) string {
 	return parent
 }
 
-// applyOperation 执行已审批的文件操作。
-func (s *Service) applyOperation(op store.OperationRecord) error {
-	switch op.Action {
-	case "rename":
-		return s.root.RenameNoReplace(op.SourcePath, op.TargetPath)
-	case "create_directory":
-		return s.root.Mkdir(op.TargetPath, 0o755)
-	case "create_symlink":
-		return s.root.SymlinkNoReplace(op.SourcePath, op.TargetPath)
-	default:
+// createDirectory 执行已审核的目录创建。
+func (s *Service) createDirectory(op store.OperationRecord) error {
+	if op.Action != "create_directory" {
 		return ErrUnsupported
 	}
+	return s.root.Mkdir(op.TargetPath, 0o755)
 }
 
 // verifyCreatedDirectory 确认创建后父目录身份未变且目标仍为真实目录。
@@ -3474,14 +3505,11 @@ func singleOperation(plan store.PlanRecord, operationID string) (store.Operation
 
 func maxStoredPlanOperations(operations []store.OperationRecord) int {
 	if len(operations) == 0 {
-		return 20
+		return store.MaxAgentPlanOperations
 	}
 	for _, operation := range operations {
 		if isArchiveAction(operation.Action) {
 			return 1
-		}
-		if operation.Action != "archive_photo" {
-			return 20
 		}
 	}
 	return store.MaxAgentPlanOperations

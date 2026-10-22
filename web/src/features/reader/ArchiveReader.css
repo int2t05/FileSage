@@ -120,7 +120,7 @@
   min-height: 58px;
   padding: 7px 18px;
   border-bottom: 1px solid var(--color-line);
-  background: #fafbf9;
+  background: var(--color-surface-subtle);
 }
 
 .archive-reader-breadcrumb,
@@ -139,7 +139,7 @@
 .archive-reader-list-heading > span:last-child { text-align: right; }
 .archive-reader-list { margin: 0; padding: 0; list-style: none; }
 .archive-reader-row { min-height: 54px; padding: 5px 18px; border-bottom: 1px solid #edf0eb; }
-.archive-reader-row:hover { background: #fafbf9; }
+.archive-reader-row:hover { background: var(--color-surface-subtle); }
 .archive-reader-row > input { width: 16px; height: 16px; margin: 0 auto; accent-color: var(--color-accent-strong); }
 .archive-reader-entry-name { display: flex; min-width: 0; align-items: center; gap: 9px; padding: 0; border: 0; background: transparent; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; }
 .archive-reader-entry-name:hover:not(:disabled) > span { color: var(--color-accent-strong); text-decoration: underline; text-underline-offset: 3px; }

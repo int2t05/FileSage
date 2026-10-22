@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStartConversationTurnAfterTerminalPlan(t *testing.T) {
@@ -30,9 +31,9 @@ func TestStartConversationTurnAfterTerminalPlan(t *testing.T) {
 		INSERT INTO operations (
 			id, plan_id, ordinal, action, source_path, target_path, source_state_json,
 			target_conflict_policy, approval_state, approved_by, approved_at_ns,
-			execution_status, created_at_ns, updated_at_ns
+			execution_status, result_message, created_at_ns, updated_at_ns
 		) VALUES ('operation-followup', 'plan-followup', 0, 'rename', 'old.txt', 'new.txt', '{}',
-			'fail', 'approved', 'user', 1, 'succeeded', 1, 1);
+			'fail', 'approved', 'user', 1, 'succeeded', '服务端确认改名完成', 1, 1);
 		UPDATE agent_conversations SET state = 'awaiting_approval', task_id = 'task-followup', plan_id = 'plan-followup'
 		WHERE id = 'conversation-followup';`); err != nil {
 		t.Fatal(err)
@@ -51,8 +52,19 @@ func TestStartConversationTurnAfterTerminalPlan(t *testing.T) {
 	if len(conversation.Messages) != 3 || conversation.Messages[1].Role != "assistant" || conversation.Messages[2].Role != "user" {
 		t.Fatalf("follow-up transcript = %#v", conversation.Messages)
 	}
-	if !strings.Contains(conversation.Messages[1].Content, "重命名：old.txt → new.txt（完成）") {
+	if !strings.Contains(conversation.Messages[1].Content, "共 1 项：完成 1") || !strings.Contains(conversation.Messages[1].Content, "重命名：old.txt → new.txt（完成）：服务端确认改名完成") {
 		t.Fatalf("missing plan result receipt: %q", conversation.Messages[1].Content)
+	}
+}
+
+func TestBoundedToolResultKeepsValidUTF8AndOneLine(t *testing.T) {
+	got := boundedToolResult("  操作\n已完成  ", 32)
+	if got != "操作 已完成" {
+		t.Fatalf("boundedToolResult() = %q", got)
+	}
+	got = boundedToolResult("中文结果较长", 5)
+	if !strings.HasSuffix(got, "…") || !utf8.ValidString(got) {
+		t.Fatalf("boundedToolResult() = %q, want valid truncated text", got)
 	}
 }
 
@@ -87,7 +99,7 @@ func TestConversationPlanReceiptReportsOmittedLongPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(receipt, "共 1 项，详情见任务记录") || strings.Contains(receipt, "另有 1 项") {
+	if !strings.Contains(receipt, "共 1 项：完成 1") || !strings.Contains(receipt, "1 项未附详细回执，详情见任务记录") || strings.Contains(receipt, "另有 1 项") {
 		t.Fatalf("receipt should identify all omitted operations: %q", receipt)
 	}
 }

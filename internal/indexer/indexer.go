@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"mime"
 	"path"
@@ -210,8 +211,24 @@ func (s *Service) scanLoop(ctx context.Context, done chan struct{}) {
 	}
 	s.mu.Unlock()
 	if err := s.scan(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		slog.Error("file index scan failed", "error", err)
+		logScanFailure(slog.Default(), err)
 	}
+}
+
+// logScanFailure 记录可诊断原因，不输出用户路径。
+func logScanFailure(logger *slog.Logger, err error) {
+	level, reason := slog.LevelError, "filesystem_scan_failed"
+	switch {
+	case errors.Is(err, fsroot.ErrWalkUnsupported):
+		level, reason = slog.LevelInfo, "safe_walk_unsupported"
+	case errors.Is(err, fsroot.ErrVolumeUnavailable):
+		level, reason = slog.LevelWarn, "volume_unavailable"
+	case errors.Is(err, fs.ErrPermission):
+		level, reason = slog.LevelWarn, "permission_denied"
+	case errors.Is(err, fs.ErrNotExist):
+		level, reason = slog.LevelWarn, "entry_disappeared"
+	}
+	logger.LogAttrs(context.Background(), level, "file index scan failed", slog.String("reason", reason))
 }
 
 // watchLoop 合并文件变化事件，并定期全量校准索引。
