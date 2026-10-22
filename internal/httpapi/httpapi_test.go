@@ -1,20 +1,24 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"filesage/internal/fsroot"
+	"filesage/internal/logging"
 )
 
 func newTestHandler(t *testing.T) http.Handler {
@@ -48,6 +52,61 @@ func TestWriteFileErrorReportsPreservedRecoveryPath(t *testing.T) {
 	}
 	if !strings.Contains(response.Body.String(), "notes/.filesage-write-0123456789abcdef") {
 		t.Fatalf("recovery path missing from response: %s", response.Body.String())
+	}
+}
+
+func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	mux := http.NewServeMux()
+	var handledRequestID string
+	mux.HandleFunc("GET /api/v1/files/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		handledRequestID = logging.RequestID(r.Context())
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	})
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/files/private-report.txt?token=secret-token", nil)
+	RequestLogger(logger, mux).ServeHTTP(response, request)
+
+	if response.Code != http.StatusInternalServerError || response.Header().Get("X-Request-ID") == "" {
+		t.Fatalf("response = %d, request id = %q", response.Code, response.Header().Get("X-Request-ID"))
+	}
+	if handledRequestID == "" || handledRequestID != response.Header().Get("X-Request-ID") {
+		t.Fatalf("request context ID %q does not match response header %q", handledRequestID, response.Header().Get("X-Request-ID"))
+	}
+	output := logs.String()
+	for _, want := range []string{"GET /api/v1/files/{path...}", "status=500", "request_id="} {
+		if !strings.Contains(output, want) {
+			t.Errorf("log output %q does not include %q", output, want)
+		}
+	}
+	for _, forbidden := range []string{"private-report.txt", "secret-token"} {
+		if strings.Contains(output, forbidden) {
+			t.Errorf("log output contains request data %q: %s", forbidden, output)
+		}
+	}
+}
+
+func TestWriteFileErrorReportsReadOnlyAndFullVolumes(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code int
+		text string
+	}{
+		{name: "read-only", err: &os.PathError{Op: "write", Path: "private.txt", Err: syscall.EROFS}, code: http.StatusForbidden, text: "只读"},
+		{name: "full", err: &os.PathError{Op: "write", Path: "private.txt", Err: syscall.ENOSPC}, code: http.StatusInsufficientStorage, text: "空间不足"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			writeFileError(response, test.err)
+			if response.Code != test.code || !strings.Contains(response.Body.String(), test.text) {
+				t.Fatalf("response = %d %q", response.Code, response.Body.String())
+			}
+			if strings.Contains(response.Body.String(), "private.txt") {
+				t.Fatalf("response exposed filesystem path: %q", response.Body.String())
+			}
+		})
 	}
 }
 

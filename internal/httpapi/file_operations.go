@@ -510,12 +510,16 @@ func (api *API) runFileOperation(w http.ResponseWriter, r *http.Request, move bo
 					continue
 				}
 				if result.Published && !result.SourceRemoved {
-					if !finishFileAudit(api, w, r, auditID, "partial", "文件已发布，来源未完全移除。") {
+					message := "目标副本已发布，但来源未能安全移除；请核对两处文件。"
+					if result.SourceRetained != "" {
+						message = fmt.Sprintf("目标副本已发布；来源文件已隔离保留在 %q，请核对后处理。", result.SourceRetained)
+					}
+					if !finishFileAudit(api, w, r, auditID, "partial", message) {
 						return
 					}
 					writeJSON(w, http.StatusMultiStatus, fileOperationResponse{
 						Path: target, Name: name, Status: "partial",
-						Message: "文件已复制到目标目录，但源文件未删除；请核对两处文件后重试。",
+						Message: message,
 					})
 					return
 				}
@@ -534,13 +538,17 @@ func (api *API) runFileOperation(w http.ResponseWriter, r *http.Request, move bo
 			}
 			if !result.Published || !result.SourceRemoved {
 				outcome := "failed"
+				message := "文件系统未确认移动结果，请刷新目录核对。"
 				if result.Published {
 					outcome = "partial"
+					if result.SourceRetained != "" {
+						message = fmt.Sprintf("来源文件已隔离保留在 %q；请核对后处理。", result.SourceRetained)
+					}
 				}
-				if !finishFileAudit(api, w, r, auditID, outcome, "文件移动结果待核查。") {
+				if !finishFileAudit(api, w, r, auditID, outcome, message) {
 					return
 				}
-				writeError(w, http.StatusInternalServerError, "文件系统未确认移动结果，请刷新目录核对。")
+				writeError(w, http.StatusInternalServerError, message)
 				return
 			}
 			if !finishFileAudit(api, w, r, auditID, "succeeded", "文件移动完成。") {

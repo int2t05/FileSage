@@ -21,6 +21,7 @@ import (
 	"filesage/internal/httpapi"
 	"filesage/internal/imagepreview"
 	"filesage/internal/indexer"
+	"filesage/internal/logging"
 	"filesage/internal/store"
 	trashsvc "filesage/internal/trash"
 	"filesage/internal/upload"
@@ -29,6 +30,7 @@ import (
 )
 
 func main() {
+	slog.SetDefault(slog.New(logging.NewRequestIDHandler(slog.NewTextHandler(os.Stderr, nil))))
 	cfg, err := config.Load()
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
@@ -51,6 +53,21 @@ func main() {
 		os.Exit(1)
 	}
 	defer root.Close()
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(cfg.DataDir, "move-recovery")); err != nil {
+		slog.Error("cannot configure move recovery", "error", err)
+		os.Exit(1)
+	}
+	moveRecovery, err := root.RecoverInterruptedMoves(context.Background())
+	if err != nil {
+		slog.Error("cannot inspect interrupted moves", "error", err)
+		os.Exit(1)
+	}
+	if moveRecovery.Restored > 0 || moveRecovery.Cleaned > 0 {
+		slog.Info("interrupted move recovery completed", "restored", moveRecovery.Restored, "cleaned", moveRecovery.Cleaned)
+	}
+	if moveRecovery.Pending > 0 {
+		slog.Warn("interrupted moves need manual review", "count", moveRecovery.Pending)
+	}
 	trashManager, err := trashsvc.Open(context.Background(), root, metadata)
 	if err != nil {
 		slog.Error("cannot recover trash operations", "error", err)
@@ -85,8 +102,10 @@ func main() {
 	conversationService := agent.NewConversationService(metadata, root, agentService, cfg.AgentModel, fileIndex)
 	defer conversationService.Close()
 	uploads, err := upload.New(upload.Config{
-		StagingDir:  filepath.Join(cfg.DataDir, "upload-staging"),
-		ManagedRoot: cfg.RootDir,
+		StagingDir:      filepath.Join(cfg.DataDir, "upload-staging"),
+		ManagedRoot:     cfg.RootDir,
+		MaxUploadSize:   cfg.UploadMaxBytes,
+		MaxStagingBytes: cfg.UploadStagingMaxBytes,
 	})
 	if err != nil {
 		slog.Error("cannot create upload handler", "error", err)
@@ -120,7 +139,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           trustedMux,
+		Handler:           httpapi.RequestLogger(slog.Default(), trustedMux),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    32 << 10,

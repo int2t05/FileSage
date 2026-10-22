@@ -244,6 +244,7 @@ func (r *Root) walkEntry(ctx context.Context, parent *os.File, name, relativePat
 	}
 
 	entry := entryFromInfo(name, relativePath, info)
+	r.applyReadOnly(&entry, relativePath)
 	if info.Mode()&os.ModeSymlink != 0 {
 		entry.Symlink = true
 		setLinkIdentity(&entry, info)
@@ -293,6 +294,7 @@ func (r *Root) walkEntry(ctx context.Context, parent *os.File, name, relativePat
 	}
 
 	entry = entryFromInfo(name, relativePath, openedInfo)
+	r.applyReadOnly(&entry, relativePath)
 	if err := visitWalkEntry(ctx, visit, entry); err != nil {
 		_ = directory.Close()
 		return err
@@ -375,7 +377,9 @@ func (r *Root) OpenReadNoFollow(relativePath string) (io.ReadCloser, Entry, erro
 		_ = file.Close()
 		return nil, Entry{}, err
 	}
-	return file, entryFromInfo(name, relativePath, info), nil
+	entry := entryFromInfo(name, relativePath, info)
+	r.applyReadOnly(&entry, relativePath)
+	return file, entry, nil
 }
 
 func verifyWalkIdentity(parent *os.File, name string, expected os.FileInfo, relativePath string) error {

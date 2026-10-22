@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -52,6 +53,14 @@ type batchTransferPlan struct {
 	target   string
 	suffix   int
 }
+
+type retainedMoveSourceError struct {
+	path  string
+	cause error
+}
+
+func (err *retainedMoveSourceError) Error() string { return err.cause.Error() }
+func (err *retainedMoveSourceError) Unwrap() error { return err.cause }
 
 type batchTransferMountInspector interface {
 	MountID(string) (uint64, error)
@@ -566,6 +575,10 @@ func (api *API) executeBatchTransferItem(ctx context.Context, destinationPath st
 			return "audit_finish_failed", published, finishErr, audited
 		}
 		if operationErr != nil {
+			var retainedErr *retainedMoveSourceError
+			if errors.As(operationErr, &retainedErr) {
+				return "partial", published, operationErr, audited
+			}
 			if errors.Is(operationErr, fs.ErrExist) || errors.Is(operationErr, fsroot.ErrConflict) {
 				if err := api.verifyBatchTransferSource(ctx, plan); err != nil {
 					return "failed", published, err, audited
@@ -665,7 +678,7 @@ func (api *API) callBatchTransfer(ctx context.Context, plan *batchTransferPlan, 
 			}
 			result, err := operator.MoveTreeNoReplace(ctx, plan.entry.Path, plan.target, *plan.snapshot)
 			if result.Published && !result.SourceRemoved {
-				return "partial", true, errOrPartial(err)
+				return "partial", true, retainedMoveSourceErrorFor(err, result.SourceRetained)
 			}
 			if result.Published && result.SourceRemoved && err != nil {
 				return "partial", true, err
@@ -701,7 +714,7 @@ func (api *API) callBatchTransfer(ctx context.Context, plan *batchTransferPlan, 
 	if move {
 		result, err := operator.MoveFileNoReplace(ctx, plan.entry.Path, plan.target, plan.entry.Fingerprint())
 		if result.Published && !result.SourceRemoved {
-			return "partial", true, errOrPartial(err)
+			return "partial", true, retainedMoveSourceErrorFor(err, result.SourceRetained)
 		}
 		if result.Published && result.SourceRemoved && err != nil {
 			return "partial", true, err
@@ -734,9 +747,21 @@ func errOrPartial(err error) error {
 	return errors.New("source was not safely removed")
 }
 
+func retainedMoveSourceErrorFor(err error, retainedPath string) error {
+	partialErr := errOrPartial(err)
+	if retainedPath == "" {
+		return partialErr
+	}
+	return &retainedMoveSourceError{path: retainedPath, cause: partialErr}
+}
+
 func batchTransferFailureMessage(err error, move, published bool) string {
 	if published {
 		if move {
+			var retainedErr *retainedMoveSourceError
+			if errors.As(err, &retainedErr) {
+				return fmt.Sprintf("目标副本已发布；来源文件已隔离保留在 %q，请核对后处理。", retainedErr.path)
+			}
 			return "目标副本已发布，但来源未能安全移除；请核对两处文件。"
 		}
 		return "目标已发布，但持久化状态无法确认；请刷新目录核对。"

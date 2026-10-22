@@ -56,6 +56,7 @@ func platformSnapshotTree(ctx context.Context, root *Root, relativePath string, 
 		if err != nil {
 			return TreeSnapshot{}, err
 		}
+		root.applyReadOnly(&entry, "")
 		rootNode := snapshotNode{entry: entry, stat: stat}
 		if err := budget.append(snapshotItem(entry, stat.Mnt_id)); err != nil {
 			return TreeSnapshot{}, err
@@ -82,6 +83,7 @@ func platformSnapshotTree(ctx context.Context, root *Root, relativePath string, 
 		if err != nil {
 			return TreeSnapshot{}, err
 		}
+		root.applyReadOnly(&node.entry, relativePath)
 		defer node.identity.Close()
 		if err := budget.append(snapshotItem(node.entry, node.stat.Mnt_id)); err != nil {
 			return TreeSnapshot{}, err
@@ -220,6 +222,7 @@ func snapshotDirectory(ctx context.Context, root *Root, directory *os.File, node
 			}
 			return err
 		}
+		root.applyReadOnly(&child.entry, childPath)
 		if isMountRoot && (unavailable || child.stat.Mnt_id != volume.id) {
 			markUnavailableVolume(&child.entry)
 			unavailable = true

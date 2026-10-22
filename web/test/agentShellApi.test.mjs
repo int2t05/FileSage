@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import ts from 'typescript';
+import { MAX_AGENT_PLAN_OPERATIONS } from '../src/api/agentPlanLimits.ts';
 
 const source = await readFile(new URL('../src/api/agent.ts', import.meta.url), 'utf8');
 const sourceFile = ts.createSourceFile('agent.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
@@ -15,7 +16,7 @@ const declarations = sourceFile.statements.filter((statement) => {
   }
   return ts.isClassDeclaration(statement) && statement.name?.text === 'AgentApiError';
 });
-const helperSource = `${declarations.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { AgentApiError, parseAgentShellChangesPage, getAgentShellChanges, getAgentShellChangePreview };`;
+const helperSource = `const MAX_AGENT_PLAN_OPERATIONS = ${MAX_AGENT_PLAN_OPERATIONS};\n${declarations.map((statement) => statement.getText(sourceFile)).join('\n')}\nexport { AgentApiError, parseAgentShellChangesPage, getAgentShellChanges, getAgentShellChangePreview };`;
 const { outputText } = ts.transpileModule(helperSource, {
   compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
 });

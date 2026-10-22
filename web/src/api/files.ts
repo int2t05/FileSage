@@ -18,7 +18,9 @@ export function archiveFileName(value: string, format: ArchiveFormat): string {
 function isArchiveNameForFormat(name: string, format: ArchiveFormat): boolean {
   return name.trim().toLowerCase().endsWith(archiveExtensions[format]);
 }
-export type FileSortMode = 'name-asc' | 'name-desc' | 'size-asc' | 'size-desc' | 'modified-asc' | 'modified-desc' | 'captured-asc' | 'captured-desc';
+export type FileSortMode = 'name-asc' | 'name-desc' | 'size-asc' | 'size-desc' | 'modified-asc' | 'modified-desc';
+export type PhotoSortMode = 'captured-asc' | 'captured-desc';
+export type FileListingSortMode = FileSortMode | PhotoSortMode;
 export type FileSearchScope = 'current' | 'recursive';
 export type FileFilterType = 'image' | 'video' | 'audio' | 'document' | 'archive' | 'directory' | 'other';
 
@@ -74,7 +76,7 @@ export interface FileListOptions {
   cursor: string;
   query: string;
   scope: FileSearchScope;
-  sort: FileSortMode;
+  sort: FileListingSortMode;
   filters?: FileFilters;
 }
 

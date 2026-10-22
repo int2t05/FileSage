@@ -1363,12 +1363,10 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
             <select className="files-sort-select" aria-label="排序方式" value={sortMode} onChange={(event) => setSortMode(event.currentTarget.value as FileSortMode)}>
               <option value="name-asc">名称升序</option>
               <option value="name-desc">名称降序</option>
-              <option value="size-desc">大小从大到小</option>
-              <option value="size-asc">大小从小到大</option>
-              <option value="modified-desc">修改时间最新</option>
-              <option value="modified-asc">修改时间最早</option>
-              <option value="captured-desc">拍摄时间最新</option>
-              <option value="captured-asc">拍摄时间最早</option>
+              <option value="modified-desc">修改时间（最新优先）</option>
+              <option value="modified-asc">修改时间（最早优先）</option>
+              <option value="size-desc">文件大小（大到小）</option>
+              <option value="size-asc">文件大小（小到大）</option>
             </select>
             <div className="files-view-switch" role="group" aria-label="显示方式">
               <button type="button" className={viewMode === 'list' ? 'is-active' : ''} aria-pressed={viewMode === 'list'} aria-label="列表视图" onClick={() => setViewMode('list')}>

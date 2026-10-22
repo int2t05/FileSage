@@ -1,4 +1,5 @@
 import { listTasks, type TaskSummary } from './tasks';
+import { MAX_AGENT_PLAN_OPERATIONS } from './agentPlanLimits.ts';
 
 export interface AgentOperation {
   id: string;
@@ -247,7 +248,9 @@ function parsePlan(value: unknown): AgentPlan {
     || value.reviewedAt !== undefined && (typeof value.reviewedAt !== 'string' || Number.isNaN(Date.parse(value.reviewedAt)))
     || typeof value.stopRequested !== 'boolean'
     || typeof value.proposalSource !== 'string'
-    || !Array.isArray(value.operations)) {
+    || !Array.isArray(value.operations)
+    || value.operations.length < 1
+    || value.operations.length > MAX_AGENT_PLAN_OPERATIONS) {
     throw new AgentApiError('Agent 服务返回了无效的方案。');
   }
   const operations = value.operations.map(parseOperation);

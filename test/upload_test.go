@@ -28,10 +28,11 @@ type runningUploadServer struct {
 func startUploadServer(t *testing.T, managedRoot, stagingDir string) *runningUploadServer {
 	t.Helper()
 	application, err := upload.New(upload.Config{
-		ManagedRoot:   managedRoot,
-		StagingDir:    stagingDir,
-		BasePath:      uploadBasePath,
-		MaxUploadSize: 1 << 20,
+		ManagedRoot:     managedRoot,
+		StagingDir:      stagingDir,
+		BasePath:        uploadBasePath,
+		MaxUploadSize:   1 << 20,
+		MaxStagingBytes: 20 << 30,
 	})
 	if err != nil {
 		t.Fatalf("create upload handler: %v", err)
@@ -308,7 +309,7 @@ func TestRejectStagingDirectoryOverlappingManagedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	stagingDir := filepath.Join(managedRoot, ".private-staging")
-	server, err := upload.New(upload.Config{ManagedRoot: managedRoot, StagingDir: stagingDir})
+	server, err := upload.New(upload.Config{ManagedRoot: managedRoot, StagingDir: stagingDir, MaxStagingBytes: 20 << 30})
 	if err == nil {
 		server.Close()
 		t.Fatal("upload handler accepted staging inside the managed root")

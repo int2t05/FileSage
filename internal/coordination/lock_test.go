@@ -67,21 +67,20 @@ func TestDifferentPathLeavesRunInParallel(t *testing.T) {
 	defer unlockA()
 
 	entered := make(chan struct{})
-	done := make(chan error, 1)
+	failed := make(chan error, 1)
 	go func() {
 		unlock, err := locker.Lock(ctx, PathKeys("photos/b.jpg")...)
 		if err != nil {
-			done <- err
+			failed <- err
 			return
 		}
 		close(entered)
 		unlock()
-		done <- nil
 	}()
 
 	select {
 	case <-entered:
-	case err := <-done:
+	case err := <-failed:
 		t.Fatalf("different leaf lock failed: %v", err)
 	case <-ctx.Done():
 		t.Fatal("different leaf waited on the first leaf")

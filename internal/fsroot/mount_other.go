@@ -7,6 +7,9 @@ package fsroot
 // platformRegisterMounts 保持非 Linux 平台的现有文件系统行为。
 func platformRegisterMounts(string) ([]registeredMount, error) { return nil, nil }
 
+// platformRootReadOnly 保持非 Linux 平台的现有文件系统行为。
+func platformRootReadOnly(string) (bool, error) { return false, nil }
+
 // platformMountIDAt 在非 Linux 平台不参与卷离线检测。
 func platformMountIDAt(string, string) (uint64, error) { return 0, ErrTrashUnsupported }
 

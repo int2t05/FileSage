@@ -12,6 +12,7 @@ import {
   parseAgentModelStatus,
   sendAgentConversationMessage,
 } from '../src/api/agentConversation.ts';
+import { MAX_AGENT_PLAN_OPERATIONS } from '../src/api/agentPlanLimits.ts';
 
 const originalFetch = globalThis.fetch;
 
@@ -587,6 +588,25 @@ describe('Agent 对话 API 解析', () => {
     assert.equal(parsed.analysisCard.operations[4].requestedMode, 292);
     assert.deepEqual(parsed.analysisCard.dataTypes, ['任务描述', '文件名与拍摄日期']);
     assert.equal(parsed.analysisCard.action, undefined);
+  });
+
+  it('确认卡支持完整方案上限，并拒绝超限方案', () => {
+    const operations = Array.from({ length: MAX_AGENT_PLAN_OPERATIONS }, (_, index) => ({
+      action: 'create_directory', filePath: '', targetPath: `整理/目录-${index}`,
+    }));
+    const parsed = parseAgentConversation(conversation({
+      analysisCard: {
+        goal: '按用户要求整理目录', operations,
+        dataTypes: ['任务描述与路径'], provider: 'ollama', model: 'qwen3:8b', destination: 'local',
+      },
+    }));
+    assert.equal(parsed.analysisCard.operations.length, MAX_AGENT_PLAN_OPERATIONS);
+    assert.throws(() => parseAgentConversation(conversation({
+      analysisCard: {
+        goal: '按用户要求整理目录', operations: [...operations, operations[0]],
+        dataTypes: ['任务描述与路径'], provider: 'ollama', model: 'qwen3:8b', destination: 'local',
+      },
+    })), AgentConversationApiError);
   });
 
   it('拒绝空或不完整的多项确认卡', () => {

@@ -21,11 +21,68 @@ type mutateAfterTrashDestination struct {
 	mutate func() error
 }
 
+type mutateAfterPermanentDeleteAudit struct {
+	*store.Store
+	mutate func() error
+}
+
+func (m *mutateAfterPermanentDeleteAudit) AppendAudit(ctx context.Context, record store.AuditRecord) (int64, error) {
+	id, err := m.Store.AppendAudit(ctx, record)
+	if err != nil || record.EventType != "permanent_delete_started" {
+		return id, err
+	}
+	return id, m.mutate()
+}
+
 func (m *mutateAfterTrashDestination) SetTrashDestinationForAgent(ctx context.Context, id int64, destination, taskID, planID, operationID string) error {
 	if err := m.Store.SetTrashDestinationForAgent(ctx, id, destination, taskID, planID, operationID); err != nil {
 		return err
 	}
 	return m.mutate()
+}
+
+func TestPermanentRemovePreservesReplacementAfterAuditWrite(t *testing.T) {
+	ctx := context.Background()
+	rootPath, databasePath := t.TempDir(), filepath.Join(t.TempDir(), "filesage.db")
+	targetPath := filepath.Join(rootPath, "note.txt")
+	concurrentPath := filepath.Join(rootPath, "concurrent-note.txt")
+	if err := os.WriteFile(targetPath, []byte("approved contents"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	root, err := fsroot.Open(rootPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	metadata, err := store.Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer metadata.Close()
+	data := &mutateAfterPermanentDeleteAudit{Store: metadata, mutate: func() error {
+		if err := os.Rename(targetPath, concurrentPath); err != nil {
+			return err
+		}
+		return os.WriteFile(targetPath, []byte("replacement contents"), 0o600)
+	}}
+	manager, err := Open(ctx, root, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := root.LstatEntry("note.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := manager.PermanentRemove(ctx, approved); !errors.Is(err, fsroot.ErrConflict) {
+		t.Fatalf("PermanentRemove() error = %v, want conflict", err)
+	}
+	if contents, err := os.ReadFile(targetPath); err != nil || string(contents) != "replacement contents" {
+		t.Fatalf("replacement after conflict = (%q, %v), want preserved replacement", contents, err)
+	}
+	if contents, err := os.ReadFile(concurrentPath); err != nil || string(contents) != "approved contents" {
+		t.Fatalf("approved entry after external rename = (%q, %v), want preserved original", contents, err)
+	}
 }
 
 func TestAgentTrashRechecksDirectoryTreeImmediatelyBeforeMove(t *testing.T) {

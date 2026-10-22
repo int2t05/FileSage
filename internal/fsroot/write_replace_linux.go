@@ -1,6 +1,6 @@
 //go:build linux
 
-// 本文件以原子交换保护已有文件的条件替换。
+// 本文件以读租约和原子交换保护已有文件的条件替换。
 package fsroot
 
 import (
@@ -47,6 +47,34 @@ func platformReplaceAtomicIfUnchanged(root *Root, target, temporary string, expe
 	if err != nil || !os.SameFile(candidateInfo, stagedPathInfo) {
 		return recoveryWriteError(temporary, conflictError("inspect staged write", target, err))
 	}
+	original, err := openRegularAt(int(parent.Fd()), targetName)
+	if err != nil {
+		return conflictError("replace", target, err)
+	}
+	defer original.Close()
+	originalInfo, err := original.Stat()
+	if err != nil || !sameFingerprint(fingerprintFromInfo(originalInfo), expected) {
+		return conflictError("replace", target, err)
+	}
+	if err := verifyOpenedFileEntry(int(parent.Fd()), targetName, original); err != nil {
+		return conflictError("replace", target, err)
+	}
+	digest, err := stableFileDigest(original, expected, expected.Size, false)
+	if err != nil || digest != expectedDigest {
+		return conflictError("replace", target, err)
+	}
+	if _, err := unix.FcntlInt(original.Fd(), unix.F_SETLEASE, unix.F_RDLCK); err != nil {
+		if errors.Is(err, unix.EAGAIN) || errors.Is(err, unix.EWOULDBLOCK) {
+			return conflictError("replace", target, err)
+		}
+		return fmt.Errorf("protect write source %q: %w: %w", target, ErrAtomicWriteUnsupported, err)
+	}
+	if err := requireReplacementReadLease(original); err != nil {
+		return conflictError("replace", target, err)
+	}
+	if err := verifyOpenedFileEntry(int(parent.Fd()), targetName, original); err != nil {
+		return conflictError("replace", target, err)
+	}
 
 	if err := unix.Renameat2(int(parent.Fd()), temporaryName, int(parent.Fd()), targetName, unix.RENAME_EXCHANGE); err != nil {
 		if errors.Is(err, unix.ENOSYS) || errors.Is(err, unix.EINVAL) || errors.Is(err, unix.EOPNOTSUPP) {
@@ -62,25 +90,27 @@ func platformReplaceAtomicIfUnchanged(root *Root, target, temporary string, expe
 	if targetErr != nil || !os.SameFile(candidateInfo, targetInfo) {
 		return recoveryWriteError(temporary, conflictError("verify published write", target, targetErr))
 	}
+	if err := requireReplacementReadLease(original); err != nil {
+		return rollbackAtomicExchange(root, parent, target, temporary, targetName, temporaryName, candidateInfo, err)
+	}
 	if digest, err := stableFileDigest(candidate, candidateFingerprint, candidateSize, true); err != nil || digest != candidateDigest {
 		return recoveryWriteError(temporary, conflictError("verify published write", target, err))
 	}
-
-	original, err := openRegularAt(int(parent.Fd()), temporaryName)
-	if err != nil {
+	if err := requireReplacementReadLease(original); err != nil {
 		return rollbackAtomicExchange(root, parent, target, temporary, targetName, temporaryName, candidateInfo, err)
 	}
-	defer original.Close()
-	originalInfo, err := original.Stat()
+	originalInfo, err = original.Stat()
 	if err != nil || !sameFingerprintAfterRename(fingerprintFromInfo(originalInfo), expected) {
 		return rollbackAtomicExchange(root, parent, target, temporary, targetName, temporaryName, candidateInfo, conflictError("verify replaced source", target, err))
 	}
 	if digest, err := stableFileDigest(original, expected, expected.Size, true); err != nil || digest != expectedDigest {
 		return rollbackAtomicExchange(root, parent, target, temporary, targetName, temporaryName, candidateInfo, conflictError("verify replaced source", target, err))
 	}
-	originalPathInfo, err := root.root.Lstat(temporary)
-	if err != nil || !os.SameFile(originalInfo, originalPathInfo) {
+	if err := verifyOpenedFileEntry(int(parent.Fd()), temporaryName, original); err != nil {
 		return rollbackAtomicExchange(root, parent, target, temporary, targetName, temporaryName, candidateInfo, conflictError("verify replaced source", target, err))
+	}
+	if err := requireReplacementReadLease(original); err != nil {
+		return rollbackAtomicExchange(root, parent, target, temporary, targetName, temporaryName, candidateInfo, err)
 	}
 
 	if err := unix.Unlinkat(int(parent.Fd()), temporaryName, 0); err != nil {
@@ -88,6 +118,34 @@ func platformReplaceAtomicIfUnchanged(root *Root, target, temporary string, expe
 	}
 	if err := parent.Sync(); err != nil {
 		return fmt.Errorf("%w: %w", ErrPublishedNotDurable, err)
+	}
+	return nil
+}
+
+// verifyOpenedFileEntry 确认打开文件仍是目录中的目标项。
+func verifyOpenedFileEntry(parentFD int, name string, file *os.File) error {
+	opened, err := statxFD(int(file.Fd()))
+	if err != nil {
+		return err
+	}
+	current, err := statxAt(parentFD, name, unix.AT_SYMLINK_NOFOLLOW)
+	if err != nil {
+		return err
+	}
+	if !sameSnapshotObject(opened, current) {
+		return ErrConflict
+	}
+	return nil
+}
+
+// requireReplacementReadLease 确保外部进程未打开旧文件写入。
+func requireReplacementReadLease(file *os.File) error {
+	lease, err := unix.FcntlInt(file.Fd(), unix.F_GETLEASE, 0)
+	if err != nil {
+		return err
+	}
+	if lease != unix.F_RDLCK {
+		return ErrConflict
 	}
 	return nil
 }
