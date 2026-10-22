@@ -6,7 +6,7 @@
 
 | 范围 | 结果 | 边界 |
 | --- | --- | --- |
-| GitHub 主线 | 主线提交 [`4a2a295`](https://github.com/int2t05/FileSage/commit/4a2a295) 的[CI](https://github.com/int2t05/FileSage/actions/runs/39736229080)通过。PR #1、#2、#4、#8、#9 已合并，重复或过期的 #3、#5、#6、#7 已关闭；开放 PR 为 0，远端仅保留 `main` 分支。 | 主线检查通过不代表已发布稳定版；目前没有 GitHub Release。 |
+| GitHub 主线 | 主线提交 [`7a053b3`](https://github.com/int2t05/FileSage/commit/7a053b3) 的[CI](https://github.com/int2t05/FileSage/actions/runs/39739140854)通过。PR #1、#2、#4、#8、#9 已合并，重复或过期的 #3、#5、#6、#7 已关闭；开放 PR 为 0，远端仅保留 `main` 分支。 | 主线检查通过不代表已发布稳定版；目前没有 GitHub Release。 |
 | Linux 发布候选 | 以 `24f8eaa279e8efcdf83fa1e6e25a4a452de225ed` 验收。主线 CI 的 Go/Web 测试、race、漏洞扫描、npm 审计、类型检查、Chromium E2E 和 Linux 发布包冒烟均通过。 | 使用合成文件和固定测试模型；尚未创建正式 Release。 |
 | 持久服务器 | 已部署代码提交 `24f8eaa`，Go 1.27.3；systemd 服务运行，LAN 健康接口返回 `ok`，网页 HTTP 200，文件索引就绪，缺失目录列表返回 404。SQLite schema v29，`integrity_check` 为 `ok`，外键违规为 0。服务器管理根及其 `home` 子挂载位于两块独立 ext4 磁盘；挂载信息确认分属不同设备，systemd 依赖覆盖两处挂载，文件 API 对管理根和 `home` 均返回 HTTP 200。`CAP_LEASE` 已加入服务能力集。隔离 ext4 验收覆盖健康检查、建目录、文本原子创建／覆盖、版本校验改名、移入回收站及删除后 404；临时服务与数据已清理。 | 真实用户文件写入仍未验收；用户决定不新增主机防火墙规则，路由器端口转发未验收。 |
 | 备份与恢复 | 隔离根目录和数据目录的恢复演练中，篡改并删除测试数据后恢复、重启，API 可读到原文件。Linux 发布包烟测将管理根与数据目录归档恢复到新路径，并由新进程读回合成文件。服务端保留更新前的 `5a11290` 二进制和网页作为程序回退副本；另有完整恢复快照，包含 systemd、环境配置与 SQLite v29 数据副本，完整性检查通过。 | 恢复演练为同机同盘；未验证独立主机、独立备份介质、整机故障或介质损坏。 |
