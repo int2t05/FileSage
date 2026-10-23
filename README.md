@@ -12,8 +12,8 @@ mounted disks and lets you review AI-proposed file changes before they run.
 
 ## Status
 
-The MVP is deployed as a LAN test service at commit `d8af3bf`; there is no
-stable release or prebuilt package yet. Track [progress and remaining work](docs/IMPLEMENTATION_PLAN.md)
+The MVP runs as a LAN test service; there is no stable release or prebuilt
+package yet. Track [progress and remaining work](docs/IMPLEMENTATION_PLAN.md)
 and see [acceptance evidence](docs/ACCEPTANCE.md).
 
 ## What it does
@@ -86,6 +86,7 @@ vulnerability scanning and a Linux package smoke test.
 
 - [Deployment and configuration](docs/DEPLOYMENT.md)
 - [Product requirements](docs/PRD.md) · [technical decisions and ADRs](docs/TECH.md)
+- [Agent conversation API](docs/agent-conversation-api.md) · [archive API](docs/archive-api.md)
 - [UI/UX](docs/design/UIUX.md) · [icon gallery](docs/design/icon-study.html) · [interactive prototype](docs/design/prototype/README.md)
 - [Feature acceptance and format support](docs/ACCEPTANCE.md)
 - [Project progress and remaining work](docs/IMPLEMENTATION_PLAN.md)

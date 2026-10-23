@@ -80,6 +80,23 @@ sudo install -o root -g root -m 0600 deploy/filesage.env.example /etc/filesage/f
 sudoedit /etc/filesage/filesage.env
 ```
 
+如需把模型密钥与普通配置分开，可使用独立的 root 私有环境文件：
+
+```sh
+sudo touch /etc/filesage/filesage-server.env
+sudo chown root:root /etc/filesage/filesage-server.env
+sudo chmod 0600 /etc/filesage/filesage-server.env
+sudoedit /etc/filesage/filesage-server.env
+```
+
+在服务 drop-in 的 `[Service]` 中添加：
+
+```ini
+EnvironmentFile=-/etc/filesage/filesage-server.env
+```
+
+不要将真实密钥写入仓库或示例文件。
+
 从源码目录部署时，将复制命令中的 `web/` 改为 `web/dist/`。
 
 只对专为 FileSage 新建的目录授予所有权：
@@ -179,7 +196,7 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
 
 `FILESAGE_ROOT` 保存原始文件和 `.filesage-trash`；`FILESAGE_DATA_DIR` 保存 SQLite、上传暂存及 Agent 暂存。可恢复备份必须在同一停服窗口包含两者，并遍历管理根目录下的所有已挂载卷。备份目标应是与数据源物理独立或异地的加密存储；暂停其他写入进程，并核对 `findmnt` 挂载及 `lsblk` 设备归属。备份包含个人文件和任务记录，应限制访问；模型密钥与挂载配置另行安全保存，不要放入公开仓库。
 
-以下示例使用 GNU tar。按实际路径修改变量，并在循环中列出每个必需的挂载点；管理根目录本身是普通目录时不要把它列入。缺少任一卷时脚本会停止，不会生成不完整备份。
+以下示例使用 GNU tar。按实际路径修改变量，并在循环中列出管理根目录下的每个预期子卷挂载点；根目录本身是普通目录时不要把它列入。脚本只核验清单中的挂载，不会自动发现遗漏的子卷；备份前须对照 `/etc/fstab` 和 `findmnt` 逐项检查。清单中任一挂载缺失时脚本停止。
 
 ```sh
 set -eu
@@ -209,7 +226,7 @@ sudo systemctl start filesage.service
 trap - 0
 ```
 
-恢复前先校验校验和，确认所有目标卷在线，并将目标准备为空目录；tar 解包不会删除备份中不存在的旧文件。示例在完整性检查通过后才启动服务；检查失败时保持服务停止并排查。真实恢复前先在隔离路径演练，并保留当前状态副本；不要把归档直接合并到非空生产目录。
+恢复前先校验校验和，确认所有目标卷在线，并将目标准备为空目录；恢复循环须列出与备份时相同的完整子卷清单。tar 解包不会删除备份中不存在的旧文件。示例在完整性检查通过后才启动服务；检查失败时保持服务停止并排查。真实恢复前先在隔离路径演练，并保留当前状态副本；不要把归档直接合并到非空生产目录。
 
 ```sh
 set -eu
@@ -239,6 +256,22 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health # 按 FILE
 ```
 
 `sqlite3` 命令行仅用于恢复验收，不是运行依赖；未安装时先按系统发行版提供的受信来源安装。
+
+## 卸载与清理
+
+先从环境文件确认 `FILESAGE_ROOT` 和 `FILESAGE_DATA_DIR`。下面移除服务、默认环境文件和程序文件，保留原始文件、SQLite、上传暂存和任务记录：
+
+```sh
+sudo systemctl disable --now filesage.service
+sudo rm -f /etc/systemd/system/filesage.service
+sudo systemctl daemon-reload
+sudo rm -f /etc/filesage/filesage.env
+sudo rm -rf /usr/local/lib/filesage
+```
+
+若创建过 systemd drop-in，先列出并逐项审阅，只删除 FileSage 专用配置。默认保留 `FILESAGE_ROOT`、`FILESAGE_DATA_DIR`、挂载卷和 `filesage` 系统账户，便于以后恢复部署。永久清除数据前，应先核对完整备份及所有挂载点，并逐项确认目标路径；不要递归删除挂载根目录。
+
+卸载前可用 `systemctl show filesage.service -p EnvironmentFiles -p DropInPaths` 核对实际加载项。上面的命令只删除模板默认环境文件；若使用了额外密钥文件或服务器专用 drop-in，应按输出逐项移除其 FileSage 专用文件，不要递归清除可能存放其他服务配置的目录。
 
 ## 可选工具
 
