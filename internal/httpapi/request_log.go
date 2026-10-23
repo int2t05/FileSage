@@ -12,6 +12,7 @@ import (
 )
 
 const slowRequestThreshold = 2 * time.Second
+const tusUploadRoute = "/api/v1/uploads/"
 
 // RequestLogger 记录错误和慢请求，不写入请求路径、查询参数或正文。
 func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
@@ -34,22 +35,36 @@ func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 		duration := time.Since(startedAt)
-		if status < http.StatusBadRequest && duration < slowRequestThreshold {
-			return
-		}
 		route := r.Pattern
 		if route == "" {
 			route = "unmatched"
 		}
-		level := slog.LevelWarn
-		if status >= http.StatusInternalServerError {
-			level = slog.LevelError
+		level, shouldLog := requestLogLevel(r.Method, route, status, duration)
+		if !shouldLog {
+			return
 		}
 		logger.LogAttrs(r.Context(), level, "http request completed",
 			slog.String("request_id", requestID), slog.String("method", r.Method),
 			slog.String("route", route), slog.Int("status", status),
 			slog.Int64("duration_ms", duration.Milliseconds()))
 	})
+}
+
+// requestLogLevel 避免把正常的大文件上传记为慢请求告警。
+func requestLogLevel(method, route string, status int, duration time.Duration) (slog.Level, bool) {
+	if status >= http.StatusInternalServerError {
+		return slog.LevelError, true
+	}
+	if status >= http.StatusBadRequest {
+		return slog.LevelWarn, true
+	}
+	if duration < slowRequestThreshold {
+		return 0, false
+	}
+	if method == http.MethodPatch && route == tusUploadRoute {
+		return slog.LevelInfo, true
+	}
+	return slog.LevelWarn, true
 }
 
 type requestLogResponse struct {

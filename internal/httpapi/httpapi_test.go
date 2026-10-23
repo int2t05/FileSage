@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"filesage/internal/fsroot"
 	"filesage/internal/logging"
@@ -89,7 +90,7 @@ func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 		t.Fatalf("request context ID %q does not match response header %q", handledRequestID, response.Header().Get("X-Request-ID"))
 	}
 	output := logs.String()
-	for _, want := range []string{"GET /api/v1/files/{path...}", "status=500", "request_id="} {
+	for _, want := range []string{"level=ERROR", "GET /api/v1/files/{path...}", "status=500", "request_id="} {
 		if !strings.Contains(output, want) {
 			t.Errorf("log output %q does not include %q", output, want)
 		}
@@ -98,6 +99,31 @@ func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 		if strings.Contains(output, forbidden) {
 			t.Errorf("log output contains request data %q: %s", forbidden, output)
 		}
+	}
+}
+
+func TestRequestLogLevelTreatsSuccessfulUploadsAsInformational(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		method   string
+		route    string
+		status   int
+		duration time.Duration
+		level    slog.Level
+		log      bool
+	}{
+		{name: "fast success omitted", method: http.MethodGet, route: "/api/v1/files/", status: http.StatusOK, duration: time.Second},
+		{name: "slow tus upload informational", method: http.MethodPatch, route: tusUploadRoute, status: http.StatusNoContent, duration: 30 * time.Second, level: slog.LevelInfo, log: true},
+		{name: "upload rejection warning", method: http.MethodPatch, route: tusUploadRoute, status: http.StatusRequestEntityTooLarge, duration: time.Second, level: slog.LevelWarn, log: true},
+		{name: "slow api warning", method: http.MethodGet, route: "/api/v1/files/", status: http.StatusOK, duration: 3 * time.Second, level: slog.LevelWarn, log: true},
+		{name: "server error", method: http.MethodPatch, route: tusUploadRoute, status: http.StatusInternalServerError, duration: 3 * time.Second, level: slog.LevelError, log: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			level, log := requestLogLevel(test.method, test.route, test.status, test.duration)
+			if level != test.level || log != test.log {
+				t.Fatalf("requestLogLevel() = (%v, %t), want (%v, %t)", level, log, test.level, test.log)
+			}
+		})
 	}
 }
 
