@@ -10,7 +10,7 @@
 | --- | --- |
 | GitHub 主线 | `b484215` 的 [CI 通过](https://github.com/int2t05/FileSage/actions/runs/39955724932)，包含 Go、Race、`go vet`、漏洞扫描、Web E2E 和 Linux 包冒烟。 |
 | 本地候选 | Go 全量测试、`go vet`、构建和安全扫描通过；Web 273 项测试、两项 TypeScript 检查、生产构建通过。Windows 浏览器 E2E 5 项通过、2 项 Linux 专项跳过。 |
-| Linux 隔离验证 | Go 全量测试、`go vet`、构建及关键包 Race 通过；本轮更新后的 TUS 活动上传校验也通过 `cmd/filesage`、`internal/origincheck` Race 检查。Linux 浏览器 E2E 7/7 通过，Agent E2E 连续两轮 8/8。 |
+| Linux 隔离验证 | Go 全量测试、`go vet`、构建通过；候选快照 `5dfb722` 的 `cmd/filesage`、`internal/httpapi`、`internal/upload`、`internal/origincheck` Race 检查通过。Linux 浏览器 E2E 7/7 通过，Agent E2E 连续两轮 8/8。 |
 | Linux 发布包 | 本轮脚本防误操作调整前，工作区快照在服务器隔离目录构建 amd64 包；13 个 Go 模块许可、SHA-256 和启动／写入／重启／备份／恢复／读取冒烟通过。新增的端口占用和 `dist` 符号链接保护仅通过 Bash 语法检查，相关场景未动态复测。 |
 | 写请求来源校验 | API 与 TUS 写请求共用来源检查；跨站请求被拒绝。对活动上传的跨站 PATCH、DELETE 测试确认暂存内容不变。 |
 | 测试服务器 | 持久 `filesage.service` 运行 `4600241`，监听 `192.0.2.172:8080`，健康检查通过、重启数 0；unit 与仓库模板一致，服务器 drop-in 声明第二块 ext4 子卷，两个环境文件均为 `root:root 0600`。SQLite v30 完整性与外键检查通过；QA 副本和 `/tmp` 顶层 FileSage 临时目录均已清理。 |
