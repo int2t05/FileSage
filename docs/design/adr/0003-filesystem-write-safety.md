@@ -2,7 +2,7 @@
 
 ## 状态
 
-**已决定；Linux 链接、并发和双卷操作已有测试，专用服务账户及 ext4 子卷已部署。永久删除使用同卷 `0700` 隔离目录和持久恢复日志；`4094793` 已通过 Linux 测试、race ×20、主线 CI 并部署。工作区进程恢复测试验证部分目录副本暂存后中断可安全恢复；隔离 Linux 全量 Go 检查及专项 race ×3 通过，尚未进入主线 CI。其他动作中断、同 UID 进程干预隔离项和真实介质故障仍待验证；详见[验收记录](../../ACCEPTANCE.md)。**
+**已决定。** Linux 链接、并发、双卷操作和永久删除恢复已有测试；专用服务账户与 ext4 子卷已部署。Agent 进程中断恢复测试已合入主线 `cd2ec48`，全量 Go 测试与测试服务器专项 race `-race -count=3` 通过；[主线 CI 全部通过](https://github.com/int2t05/FileSage/actions/runs/39953032719)。其他动作中断、同 UID 访问隔离项和真实介质故障仍待验证。
 
 ## 背景
 
@@ -40,7 +40,7 @@ Linux 永久删除在移除前创建同卷 `0700` 隔离目录，并先写入持
 - `internal/trash/manager_test.go` 的 `TestPermanentRemovePreservesReplacementAfterAuditWrite` 在永久删除开始审计期间替换路径，确认操作返回冲突并保留两项文件；`internal/fsroot/write_linux_test.go` 覆盖过期条目、活动写句柄、普通文件、空目录和软链接删除。关键删除用例在 Linux 重复 20 次通过，`fsroot` 与 trash 全包、race、`go vet` 通过。
 - `internal/fsroot/remove_entry_linux_test.go` 覆盖提交边界替换、中断恢复、源路径冲突、异常隔离项身份和已提交后不恢复。Linux Go 1.27.3 全量 `go test ./...`、`go vet ./...`、`go build ./...` 及七组关键恢复／竞态用例 `-race -count=20` 通过；主线 CI 及服务器部署后健康检查通过。
 - `internal/httpapi/write_test.go` 与 `batch_rename_test.go` 覆盖审计写入期间替换源路径，以及改名返回前目标身份变化；前者拒绝执行并结束失败审计，后者记为 `needs_review`，停止后续批次且不报告成功。改名后的身份核对不能消除系统调用窗口，也不自动恢复错误目标。Linux 全量 Go 测试、`httpapi`／`fsroot`／trash race 与全量 `go vet` 通过。
-- 工作区未提交的 `internal/agent/recovery_process_linux_test.go` 在部分复制文件已写入私有暂存后终止 API 子进程；重启清除暂存，计划要求明确重试，目标未发布、未自动重放。Linux 服务器 race ×3 通过；测试尚未进入主线 CI。
+- `internal/agent/recovery_process_linux_test.go` 在 20,000 文件复制已写入部分私有暂存后终止 API 子进程；重启清除暂存，计划要求明确重试，目标未发布且未自动重放。主线全量测试包含此用例；测试服务器专项 race `-race -count=3` 通过。
 - 隔离内核探针在服务器 `/tmp` ext4 上验证了直接从原路径 `unlink` 时租约检查与删除之间的竞态；该证据促成本次改用先隔离、再核验身份的删除流程。探针使用临时目录，未访问生产服务或真实用户文件；它不覆盖服务账户同 UID 进程对隔离目录的访问。
 - [Linux `F_SETLEASE`／`F_GETLEASE`](https://man7.org/linux/man-pages/man2/F_SETLEASE.2const.html) 说明文件租约会在冲突访问时被打破并可能阻塞调用方；该机制不使目录项删除与租约状态检查成为一个原子事务。
 - [Linux `unlinkat(2)`](https://man7.org/linux/man-pages/man2/unlinkat.2.html) 按目录句柄和路径名删除目录项，唯一支持的标志为 `AT_REMOVEDIR`；接口不提供按已打开文件身份原子删除的操作。
@@ -55,4 +55,4 @@ Linux 永久删除在移除前创建同卷 `0700` 隔离目录，并先写入持
 
 2026-10-15：采用 `os.Root` 路径约束、同文件系统暂存后原子替换、跨盘分阶段移动和执行前状态复核；服务以非 root 账户运行。为避免硬链接别名下的内容覆盖，`nlink > 1` 文件拒绝编辑、覆盖和 Shell 写回。外部进程竞态不受应用内锁约束。
 
-2026-10-23：永久删除改为同卷隔离目录、持久恢复记录和提交后清理；`4094793` 已合入、通过 CI 并部署。工作区新增 Linux API／SQLite 子进程中断测试，观察到部分目录副本已暂存后终止服务；重启清理暂存且不自动重放。隔离 Linux 全量 Go 检查及专项 race ×3 通过，测试尚待进入主线 CI；其他动作中断、隔离项的同 UID 访问及真实介质故障仍待验收。
+2026-10-23：永久删除改为同卷隔离目录、持久恢复记录和提交后清理；`4094793` 已合入、通过 CI 并部署。新增 Agent Linux API／SQLite 进程中断恢复测试并合入 `cd2ec48`；主线 CI、测试服务器全量检查及专项 race ×3 通过。其他动作中断、隔离项的同 UID 访问及真实介质故障仍待验收。

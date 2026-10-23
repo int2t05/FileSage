@@ -4,17 +4,17 @@
 
 | 范围 | 状态与证据 | 未完成项 |
 | --- | --- | --- |
-| CI 与构建 | `main` [`4600241` CI 通过](https://github.com/int2t05/FileSage/actions/runs/39922201971)：Go 全量测试、race、漏洞检查、Chromium E2E 和 Linux 包冒烟。 | 尚无稳定版 Release。 |
+| CI 与构建 | `main` [`cd2ec48` CI 全部通过](https://github.com/int2t05/FileSage/actions/runs/39953032719)：Go 测试、race、`go vet`、漏洞扫描、构建、Web E2E 和 Linux 包冒烟。 | 尚无稳定版 Release。 |
 | 测试服务器 | 运行干净主线；服务、首页正常，SQLite v30 `integrity_check=ok`、外键违规为 0；两块 ext4 卷已挂载。 | 合成数据；无账号认证或 HTTPS，仅适用于可信局域网。 |
 | 文件操作 | Linux 测试覆盖改名、编辑、跨卷移动、删除、冲突与恢复；关键删除 race 用例重复 20 次通过。 | 同 UID 外部进程干预、真实介质故障和真实业务文件。详见 [ADR-0003](design/adr/0003-filesystem-write-safety.md)。 |
 | 上传与下载 | 两次 20 GiB 上传在服务重启后续传，一次跨卷发布；20 GiB 下载与 Range、4 路并发 72 GiB 上传均通过哈希核验。 | 小时级稳定性、分设备压力与真实网络断线。测试因全机 I/O 达停止线而提前结束。 |
 | 备份恢复 | 2026-10-23 用合成文件和 SQLite 在 `/`（NVMe）与 `/home`（SATA SSD）间完成备份、恢复；恢复后 API 内容与哈希一致，SQLite 完整性为 `ok`，持久服务仍健康。 | 未覆盖生产数据、跨主机恢复或真实整盘故障。 |
-| Agent | 浏览器 E2E 覆盖审批、执行、刷新恢复和同会话续聊；真实模型完成 Shell、改名和跨卷移动。 | 进程恢复测试尚未进入主线 CI；其他工具组合和真实文件仍待验收。 |
+| Agent | 浏览器 E2E 覆盖审批、执行、刷新恢复和同会话续聊；真实模型完成 Shell、改名和跨卷移动；进程恢复用例进入主线并通过 CI。 | 其他工具组合和真实文件仍待验收。 |
 | 阅读与移动端 | 常见格式使用合成样本检查；窄屏自动化覆盖 320／360／390 CSS px。 | 复杂真实文件和实体手机验收。 |
 
-## 待主线的进程恢复测试
+## 进程中断恢复
 
-工作区 Linux API／SQLite 测试在 20,000 文件目录复制已写入部分私有暂存后终止服务。重启后暂存被清理，计划回到待显式重试状态，目标未发布且操作未自动重放。隔离 Linux 全量 Go 测试、CI 同款 Agent race、`go vet`、`go build` 和专项 race ×3 通过；测试文件尚未进入主线 CI：[测试代码](../internal/agent/recovery_process_linux_test.go)。
+Linux API／SQLite 测试在 20,000 文件目录复制已有部分内容写入私有暂存后终止服务。重启清理暂存，计划回到待显式重试状态；目标未发布，操作未自动重放。主线全量 Go 测试和测试服务器专项 race `-race -count=3` 均通过。测试代码：[recovery_process_linux_test.go](../internal/agent/recovery_process_linux_test.go)。
 
 ## 负载边界
 

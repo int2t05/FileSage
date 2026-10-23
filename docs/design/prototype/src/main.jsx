@@ -148,7 +148,7 @@ function FilePreview({ file }) {
   if (file.type === 'pdf') return <div className="preview-document"><div className="doc-logo">契</div><i /><i /><i className="short" /><i /><i /><span>房屋租赁合同</span></div>;
   if (file.type === 'sheet') return <div className="preview-sheet"><div /><div /><div /><div /><div /><div /><div /><div /><div /></div>;
   if (file.type === 'folder') return <div className="preview-folder"><Folder size={58} strokeWidth={1.1} /></div>;
-  return <div className="preview-text"><span># 产品需求</span><i>面向个人使用的文件管理系统。</i><i>原生文件夹作为分类方式。</i><i>Agent 操作需要逐项审批。</i></div>;
+  return <div className="preview-text"><span># 产品需求</span><i>面向个人使用的文件管理系统。</i><i>原生文件夹作为分类方式。</i><i>审阅计划后执行 Agent 操作。</i></div>;
 }
 
 function PhotosPage({ toast, openAgent }) {
