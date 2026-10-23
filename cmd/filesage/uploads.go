@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -21,6 +20,7 @@ import (
 
 	"filesage/internal/coordination"
 	"filesage/internal/fsroot"
+	"filesage/internal/origincheck"
 	"filesage/internal/store"
 	"filesage/internal/upload"
 )
@@ -590,7 +590,7 @@ func (manager *publicationManager) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if len(parts) == 2 && parts[1] == "retry" && r.Method == http.MethodPost {
-		if !sameOriginMutation(r) {
+		if !origincheck.AllowsMutation(r) {
 			writeUploadStatusError(w, http.StatusForbidden, "cross-origin upload changes are not allowed")
 			return
 		}
@@ -956,57 +956,6 @@ func safeUploadID(value string) bool {
 		}
 	}
 	return true
-}
-
-func sameOriginMutation(r *http.Request) bool {
-	fetchSite := r.Header.Get("Sec-Fetch-Site")
-	if fetchSite != "" && fetchSite != "same-origin" && fetchSite != "none" {
-		return false
-	}
-	origins := r.Header.Values("Origin")
-	if len(origins) == 0 {
-		return true
-	}
-	if len(origins) != 1 {
-		return false
-	}
-	origin, err := url.Parse(origins[0])
-	if err != nil || origin.Opaque != "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery || strings.ContainsAny(origins[0], "?#") || (origin.Path != "" && origin.Path != "/") {
-		return false
-	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
-	if !strings.EqualFold(origin.Scheme, scheme) {
-		return false
-	}
-	originHost, originPort, ok := normalizedRequestAuthority(origin.Host, scheme)
-	if !ok {
-		return false
-	}
-	requestHost, requestPort, ok := normalizedRequestAuthority(r.Host, scheme)
-	return ok && strings.EqualFold(originHost, requestHost) && originPort == requestPort
-}
-
-func normalizedRequestAuthority(authority, scheme string) (host, port string, ok bool) {
-	parsed, err := url.Parse("//" + authority)
-	if err != nil || parsed.Host != authority || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", "", false
-	}
-	host = strings.ToLower(parsed.Hostname())
-	if host == "" {
-		return "", "", false
-	}
-	port = parsed.Port()
-	if port == "" {
-		if scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-	return host, port, true
 }
 
 func writeUploadStatusJSON(w http.ResponseWriter, status int, value any) {

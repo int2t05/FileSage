@@ -18,6 +18,32 @@ if [ "$archive" != "dist/$bundle.tar.gz" ] || [ ! -f "$archive" ]; then
   exit 2
 fi
 
+# 独占测试端口，避免把写入请求误发给其他本机服务。
+port="${FILESAGE_SMOKE_PORT:-18089}"
+if [[ ! "$port" =~ ^[0-9]{1,5}$ ]]; then
+  echo "FILESAGE_SMOKE_PORT must be an integer from 1024 to 65535" >&2
+  exit 2
+fi
+port=$((10#$port))
+if (( port < 1024 || port > 65535 )); then
+  echo "FILESAGE_SMOKE_PORT must be an integer from 1024 to 65535" >&2
+  exit 2
+fi
+port_in_use() {
+  local listeners
+  if command -v ss >/dev/null 2>&1; then
+    if listeners="$(ss -H -ltn "sport = :$1" 2>/dev/null)"; then
+      [ -n "$listeners" ]
+      return
+    fi
+  fi
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") >/dev/null 2>&1
+}
+if port_in_use "$port"; then
+  printf 'TCP port %s is already in use; set FILESAGE_SMOKE_PORT to a free port\n' "$port" >&2
+  exit 1
+fi
+
 smoke="$(mktemp -d)"
 server_pid=
 cleanup() {
@@ -54,7 +80,6 @@ test -n "$(find "$package/web/LICENSES/npm" -type f -print -quit)"
 grep -q 'golang.org/x/sys@' "$package/LICENSES/go/README.md"
 grep -q 'lucide-react@' "$package/web/THIRD_PARTY_NOTICES.md"
 
-port=18089
 name="release-smoke-$$"
 start_server() {
   PATH="$smoke/empty-path" \
@@ -69,6 +94,12 @@ start_server() {
 wait_for_server() {
   local ready=0
   for attempt in $(seq 1 30); do
+    if ! kill -0 "$server_pid" 2>/dev/null; then
+      wait "$server_pid" 2>/dev/null || true
+      server_pid=
+      echo "FileSage test process exited before health check" >&2
+      return 1
+    fi
     if curl -fsS "http://127.0.0.1:$port/api/v1/health" -o "$smoke/health.json" 2>/dev/null; then
       ready=1
       break

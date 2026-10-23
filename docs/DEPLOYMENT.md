@@ -151,6 +151,7 @@ sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor -p C
 保持现有环境文件、管理根目录、数据目录和服务器专用 drop-in 不变。先校验发布包并解压。若版本包含数据库迁移，先按“备份与恢复”完成停服一致性备份并校验校验和；迁移失败时修复前向版本或恢复完整快照，不要单独回退旧二进制。
 
 ```sh
+set -eu
 sha256sum -c filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
 tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
 
@@ -297,6 +298,6 @@ sudo rm -rf /usr/local/lib/filesage
 
 ## 网络与数据安全
 
-FileSage 没有登录、权限分用户或 HTTPS 终止。默认仅监听回环地址。局域网使用时只绑定可信私有网卡、设置 `FILESAGE_ALLOWED_HOSTS` 并配置主机防火墙；不要暴露到公网或不可信网络。当前服务不支持通过 HTTP 反向代理访问 HTTPS 页面。
+FileSage 没有登录、权限分用户或 HTTPS 终止。任何能访问服务的网络客户端都可操作管理文件、切换 Agent 审批模式、创建并批准任务，也可消耗已配置模型的调用额度。写请求会拒绝跨站来源，但无 `Origin` 的客户端仍可调用；同源校验不提供身份认证。默认仅监听回环地址；局域网使用时只绑定可信私有网卡并设置 `FILESAGE_ALLOWED_HOSTS`，不要暴露到公网或不可信网络。当前服务不支持通过 HTTP 反向代理访问 HTTPS 页面。
 
 模型密钥只通过服务进程环境注入。Agent 对话消息会在每轮交流时发送给配置模型；文件正文不会在澄清阶段读取，只有用户确认相应分析卡后才按卡片列明范围读取并发送。正文不写入任务或审计记录。模型接入与隐私边界见 [Agent API 说明](agent-conversation-api.md)。

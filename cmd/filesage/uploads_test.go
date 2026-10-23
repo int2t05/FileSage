@@ -107,7 +107,7 @@ func newUploadIntegration(t *testing.T) *uploadIntegration {
 	return fixture
 }
 
-func TestTusUploadDoesNotAllowCrossOriginPreflight(t *testing.T) {
+func TestTusUploadRejectsCrossOriginMutationsAndPreflight(t *testing.T) {
 	fixture := newUploadIntegration(t)
 	request, err := http.NewRequest(http.MethodOptions, fixture.server.URL+"/api/v1/uploads/", nil)
 	if err != nil {
@@ -123,6 +123,77 @@ func TestTusUploadDoesNotAllowCrossOriginPreflight(t *testing.T) {
 	defer response.Body.Close()
 	if origin := response.Header.Get("Access-Control-Allow-Origin"); origin != "" {
 		t.Fatalf("cross-origin tus preflight received Access-Control-Allow-Origin %q", origin)
+	}
+
+	for _, test := range []struct {
+		method    string
+		origin    string
+		fetchSite string
+	}{
+		{method: http.MethodPost, origin: "http://attacker.test", fetchSite: "same-origin"},
+		{method: http.MethodPatch, origin: fixture.server.URL, fetchSite: "cross-site"},
+		{method: http.MethodDelete, origin: "http://attacker.test", fetchSite: "same-origin"},
+	} {
+		request, err := http.NewRequest(test.method, fixture.server.URL+"/api/v1/uploads/", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Origin", test.origin)
+		request.Header.Set("Sec-Fetch-Site", test.fetchSite)
+		response, err := fixture.server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("send cross-origin %s: %v", test.method, err)
+		}
+		if response.StatusCode != http.StatusForbidden {
+			body, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			t.Fatalf("cross-origin %s status = %d, want 403: %s", test.method, response.StatusCode, body)
+		}
+		_ = response.Body.Close()
+	}
+	entries, err := os.ReadDir(fixture.staging)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("cross-origin upload mutations created %d staging entries", len(entries))
+	}
+
+	content := []byte("partial upload")
+	id, offset := fixture.startPartial(t, content)
+	for _, test := range []struct {
+		method    string
+		origin    string
+		fetchSite string
+		body      []byte
+	}{
+		{method: http.MethodPatch, origin: "http://attacker.test", fetchSite: "same-origin", body: content[offset:]},
+		{method: http.MethodDelete, origin: fixture.server.URL, fetchSite: "cross-site"},
+	} {
+		request, err := http.NewRequest(test.method, fixture.server.URL+"/api/v1/uploads/"+id, bytes.NewReader(test.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Tus-Resumable", "1.0.0")
+		request.Header.Set("Origin", test.origin)
+		request.Header.Set("Sec-Fetch-Site", test.fetchSite)
+		if test.method == http.MethodPatch {
+			request.Header.Set("Upload-Offset", fmt.Sprint(offset))
+			request.Header.Set("Content-Type", "application/offset+octet-stream")
+		}
+		response, err := fixture.server.Client().Do(request)
+		if err != nil {
+			t.Fatalf("send cross-origin %s for active upload: %v", test.method, err)
+		}
+		if response.StatusCode != http.StatusForbidden {
+			body, _ := io.ReadAll(response.Body)
+			_ = response.Body.Close()
+			t.Fatalf("cross-origin %s for active upload returned %d, want 403: %s", test.method, response.StatusCode, body)
+		}
+		_ = response.Body.Close()
+	}
+	if got, err := os.ReadFile(filepath.Join(fixture.staging, id)); err != nil || !bytes.Equal(got, content[:offset]) {
+		t.Fatalf("cross-origin changes altered active upload: %q, err=%v", got, err)
 	}
 }
 
@@ -380,13 +451,32 @@ func TestUploadPublicationFailureRetainsStageAndCanRetry(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(fixture.rootPath, "missing"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	rejected, err := http.NewRequest(http.MethodPost, fixture.server.URL+uploadStatusPath+id+"/retry", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejected.Header.Set("Origin", "http://attacker.test")
+	rejected.Header.Set("Sec-Fetch-Site", "cross-site")
+	response, err := fixture.server.Client().Do(rejected)
+	if err != nil {
+		t.Fatalf("send cross-origin retry: %v", err)
+	}
+	if response.StatusCode != http.StatusForbidden {
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		t.Fatalf("cross-origin retry returned %d, want 403: %s", response.StatusCode, body)
+	}
+	_ = response.Body.Close()
+	if got, err := os.ReadFile(filepath.Join(fixture.staging, id)); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("cross-origin retry changed staged bytes: %q, err=%v", got, err)
+	}
 	retry, err := http.NewRequest(http.MethodPost, fixture.server.URL+uploadStatusPath+id+"/retry", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	retry.Header.Set("Origin", fixture.server.URL)
 	retry.Header.Set("Sec-Fetch-Site", "same-origin")
-	response, err := fixture.server.Client().Do(retry)
+	response, err = fixture.server.Client().Do(retry)
 	if err != nil {
 		t.Fatalf("retry upload publication: %v", err)
 	}
@@ -700,23 +790,6 @@ func TestRemovedTerminationStateCannotBeOverwrittenAfterRestart(t *testing.T) {
 	}
 	if current.Status != publicationCancelled || !strings.Contains(current.Error, "暂存数据已移除") || strings.Contains(current.Error, "可重试") {
 		t.Fatalf("removed termination state was overwritten by stale worker state: %#v", current)
-	}
-}
-
-func TestUploadRetryOriginValidation(t *testing.T) {
-	request := httptest.NewRequest(http.MethodPost, "http://filesage.test/api/v1/uploads/status/id/retry", nil)
-	request.Header.Set("Sec-Fetch-Site", "same-origin")
-	request.Header.Set("Origin", "http://filesage.test:80")
-	if !sameOriginMutation(request) {
-		t.Fatal("equivalent default-port origin should be accepted")
-	}
-	request.Header.Set("Origin", "https://filesage.test")
-	if sameOriginMutation(request) {
-		t.Fatal("different origin scheme must be rejected")
-	}
-	request.Header.Set("Origin", "http://evil.test")
-	if sameOriginMutation(request) {
-		t.Fatal("cross-site origin must be rejected")
 	}
 }
 

@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"filesage/internal/fsroot"
+	"filesage/internal/origincheck"
 	"github.com/tus/tusd/v2/pkg/filelocker"
 	"github.com/tus/tusd/v2/pkg/filestore"
 	tusd "github.com/tus/tusd/v2/pkg/handler"
@@ -175,7 +175,7 @@ func New(config Config) (*Server, error) {
 
 // ServeHTTP 处理配置上传路径下的 tus 请求。
 func (server *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if (r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodDelete) && !sameOriginRequest(r) {
+	if (r.Method == http.MethodPost || r.Method == http.MethodPatch || r.Method == http.MethodDelete) && !origincheck.AllowsMutation(r) {
 		http.Error(w, "cross-origin upload changes are not allowed", http.StatusForbidden)
 		return
 	}
@@ -437,57 +437,6 @@ func (server *Server) notifyTerminating(uploadID string) {
 	if hook != nil && validTusUploadID(uploadID) {
 		hook(uploadID)
 	}
-}
-
-func sameOriginRequest(r *http.Request) bool {
-	fetchSite := r.Header.Get("Sec-Fetch-Site")
-	if fetchSite != "" && fetchSite != "same-origin" && fetchSite != "none" {
-		return false
-	}
-	origins := r.Header.Values("Origin")
-	if len(origins) == 0 {
-		return true
-	}
-	if len(origins) != 1 {
-		return false
-	}
-	origin, err := url.Parse(origins[0])
-	if err != nil || origin.Opaque != "" || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery || strings.ContainsAny(origins[0], "?#") || (origin.Path != "" && origin.Path != "/") {
-		return false
-	}
-	requestScheme := "http"
-	if r.TLS != nil {
-		requestScheme = "https"
-	}
-	if !strings.EqualFold(origin.Scheme, requestScheme) {
-		return false
-	}
-	originHost, originPort, ok := normalizedAuthority(origin.Host, requestScheme)
-	if !ok {
-		return false
-	}
-	requestHost, requestPort, ok := normalizedAuthority(r.Host, requestScheme)
-	return ok && strings.EqualFold(originHost, requestHost) && originPort == requestPort
-}
-
-func normalizedAuthority(authority, scheme string) (host, port string, ok bool) {
-	parsed, err := url.Parse("//" + authority)
-	if err != nil || parsed.Host != authority || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", "", false
-	}
-	host = strings.ToLower(parsed.Hostname())
-	if host == "" {
-		return "", "", false
-	}
-	port = parsed.Port()
-	if port == "" {
-		if scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-	return host, port, true
 }
 
 func validateStoredInfo(info tusd.FileInfo, event Event, stagedPath string) error {

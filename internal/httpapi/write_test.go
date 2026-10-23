@@ -944,6 +944,23 @@ func TestWriteEndpointsAllowSameOriginViteProxyAndOriginlessClient(t *testing.T)
 	}
 }
 
+func TestWriteEndpointDoesNotTrustRequestURLScheme(t *testing.T) {
+	rootPath, handler := newMutationHandler(t)
+	request := httptest.NewRequest(http.MethodPost, "http://filesage.test:5173/api/v1/files/directories", strings.NewReader(`{"parent":"","name":"spoofed"}`))
+	request.URL.Scheme = "https"
+	request.Host = "filesage.test:5173"
+	request.Header.Set("Origin", "https://filesage.test:5173")
+	request.Header.Set("Sec-Fetch-Site", "same-origin")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("request with an untrusted URL scheme status = %d, want 403: %s", response.Code, response.Body.String())
+	}
+	if _, err := os.Stat(filepath.Join(rootPath, "spoofed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("request with an untrusted URL scheme changed filesystem: %v", err)
+	}
+}
+
 func TestWriteEndpointsRejectCrossSiteFetchWithoutOrigin(t *testing.T) {
 	rootPath, handler := newMutationHandler(t)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/files/directories", strings.NewReader(`{"parent":"","name":"blocked"}`))
@@ -955,27 +972,6 @@ func TestWriteEndpointsRejectCrossSiteFetchWithoutOrigin(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "blocked")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("cross-site request changed filesystem: %v", err)
-	}
-}
-
-func TestSameOriginRejectsProtocolMismatchAndMalformedOrigins(t *testing.T) {
-	for _, test := range []struct {
-		origin string
-		scheme string
-		host   string
-	}{
-		{origin: "https://filesage.test:5173", scheme: "http", host: "filesage.test:5173"},
-		{origin: "null", scheme: "http", host: "filesage.test:5173"},
-		{origin: "http://filesage.test:5173/other", scheme: "http", host: "filesage.test:5173"},
-		{origin: "http://filesage.test:5173?query", scheme: "http", host: "filesage.test:5173"},
-		{origin: "http://filesage.test:5173", scheme: "http", host: "attacker.test:5173"},
-	} {
-		if sameOrigin(test.origin, test.scheme, test.host) {
-			t.Errorf("sameOrigin(%q, %q, %q) = true", test.origin, test.scheme, test.host)
-		}
-	}
-	if !sameOrigin("https://filesage.test", "https", "filesage.test:443") {
-		t.Fatal("same https origin with an explicit default port was rejected")
 	}
 }
 

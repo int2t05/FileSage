@@ -97,9 +97,11 @@ the [security reporting guide](SECURITY.md) for private reports.
 ## Security boundary
 
 FileSage is intended for a trusted personal network. It does not authenticate
-users, provide HTTPS termination or protect an internet-facing deployment. Keep
-it on loopback or a trusted LAN behind a firewall. Agent chat messages are sent
-to the configured model as you converse. File-analysis tools read and send file
+users or provide HTTPS termination. Anyone who can reach it can browse and
+change managed files, change the Agent approval mode, create and approve tasks,
+and consume the configured model quota. Keep it on loopback or a trusted LAN;
+do not expose it to the internet or an untrusted network. Agent chat messages
+are sent to the configured model as you converse. File-analysis tools read and send file
 contents only after you confirm an analysis card; review its listed data types
 first. Shell does not read file bodies automatically. After you confirm a Shell
 run, stdout and stderr are stored locally (up to 16 KiB per stream). The next

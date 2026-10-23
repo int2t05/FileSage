@@ -26,6 +26,7 @@ import (
 	"filesage/internal/agent"
 	"filesage/internal/coordination"
 	"filesage/internal/fsroot"
+	"filesage/internal/origincheck"
 	"filesage/internal/store"
 	trashsvc "filesage/internal/trash"
 )
@@ -1760,70 +1761,11 @@ func requireEmptyRequestBody(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func requireSameOrigin(w http.ResponseWriter, r *http.Request) bool {
-	// 浏览器来源元数据可在 Origin 缺失时拦截跨站写请求。
-	fetchSite := r.Header.Get("Sec-Fetch-Site")
-	if fetchSite != "" && fetchSite != "same-origin" && fetchSite != "none" {
-		writeError(w, http.StatusForbidden, "cross-origin file changes are not allowed")
-		return false
-	}
-	origins := r.Header.Values("Origin")
-	if len(origins) == 0 {
+	if origincheck.AllowsMutation(r) {
 		return true
 	}
-	if len(origins) != 1 || !sameOrigin(origins[0], requestScheme(r), r.Host) {
-		writeError(w, http.StatusForbidden, "cross-origin file changes are not allowed")
-		return false
-	}
-	return true
-}
-
-// sameOrigin 校验协议、主机与有效端口完全一致。
-func sameOrigin(origin, requestScheme, requestHost string) bool {
-	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Opaque != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.ForceQuery || strings.ContainsAny(origin, "?#") || (parsed.Path != "" && parsed.Path != "/") {
-		return false
-	}
-	scheme := strings.ToLower(parsed.Scheme)
-	requestScheme = strings.ToLower(requestScheme)
-	if (scheme != "http" && scheme != "https") || scheme != requestScheme {
-		return false
-	}
-	originHost, originPort, ok := normalizedAuthority(parsed.Host, scheme)
-	if !ok {
-		return false
-	}
-	requestHost, requestPort, ok := normalizedAuthority(requestHost, requestScheme)
-	return ok && strings.EqualFold(originHost, requestHost) && originPort == requestPort
-}
-
-func requestScheme(r *http.Request) string {
-	if r.TLS != nil {
-		return "https"
-	}
-	if r.URL.Scheme != "" {
-		return strings.ToLower(r.URL.Scheme)
-	}
-	return "http"
-}
-
-func normalizedAuthority(authority, scheme string) (host, port string, ok bool) {
-	parsed, err := url.Parse("//" + authority)
-	if err != nil || parsed.Host != authority || parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return "", "", false
-	}
-	host = strings.ToLower(parsed.Hostname())
-	if host == "" {
-		return "", "", false
-	}
-	port = parsed.Port()
-	if port == "" {
-		if scheme == "https" {
-			port = "443"
-		} else {
-			port = "80"
-		}
-	}
-	return host, port, true
+	writeError(w, http.StatusForbidden, "cross-origin file changes are not allowed")
+	return false
 }
 
 func validRelativePath(relativePath string, allowRoot bool) bool {

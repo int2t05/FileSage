@@ -33,6 +33,12 @@ case "$stage" in
   *) echo "invalid package path" >&2; exit 2 ;;
 esac
 
+# 发布包只写入仓库内的真实输出目录，避免沿符号链接清理外部文件。
+if [ -L dist ]; then
+  echo "refusing to package through a dist symlink" >&2
+  exit 1
+fi
+
 mkdir -p dist
 rm -rf -- "$stage"
 mkdir -p "$stage/web" "$stage/deploy" "$stage/docs" "$stage/LICENSES"
