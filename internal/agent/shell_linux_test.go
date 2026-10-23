@@ -1,6 +1,6 @@
 //go:build linux
 
-// 本文件验证 Shell 对话、逐项审批与安全写回闭环。
+// 本文件验证 Shell 对话、整份计划审核与安全写回闭环。
 package agent
 
 import (
@@ -48,7 +48,7 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 	}
 	model := &scriptedConversationModel{
 		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
-		replies: []string{`{"state":"ready","reply":"确认后会在隔离副本运行命令，并逐项展示文件变化。","goal":"创建只读归档目录并调整文档目录权限","operations":[{"action":"run_shell","filePath":"","targetPath":"","shellCommand":"cat docs/existing.txt && printf updated > docs/existing.txt && mkdir -p sealed/nested && printf approved > sealed/nested/note.txt && chmod 0555 sealed/nested && chmod 0555 sealed && chmod 0700 docs","workingDir":"."}]}`},
+		replies: []string{`{"state":"ready","reply":"确认后会在隔离副本运行命令，并展示全部文件差异。","goal":"创建只读归档目录并调整文档目录权限","operations":[{"action":"run_shell","filePath":"","targetPath":"","shellCommand":"cat docs/existing.txt && printf updated > docs/existing.txt && mkdir -p sealed/nested && printf approved > sealed/nested/note.txt && chmod 0555 sealed/nested && chmod 0555 sealed && chmod 0700 docs","workingDir":"."}]}`},
 	}
 	conversationService := &ConversationService{store: metadata, root: root, plans: service, model: model}
 	conversation, err := conversationService.Create(ctx, "在隔离环境创建只读归档目录，并把 docs 设为仅所有者可访问")
@@ -68,6 +68,9 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 	}
 	if len(plan.Operations) != 1 || plan.Operations[0].Reason != "创建只读归档目录并调整文档目录权限" {
 		t.Fatalf("Shell 步骤用途 = %#v", plan.Operations)
+	}
+	if _, err := service.Decide(ctx, plan.ID, plan.Operations[0].ID, "approve", plan.Version); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("per-step Shell approval = %v, want invalid", err)
 	}
 	run, err := service.ShellRun(ctx, plan.ID)
 	if err != nil || run.Status != store.ShellRunAwaitingApproval || run.Command == "" || run.Stdout != "keep" || run.OutputDiscarded {
@@ -91,21 +94,19 @@ func TestShellConversationReviewsChangesBeforeWritingAndAppliesDirectoryModesLas
 		t.Fatalf("PreviewShellChange() = (%#v, %v)", preview, err)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "sealed")); !os.IsNotExist(err) {
-		t.Fatalf("逐项审核前已写入真实目录: %v", err)
+		t.Fatalf("计划审核前已写入真实目录: %v", err)
 	}
-	for _, change := range page.Changes {
-		plan, err = service.DecideShellChange(ctx, plan.ID, change.ID, "approve", plan.Version)
-		if err != nil {
-			t.Fatalf("approve %q: %v", change.Path, err)
-		}
+	if err := metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
 	}
-	if plan.Status != store.PlanApproved {
-		t.Fatalf("plan after per-item approval = %q", plan.Status)
+	plan, err = service.StartPlan(ctx, plan.ID, plan.Version, "manual", false)
+	if err != nil || plan.Status != store.PlanApproved {
+		t.Fatalf("StartPlan() = (%#v, %v)", plan, err)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "sealed")); !os.IsNotExist(err) {
 		t.Fatalf("批准清单后再次确认执行前已写入真实目录: %v", err)
 	}
-	plan, err = service.Execute(ctx, plan.ID, plan.Version)
+	plan, err = service.ExecuteStep(ctx, plan.ID, plan.Operations[0].ID, plan.Version)
 	if err != nil || plan.Status != store.PlanCompleted {
 		t.Fatalf("Execute() = (%#v, %v)", plan, err)
 	}
@@ -256,9 +257,12 @@ func TestShellExecutionInvalidatesPlanAfterExternalFileChange(t *testing.T) {
 	if err != nil || len(page.Changes) != 1 {
 		t.Fatalf("ShellChanges() = (%#v, %v)", page, err)
 	}
-	plan, err = service.DecideShellChange(ctx, plan.ID, page.Changes[0].ID, "approve", plan.Version)
+	if err := metadata.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = service.StartPlan(ctx, plan.ID, plan.Version, "manual", false)
 	if err != nil || plan.Status != store.PlanApproved {
-		t.Fatalf("DecideShellChange() = (%#v, %v)", plan, err)
+		t.Fatalf("StartPlan() = (%#v, %v)", plan, err)
 	}
 
 	original, err := root.LstatEntry("note.txt")
@@ -272,7 +276,7 @@ func TestShellExecutionInvalidatesPlanAfterExternalFileChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	updated, err := service.Execute(ctx, plan.ID, plan.Version)
+	updated, err := service.ExecuteStep(ctx, plan.ID, plan.Operations[0].ID, plan.Version)
 	if !errors.Is(err, ErrConflict) || updated.Status != store.PlanInvalidated {
 		t.Fatalf("Execute() = (%#v, %v), want invalidated plan and conflict", updated, err)
 	}

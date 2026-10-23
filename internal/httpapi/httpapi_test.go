@@ -75,12 +75,15 @@ func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	mux := http.NewServeMux()
 	var handledRequestID string
+	var handledHeaderID string
 	mux.HandleFunc("GET /api/v1/files/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		handledRequestID = logging.RequestID(r.Context())
+		handledHeaderID = r.Header.Get("X-Request-ID")
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 	})
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/files/private-report.txt?token=secret-token", nil)
+	request.Header.Set("X-Request-ID", "client-controlled")
 	RequestLogger(logger, mux).ServeHTTP(response, request)
 
 	if response.Code != http.StatusInternalServerError || response.Header().Get("X-Request-ID") == "" {
@@ -88,6 +91,9 @@ func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 	}
 	if handledRequestID == "" || handledRequestID != response.Header().Get("X-Request-ID") {
 		t.Fatalf("request context ID %q does not match response header %q", handledRequestID, response.Header().Get("X-Request-ID"))
+	}
+	if handledHeaderID != handledRequestID || handledHeaderID == "client-controlled" {
+		t.Fatalf("request header ID %q does not match server-generated ID %q", handledHeaderID, handledRequestID)
 	}
 	output := logs.String()
 	for _, want := range []string{"level=ERROR", "GET /api/v1/files/{path...}", "status=500", "request_id="} {

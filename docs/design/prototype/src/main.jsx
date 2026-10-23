@@ -131,7 +131,7 @@ function FilesPage({ files, query, setQuery, selected, toggleSelected, activeFil
     {selected.length > 0 && <div className="selection-bar"><b>已选择 {selected.length} 项</b><button onClick={() => toast('原型：移动所选文件')}><Move size={15} />移动</button><button onClick={() => toast('原型：复制所选文件')}><Copy size={15} />复制</button><button className="clear-select" onClick={() => toggleSelected(selected[0])}>取消选择</button></div>}
     {preview === 'list' ? <div className="file-list"><div className="list-head"><span>名称</span><span>大小</span><span>修改时间</span><span /></div>{files.map((file) => <FileRow key={file.id} file={file} checked={selected.includes(file.id)} active={activeFile.id === file.id} onCheck={() => toggleSelected(file.id)} onClick={() => selectFile(file)} toast={toast} />)}{files.length === 0 && <div className="empty-state"><Search size={22} /><b>没有找到匹配文件</b><span>尝试缩短关键词或清空搜索条件。</span></div>}</div> : <div className="file-grid">{files.map((file) => <button key={file.id} className={`file-grid-card ${activeFile.id === file.id ? 'selected' : ''}`} onClick={() => selectFile(file)}><div className={`grid-art art-${file.type}`}><IconFor file={file} /></div><span>{file.name}</span><small>{file.size} · {file.modified}</small></button>)}</div>}
     <div className="list-footer"><span>显示 {files.length} 项</span><span>文件系统为准 · <button onClick={() => toast('已刷新目录')}>刷新</button></span></div>
-    <button className="agent-quick" onClick={openAgent}><Sparkles size={16} /><span>让 Agent 帮我整理</span><small>先分析，审批后执行</small><ChevronRight size={16} /></button>
+    <button className="agent-quick" onClick={openAgent}><Sparkles size={16} /><span>让 Agent 帮我整理</span><small>先对话，再审阅计划</small><ChevronRight size={16} /></button>
   </>;
 }
 
@@ -162,24 +162,24 @@ function PhotosPage({ toast, openAgent }) {
   </>;
 }
 
-// Agent 原型展示对话确认、逐项审核和二次执行确认。
+// Agent 原型展示对话确认、整份计划审阅和执行结果。
 function AgentPage({ toast }) {
   const [stage, setStage] = useState('confirm');
   const [completed, setCompleted] = useState(false);
-  const [decision, setDecision] = useState('pending');
+  const [rejected, setRejected] = useState(false);
 
   function startNewConversation() {
     setStage('confirm');
     setCompleted(false);
-    setDecision('pending');
+    setRejected(false);
   }
 
   return <>
     <div className="page-heading"><div><div className="eyebrow">对话 · 分析 · 审核</div><h1>文件整理</h1><p>先说清目标，再审核 Agent 提出的操作</p></div><Button kind="outline" onClick={startNewConversation}>新对话</Button></div>
     <section className="agent-chat-panel" aria-label="Agent 整理对话">
-      <div className="agent-chat-heading"><span className="agent-chat-icon"><Sparkles size={17} /></span><div><b>和 Agent 对话</b><small>{completed ? '已完成' : stage === 'confirm' ? '待你确认分析' : '待你审核方案'}</small></div><span className="review-pill"><ShieldCheck size={15} />{completed ? '已完成' : stage === 'confirm' ? '待确认' : decision === 'approved' ? '已批准' : decision === 'rejected' ? '已拒绝' : '待审核'}</span></div>
+      <div className="agent-chat-heading"><span className="agent-chat-icon"><Sparkles size={17} /></span><div><b>和 Agent 对话</b><small>{completed ? '已完成' : rejected ? '已拒绝' : stage === 'confirm' ? '待你确认分析' : '待你审阅计划'}</small></div><span className="review-pill"><ShieldCheck size={15} />{completed ? '已完成' : rejected ? '已拒绝' : stage === 'confirm' ? '待确认' : '待审阅'}</span></div>
       <div className="agent-chat-thread">
-        <article className="agent-message"><span className="agent-message-icon"><Sparkles size={14} /></span><div><b>Agent</b><p>我会先和你确认整理目标与文件范围；分析后只提交操作方案，审批通过并再次确认后才会修改文件。</p></div></article>
+        <article className="agent-message"><span className="agent-message-icon"><Sparkles size={14} /></span><div><b>Agent</b><p>我会先和你确认整理目标与文件范围，再生成执行计划。你审阅计划后，我会按当前模式执行。</p></div></article>
         <article className="agent-message is-user"><span className="agent-message-icon">你</span><div><b>你</b><p>请根据正文标题重命名这份合同，保留原目录。</p></div></article>
         <article className="agent-message"><span className="agent-message-icon"><Sparkles size={14} /></span><div><b>Agent</b><p>我理解为：读取合同正文，为这一个文件提出同目录的新名称。确认后开始分析，可以吗？</p></div></article>
       </div>
@@ -188,14 +188,15 @@ function AgentPage({ toast }) {
         <p className="agent-confirm-goal">根据正文标题生成同目录重命名建议</p>
         <dl><div><dt>文件</dt><dd><code>文档/待整理/合同.md</code></dd></div><div><dt>发送内容</dt><dd>文件正文</dd></div><div><dt>模型</dt><dd>本地模型 · qwen3:8b</dd></div></dl>
         <p className="agent-confirm-note">确认后生成方案，不会直接修改文件。</p>
-        <Button kind="primary" onClick={() => { setStage('review'); toast('原型：已生成待审核方案'); }}><Check size={15} />确认分析</Button>
+        <Button kind="primary" onClick={() => { setStage('review'); toast('原型：已生成执行计划'); }}><Check size={15} />确认分析</Button>
       </section>}
-      {stage === 'review' && !completed && <section className="agent-review-card" aria-labelledby="agent-review-title">
-        <div className="agent-review-heading"><div><h2 id="agent-review-title">方案审核</h2><p>核对操作和文件路径；批准后仍需确认执行。</p></div><span>1 项待审核</span></div>
-        <article className={`approval-card ${decision === 'approved' ? 'approved' : ''}`}><div className="approval-body"><div className="approval-title"><span className="approval-icon"><FileText size={17} /></span><b>重命名合同.md</b><span className={`agent-item-status${decision === 'approved' ? ' is-approved' : decision === 'rejected' ? ' is-rejected' : ''}`}>{decision === 'approved' ? '已批准' : decision === 'rejected' ? '已拒绝' : '待审核'}</span></div><div className="path-change"><span>文档/待整理/合同.md</span><ChevronRight size={14} /><b>文档/待整理/供应商合同.md</b></div><p>依据正文标题拟定新名称。</p><div className="agent-item-actions">{decision === 'pending' ? <><Button kind="primary" onClick={() => { setDecision('approved'); toast('原型：已批准本项'); }}><Check size={15} />批准</Button><Button kind="outline" onClick={() => { setDecision('rejected'); toast('原型：已拒绝本项'); }}>拒绝</Button></> : <Button kind="outline" onClick={() => setDecision('pending')}>重新审核</Button>}</div></div></article>
-        <div className="agent-review-footer"><span>本项状态：<b>{decision === 'approved' ? '已批准' : decision === 'rejected' ? '已拒绝' : '待审核'}</b></span></div>
-        {decision === 'approved' && <div className="agent-execute"><span>执行前再确认一次。</span><Button kind="primary" onClick={() => { setCompleted(true); toast('原型：执行完成'); }}><CheckCircle2 size={15} />确认执行</Button></div>}
+      {stage === 'review' && !completed && !rejected && <section className="agent-review-card" aria-labelledby="agent-review-title">
+        <div className="agent-review-heading"><div><h2 id="agent-review-title">执行计划</h2><p>核对操作和路径；审阅后按当前模式执行。</p></div><span>1 个步骤</span></div>
+        <article className="approval-card"><div className="approval-body"><div className="approval-title"><span className="approval-icon"><FileText size={17} /></span><b>重命名合同.md</b><span className="agent-item-status">待审阅</span></div><div className="path-change"><span>文档/待整理/合同.md</span><ChevronRight size={14} /><b>文档/待整理/供应商合同.md</b></div><p>依据正文标题拟定新名称。</p></div></article>
+        <div className="agent-review-footer"><span>执行模式：<b>确认计划后连续执行</b></span></div>
+        <div className="agent-execute"><Button kind="outline" onClick={() => { setRejected(true); toast('原型：已拒绝整份计划'); }}>拒绝计划</Button><Button kind="primary" onClick={() => { setCompleted(true); toast('原型：执行完成'); }}><CheckCircle2 size={15} />审阅完成，开始执行</Button></div>
       </section>}
+      {rejected && <div className="agent-message"><b>已拒绝整份计划</b><span>文件未修改。</span></div>}
       {completed && <div className="agent-complete"><CheckCircle2 size={17} /><span>操作已完成：合同.md 已重命名为供应商合同.md。</span></div>}
       <form className="agent-composer" onSubmit={(event) => { event.preventDefault(); toast('原型：消息发送交互'); }}><textarea aria-label="继续和 Agent 对话" placeholder="继续和 Agent 对话，补充目标或范围…" rows={2} /><div><span>操作前会先向你确认</span><Button kind="primary" type="submit"><Sparkles size={15} />发送</Button></div></form>
     </section>
@@ -208,7 +209,7 @@ function TasksPage({ toast }) {
     <div className="task-tabs"><button className="active">全部 <span>4</span></button><button>进行中 <span>1</span></button><button>已完成 <span>2</span></button><button>失败 <span>1</span></button></div>
     <div className="task-list">
       <article className="task-item"><div className="task-icon upload-task"><Upload size={17} /></div><div className="task-main"><div className="task-title"><b>上传 24 个文件</b><span className="task-state running">上传中</span></div><span className="task-path">/个人空间/照片/2025 年秋季照片</span><div className="progress-track"><i /></div><div className="task-sub"><span>18 / 24 个文件 · 2.8 GB / 3.6 GB</span><b>78%</b></div></div><button className="icon-button" aria-label="暂停上传" onClick={() => toast('原型：暂停上传')}><span className="pause-icon">Ⅱ</span></button></article>
-      <article className="task-item"><div className="task-icon agent-task"><Sparkles size={17} /></div><div className="task-main"><div className="task-title"><b>照片与文档整理</b><span className="task-state waiting">待审批</span></div><span className="task-path">3 项建议 · 2 项可恢复，1 项永久删除</span><button className="task-link" onClick={() => toast('请使用 Agent 页面查看审批清单')}>继续审批 <ChevronRight size={13} /></button></div><button className="icon-button" aria-label="打开任务详情" onClick={() => toast('原型：任务详情')}><MoreHorizontal size={17} /></button></article>
+      <article className="task-item"><div className="task-icon agent-task"><Sparkles size={17} /></div><div className="task-main"><div className="task-title"><b>照片与文档整理</b><span className="task-state waiting">待审阅</span></div><span className="task-path">3 个步骤 · 2 项可恢复，1 项永久删除</span><button className="task-link" onClick={() => toast('请在 Agent 页面审阅执行计划')}>打开计划 <ChevronRight size={13} /></button></div><button className="icon-button" aria-label="打开任务详情" onClick={() => toast('原型：任务详情')}><MoreHorizontal size={17} /></button></article>
       <article className="task-item"><div className="task-icon done-task"><CheckCircle2 size={17} /></div><div className="task-main"><div className="task-title"><b>建立照片缩略图</b><span className="task-state done">已完成</span></div><span className="task-path">/照片 · 处理 384 个文件 · 今天 10:20</span></div><button className="icon-button" aria-label="打开任务详情" onClick={() => toast('原型：任务详情')}><MoreHorizontal size={17} /></button></article>
       <article className="task-item"><div className="task-icon warning-task"><AlertTriangle size={17} /></div><div className="task-main"><div className="task-title"><b>解压 archive_2024.zip</b><span className="task-state failed">部分失败</span></div><span className="task-path">8 项成功 · 2 项因目标目录权限不足未解压</span><button className="task-link" onClick={() => toast('原型：查看失败项与重试')}>查看失败项 <ChevronRight size={13} /></button></div><button className="icon-button" aria-label="重试解压" onClick={() => toast('原型：重试失败项')}><Play size={15} /></button></article>
     </div>

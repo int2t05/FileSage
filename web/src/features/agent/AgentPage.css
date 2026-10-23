@@ -1,4 +1,4 @@
-/* Agent 对话、审批状态和移动端布局。 */
+/* Agent 对话、计划审阅和移动端布局。 */
 .agent-page {
   width: min(100%, var(--content-width-agent));
   margin: 0 auto;

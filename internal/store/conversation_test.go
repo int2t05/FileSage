@@ -260,7 +260,7 @@ func TestConversationPlanMustContainEveryConfirmedOperation(t *testing.T) {
 		TaskID: task.ID, PlanID: plan.ID, OperationID: operation.ID, EventType: "plan_created",
 		Actor: "agent", Outcome: "awaiting_approval", CreatedAt: now,
 	}
-	if err := db.CreateConversationTaskPlan(ctx, "conversation-multi", task, plan, audit, "已生成待审批方案。"); err != ErrConversationConflict {
+	if err := db.CreateConversationTaskPlan(ctx, "conversation-multi", task, plan, audit, "已生成执行计划，请审阅。"); err != ErrConversationConflict {
 		t.Fatalf("truncated plan error = %v, want ErrConversationConflict", err)
 	}
 	if _, err := db.Task(ctx, task.ID); err != ErrNotFound {

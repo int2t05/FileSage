@@ -109,6 +109,42 @@ test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录�
   expect(browserErrors).toEqual([]);
 });
 
+test('Agent 拒绝整份计划后不执行文件操作', async ({ page }, testInfo) => {
+  const targetName = `agent-e2e-reviewed-${8 + testInfo.repeatEachIndex}`;
+  const browserErrors = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  const conversationListResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await page.goto('/#agent');
+  await conversationListResponse;
+  const root = await readManagedRoot(page);
+  const targetPath = path.join(root, targetName);
+  await expect(access(targetPath)).rejects.toThrow();
+
+  const composer = page.getByRole('textbox', { name: '整理需求消息' });
+  const createdConversationResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await composer.fill(`请在根目录新建一个名为 ${targetName} 的文件夹。`);
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await createdConversationResponse;
+  await expect(page.getByRole('region', { name: '确认操作' })).toContainText(targetName);
+  await page.getByRole('button', { name: '确认并生成方案' }).click();
+
+  const steps = page.getByRole('list', { name: '执行步骤' });
+  await expect(steps).toContainText(targetName);
+  await expect(page.getByRole('button', { name: '拒绝整份方案' })).toBeEnabled();
+  await expect(access(targetPath)).rejects.toThrow();
+  await page.getByRole('button', { name: '拒绝整份方案' }).click();
+
+  await expect(page.getByRole('status').filter({ hasText: '已拒绝整份方案。' })).toBeVisible();
+  await expect(access(targetPath)).rejects.toThrow();
+  expect(browserErrors).toEqual([]);
+});
+
 test('Agent 审阅并执行同目录重命名，保留原文件内容', async ({ page }, testInfo) => {
   test.skip(process.platform !== 'linux', '文件版本校验依赖 Linux 文件身份元数据');
   const suffix = `-${testInfo.repeatEachIndex}`;

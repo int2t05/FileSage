@@ -14,7 +14,7 @@ import (
 const slowRequestThreshold = 2 * time.Second
 const tusUploadRoute = "/api/v1/uploads/"
 
-// RequestLogger 记录错误和慢请求，不写入请求路径、查询参数或正文。
+// RequestLogger 记录错误和慢请求，并透传服务端生成的请求标识。
 func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
@@ -25,6 +25,14 @@ func RequestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 		if _, err := rand.Read(requestIDBytes[:]); err == nil {
 			requestID = hex.EncodeToString(requestIDBytes[:])
 			w.Header().Set("X-Request-ID", requestID)
+		}
+		if r.Header == nil {
+			r.Header = make(http.Header)
+		}
+		if requestID == "" {
+			r.Header.Del("X-Request-ID")
+		} else {
+			r.Header.Set("X-Request-ID", requestID)
 		}
 		r = r.WithContext(logging.WithRequestID(r.Context(), requestID))
 		startedAt := time.Now()

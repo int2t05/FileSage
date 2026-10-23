@@ -241,7 +241,7 @@ export function DuplicateScanReport({ scanId, onTaskCreated }: DuplicateScanRepo
       const created = await createDuplicateCleanupPlan(scanId, group.id, keeperPath, trashPaths);
       onTaskCreated(created.taskId);
     } catch (error) {
-      setPlanErrors((items) => ({ ...items, [group.id]: errorMessage(error, '生成审批方案失败。') }));
+      setPlanErrors((items) => ({ ...items, [group.id]: errorMessage(error, '生成执行计划失败。') }));
     } finally {
       setPlanBusy('');
     }
@@ -366,7 +366,7 @@ export function DuplicateScanReport({ scanId, onTaskCreated }: DuplicateScanRepo
                                 <span>{(trashSelections[group.id] ?? []).length} 个副本已选择（最多 20 个）</span>
                                 <button className="agent-secondary-button" type="button" onClick={() => { void createCleanupPlan(group); }} disabled={!keepers[group.id] || !(trashSelections[group.id]?.length) || Boolean(planBusy)}>
                                   {planBusy === group.id ? <Loader2 className="agent-spinner" size={14} aria-hidden="true" /> : null}
-                                  {planBusy === group.id ? '正在核对…' : '生成审批方案'}
+                                  {planBusy === group.id ? '正在核对…' : '生成执行计划'}
                                 </button>
                               </div>
                               {planErrors[group.id] && <p className="agent-duplicate-inline-error" role="alert">{planErrors[group.id]}</p>}

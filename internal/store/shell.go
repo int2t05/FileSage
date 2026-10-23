@@ -276,18 +276,19 @@ func (s *Store) ListShellChanges(ctx context.Context, planID string, limit, offs
 	return page, nil
 }
 
-// SetShellChangeApproval 以方案版本 CAS 逐项审批，并在首次拒绝时终止整份方案。
-func (s *Store) SetShellChangeApproval(ctx context.Context, planID, changeID string, decision ApprovalState, expectedVersion int, at time.Time) error {
-	if decision != ApprovalApproved && decision != ApprovalRejected || !validShellID(planID) || !validShellID(changeID) || expectedVersion < 1 {
+// RejectShellPlan 原子拒绝整份待审 Shell 计划。
+func (s *Store) RejectShellPlan(ctx context.Context, planID string, expectedVersion int, at time.Time) error {
+	if !validShellID(planID) || expectedVersion < 1 {
 		return ErrConflict
 	}
 	at = conversationTime(at)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin Shell item approval: %w", err)
+		return fmt.Errorf("begin Shell plan rejection: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var taskID, parentID string
+
+	var taskID, operationID string
 	var version int
 	var planStatus PlanStatus
 	var operationStatus OperationStatus
@@ -295,127 +296,79 @@ func (s *Store) SetShellChangeApproval(ctx context.Context, planID, changeID str
 	if err := tx.QueryRowContext(ctx, `SELECT p.task_id, p.version, p.status, o.id, o.execution_status, r.status
 		FROM plans p JOIN operations o ON o.plan_id = p.id JOIN shell_runs r ON r.plan_id = p.id
 		WHERE p.id = ? AND o.action = 'run_shell'`, planID).
-		Scan(&taskID, &version, &planStatus, &parentID, &operationStatus, &runStatus); err != nil {
+		Scan(&taskID, &version, &planStatus, &operationID, &operationStatus, &runStatus); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("read Shell plan for approval: %w", err)
+		return fmt.Errorf("read Shell plan for rejection: %w", err)
 	}
 	if version != expectedVersion || planStatus != PlanAwaitingApproval || operationStatus != OperationPending || runStatus != ShellRunAwaitingApproval {
 		return ErrConflict
 	}
-	var pathValue string
-	var approval ApprovalState
-	var execution OperationStatus
-	if err := tx.QueryRowContext(ctx, `SELECT path, approval_state, execution_status FROM shell_changes WHERE plan_id = ? AND id = ?`, planID, changeID).
-		Scan(&pathValue, &approval, &execution); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return ErrNotFound
-		}
-		return fmt.Errorf("read Shell change for approval: %w", err)
-	}
-	if approval != ApprovalPending || execution != OperationPending {
-		return ErrConflict
-	}
-	var approvedAt any
-	approvedBy := ""
-	if decision == ApprovalApproved {
-		approvedBy, approvedAt = "user", at.UnixNano()
-	}
-	result, err := tx.ExecContext(ctx, `UPDATE shell_changes SET approval_state = ?, approved_by = ?, approved_at_ns = ?, updated_at_ns = ?
-		WHERE plan_id = ? AND id = ? AND approval_state = 'pending' AND execution_status = 'pending'`,
-		decision, approvedBy, approvedAt, at.UnixNano(), planID, changeID)
+
+	type change struct{ id, path string }
+	rows, err := tx.QueryContext(ctx, `SELECT id, path, approval_state, execution_status FROM shell_changes WHERE plan_id = ? ORDER BY ordinal`, planID)
 	if err != nil {
-		return fmt.Errorf("update Shell change approval: %w", err)
+		return fmt.Errorf("list Shell changes for rejection: %w", err)
 	}
-	if err := requireOneRow(result, "Shell change"); err != nil {
-		return ErrConflict
-	}
-	event, outcome := "shell_change_approved", "approved"
-	if decision == ApprovalRejected {
-		event, outcome = "shell_change_rejected", "rejected"
-	}
-	if err := appendShellAudit(ctx, tx, taskID, planID, parentID, event, outcome, pathValue, at); err != nil {
-		return err
-	}
-	if decision == ApprovalRejected {
-		rows, err := tx.QueryContext(ctx, `SELECT id, path FROM shell_changes WHERE plan_id = ? AND id <> ? AND execution_status = 'pending' AND approval_state IN ('pending', 'approved') ORDER BY ordinal`, planID, changeID)
-		if err != nil {
-			return fmt.Errorf("list Shell changes to cancel: %w", err)
-		}
-		type cancelled struct{ id, path string }
-		var others []cancelled
-		for rows.Next() {
-			var item cancelled
-			if err := rows.Scan(&item.id, &item.path); err != nil {
-				_ = rows.Close()
-				return err
-			}
-			others = append(others, item)
-		}
-		if err := rows.Err(); err != nil {
+	var changes []change
+	for rows.Next() {
+		var item change
+		var approval ApprovalState
+		var status OperationStatus
+		if err := rows.Scan(&item.id, &item.path, &approval, &status); err != nil {
 			_ = rows.Close()
 			return err
 		}
-		if err := rows.Close(); err != nil {
+		if (approval != ApprovalPending && approval != ApprovalApproved) || status != OperationPending {
+			_ = rows.Close()
+			return ErrConflict
+		}
+		changes = append(changes, item)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if len(changes) == 0 || len(changes) > MaxShellChanges {
+		return ErrConflict
+	}
+
+	for _, item := range changes {
+		result, err := tx.ExecContext(ctx, `UPDATE shell_changes SET approval_state = 'rejected', approved_by = '', approved_at_ns = NULL,
+			execution_status = 'cancelled', result_message = '整份 Shell 方案已拒绝', updated_at_ns = ?
+			WHERE plan_id = ? AND id = ? AND execution_status = 'pending' AND approval_state IN ('pending', 'approved')`, at.UnixNano(), planID, item.id)
+		if err != nil {
+			return fmt.Errorf("reject Shell change: %w", err)
+		}
+		if err := requireOneRow(result, "rejected Shell change"); err != nil {
+			return ErrConflict
+		}
+		if err := appendShellAudit(ctx, tx, taskID, planID, operationID, "shell_change_rejected", "rejected", item.path, at); err != nil {
 			return err
-		}
-		for _, item := range others {
-			result, err := tx.ExecContext(ctx, `UPDATE shell_changes SET approval_state = 'invalidated', approved_by = '', approved_at_ns = NULL,
-				execution_status = 'cancelled', result_message = '整份 Shell 方案已拒绝', updated_at_ns = ?
-				WHERE plan_id = ? AND id = ? AND execution_status = 'pending' AND approval_state IN ('pending', 'approved')`, at.UnixNano(), planID, item.id)
-			if err != nil {
-				return fmt.Errorf("cancel Shell change: %w", err)
-			}
-			if err := requireOneRow(result, "cancelled Shell change"); err != nil {
-				return ErrConflict
-			}
-			if err := appendShellAudit(ctx, tx, taskID, planID, parentID, "shell_change_cancelled", "invalidated", item.path, at); err != nil {
-				return err
-			}
-		}
-		if err := execAgentOne(ctx, tx, `UPDATE operations SET approval_state = 'rejected', execution_status = 'skipped', result_message = 'Shell 方案被用户拒绝', updated_at_ns = ?
-			WHERE id = ? AND plan_id = ? AND action = 'run_shell' AND approval_state = 'pending' AND execution_status = 'pending'`, at.UnixNano(), parentID, planID); err != nil {
-			return ErrConflict
-		}
-		if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'rejected', updated_at_ns = ? WHERE id = ? AND version = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID, expectedVersion); err != nil {
-			return ErrConflict
-		}
-		if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'cancelled', updated_at_ns = ? WHERE id = ? AND status = 'awaiting_approval'`, at.UnixNano(), taskID); err != nil {
-			return ErrConflict
-		}
-		if err := execAgentOne(ctx, tx, `UPDATE shell_runs SET status = 'rejected', updated_at_ns = ? WHERE plan_id = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID); err != nil {
-			return ErrConflict
-		}
-		if err := appendShellAudit(ctx, tx, taskID, planID, parentID, "shell_plan_rejected", "rejected", "", at); err != nil {
-			return err
-		}
-	} else {
-		var pending int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM shell_changes WHERE plan_id = ? AND approval_state = 'pending'`, planID).Scan(&pending); err != nil {
-			return err
-		}
-		if pending == 0 {
-			if err := execAgentOne(ctx, tx, `UPDATE operations SET approval_state = 'approved', approved_by = 'user', approved_at_ns = ?, updated_at_ns = ?
-				WHERE id = ? AND plan_id = ? AND action = 'run_shell' AND approval_state = 'pending' AND execution_status = 'pending'`, at.UnixNano(), at.UnixNano(), parentID, planID); err != nil {
-				return ErrConflict
-			}
-			if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'approved', updated_at_ns = ? WHERE id = ? AND version = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID, expectedVersion); err != nil {
-				return ErrConflict
-			}
-			if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'paused', updated_at_ns = ? WHERE id = ? AND status = 'awaiting_approval'`, at.UnixNano(), taskID); err != nil {
-				return ErrConflict
-			}
-			if err := execAgentOne(ctx, tx, `UPDATE shell_runs SET status = 'approved', updated_at_ns = ? WHERE plan_id = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID); err != nil {
-				return ErrConflict
-			}
-			if err := appendShellAudit(ctx, tx, taskID, planID, parentID, "shell_plan_approved", "approved", "", at); err != nil {
-				return err
-			}
 		}
 	}
+	if err := execAgentOne(ctx, tx, `UPDATE operations SET approval_state = 'rejected', execution_status = 'skipped', result_message = 'Shell 方案被用户拒绝', updated_at_ns = ?
+		WHERE id = ? AND plan_id = ? AND action = 'run_shell' AND approval_state = 'pending' AND execution_status = 'pending'`, at.UnixNano(), operationID, planID); err != nil {
+		return ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE plans SET status = 'rejected', updated_at_ns = ? WHERE id = ? AND version = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID, expectedVersion); err != nil {
+		return ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE tasks SET status = 'cancelled', updated_at_ns = ? WHERE id = ? AND status = 'awaiting_approval'`, at.UnixNano(), taskID); err != nil {
+		return ErrConflict
+	}
+	if err := execAgentOne(ctx, tx, `UPDATE shell_runs SET status = 'rejected', updated_at_ns = ? WHERE plan_id = ? AND status = 'awaiting_approval'`, at.UnixNano(), planID); err != nil {
+		return ErrConflict
+	}
+	if err := appendShellAudit(ctx, tx, taskID, planID, operationID, "shell_plan_rejected", "rejected", "", at); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit Shell change approval: %w", err)
+		return fmt.Errorf("commit Shell plan rejection: %w", err)
 	}
 	return nil
 }
@@ -598,7 +551,7 @@ func (s *Store) StartShellExecution(ctx context.Context, planID string, expected
 	return nil
 }
 
-// InvalidateShellPlan 原子使 Shell 方案及全部逐项审批因文件快照冲突失效。
+// InvalidateShellPlan 原子使 Shell 方案及其全部变化因文件快照冲突失效。
 func (s *Store) InvalidateShellPlan(ctx context.Context, planID, changeID, message string, at time.Time) error {
 	if !validShellID(planID) || !validShellID(changeID) || len(message) == 0 || len(message) > maxShellChangeMessage || !utf8.ValidString(message) {
 		return ErrConflict

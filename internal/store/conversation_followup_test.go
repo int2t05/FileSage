@@ -255,7 +255,7 @@ func TestStartConversationTurnReservesCompletePlanTurn(t *testing.T) {
 				plan := PlanRecord{ID: "plan-new", TaskID: task.ID, Version: 1, Status: PlanAwaitingApproval, ModelProvider: "test", ModelName: "model", DataScopeJSON: `{"proposalSource":"conversation"}`, CreatedAt: at, UpdatedAt: at, Operations: []OperationRecord{operation}}
 				if err := db.CreateConversationTaskPlan(ctx, "conversation-budget", task, plan, AuditRecord{
 					TaskID: task.ID, PlanID: plan.ID, OperationID: operation.ID, EventType: "plan_created", Outcome: "awaiting_approval", CreatedAt: at,
-				}, "已生成待审批方案。"); err != nil {
+				}, "已生成执行计划，请审阅。"); err != nil {
 					t.Fatalf("CreateConversationTaskPlan() = %v", err)
 				}
 				conversation, err := db.Conversation(ctx, "conversation-budget")

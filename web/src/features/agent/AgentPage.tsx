@@ -53,7 +53,7 @@ import './AgentPage.css';
 const TASK_STATUS_LABELS: Record<string, string> = {
   queued: '排队中',
   analyzing: '处理中',
-  awaiting_approval: '待审批',
+  awaiting_approval: '待审阅',
   running: '执行中',
   paused: '已暂停',
   succeeded: '已完成',
@@ -69,7 +69,7 @@ const CONVERSATION_STATUS_LABELS: Record<AgentConversationState, string> = {
   failed: '未完成',
   processing: '处理中',
   analyzing: '分析中',
-  awaiting_approval: '待审核',
+  awaiting_approval: '待你审阅',
   analysis_complete: '分析完成',
 };
 
@@ -209,7 +209,7 @@ export function analysisCardPresentation(
         categories: categories.map((category) => category.path),
         modelSummary: `${card.provider} · ${card.model} · ${destinationLabel(card.destination)}`,
         dataUse: `确认后会提取上列正文并发送到${destinationLabel(card.destination)}模型；PDF／Office 最多读取前 20 页。`,
-        notice: '确认分析只生成逐项待审核的移动方案；文件不会立即移动，需逐项批准并再次确认执行。',
+        notice: '确认后只生成包含全部移动项的执行计划，不会立即移动文件。',
         confirmLabel: '确认并分析正文',
         createsPlanOnly: false,
       };
@@ -220,7 +220,7 @@ export function analysisCardPresentation(
         scopePath: card.filePath || '管理根目录',
         targetPath: card.targetPath || '管理根目录',
         dataUse: '只读取服务器本机的拍摄日期元数据；不读取或发送图片正文。',
-        notice: '确认后生成逐项待审核方案，不会移动文件。',
+        notice: '确认后生成完整归档计划，不会立即移动文件。',
         confirmLabel: '确认并生成方案',
         createsPlanOnly: true,
       };
@@ -243,7 +243,7 @@ export function analysisCardPresentation(
         model: card.model,
         destination: destinationLabel(card.destination),
         dataSummary: `将发送至${destinationLabel(card.destination)}模型：${card.dataTypes?.join('、') || '任务描述与操作路径'}`,
-        notice: '确认后只生成逐项待审核方案，不会创建软链接。',
+        notice: '确认后只生成执行计划，不会立即创建软链接。',
         confirmLabel: '确认并生成方案',
         createsPlanOnly: true,
       };
@@ -361,14 +361,14 @@ export function analysisCardPresentation(
       destination: destinationLabel(card.destination),
       dataSummary: `将发送至${destinationLabel(card.destination)}模型：${card.dataTypes?.join('、') || '任务描述与操作路径'}`,
       notice: permanentlyDeletes
-	        ? '永久删除后不可恢复。此步骤只生成待审方案，执行前还需批准并确认。'
+	        ? '永久删除后无法恢复。确认后生成计划；请审阅计划并明确确认执行。'
         : overwritesTextFile
 	        ? '会读取并发送完整原文以生成替换候选；执行后无法恢复。现在只生成候选。'
         : createsTextFile
 	        ? '只根据任务和路径生成候选，不读取文件内容；现在不会创建文件。'
         : readsBody
 	        ? '会读取所列文件全文并发送给模型生成方案，不会修改文件。'
-	        : createsPlanOnly ? '只生成待审方案，不会修改文件。' : '按所列范围分析并生成待审方案，不会修改文件。',
+	        : createsPlanOnly ? '只生成执行计划，不会修改文件。' : '按所列范围分析并生成执行计划，不会修改文件。',
       confirmLabel: overwritesTextFile ? '确认并读取原文' : createsTextFile ? '确认并生成候选' : createsPlanOnly ? '确认并生成方案' : '确认并分析',
       createsPlanOnly,
     };
@@ -441,7 +441,7 @@ export function analysisCardPresentation(
         : [{ label: '打包来源', path: filePath }, { label: '压缩包路径', path: targetPath }],
       metadata: [],
       basis: '任务描述、来源与目标路径；文件内容仅在本机处理，不发送给模型。',
-      notice: '确认后生成待审核方案，不会读写文件；解压清单将在审批方案中展示。',
+      notice: '确认后生成执行计划，不会修改文件；解压清单会列在计划中。',
       confirmLabel: '确认并生成方案',
       showModelDetails: false,
       createsPlanOnly: true,
@@ -454,7 +454,7 @@ export function analysisCardPresentation(
       paths: [{ label: '指向', path: filePath }, { label: '新链接路径', path: targetPath }],
       metadata: [],
       basis: '任务描述、目标对象与链接路径；仅在管理根目录内创建链接，不复制或修改目标。',
-      notice: '确认后只生成逐项待审核方案，不会创建软链接。',
+      notice: '确认后只生成执行计划，不会立即创建软链接。',
       confirmLabel: '确认并生成方案',
       showModelDetails: false,
       createsPlanOnly: true,

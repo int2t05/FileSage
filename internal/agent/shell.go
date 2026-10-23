@@ -509,65 +509,6 @@ func (s *Service) PreviewShellChange(ctx context.Context, planID, changeID strin
 	return ShellChangePreview{Change: change, Diff: diff}, nil
 }
 
-// DecideShellChange 复核当前文件版本后逐项记录用户审批。
-func (s *Service) DecideShellChange(ctx context.Context, planID, changeID, decision string, expectedVersion int) (store.PlanRecord, error) {
-	if s == nil || s.store == nil || s.root == nil || s.shellPayloads == nil || expectedVersion < 1 || decision != "approve" && decision != "reject" {
-		return store.PlanRecord{}, ErrInvalid
-	}
-	plan, err := s.store.Plan(ctx, planID)
-	if err != nil {
-		return store.PlanRecord{}, err
-	}
-	if plan.Version != expectedVersion || plan.Status != store.PlanAwaitingApproval || len(plan.Operations) != 1 || plan.Operations[0].Action != "run_shell" {
-		return store.PlanRecord{}, ErrConflict
-	}
-	change, err := s.shellChange(ctx, planID, changeID)
-	if err != nil {
-		return store.PlanRecord{}, err
-	}
-	if change.Status != store.OperationPending || change.Approval != store.ApprovalPending {
-		return store.PlanRecord{}, ErrConflict
-	}
-	keys := shellChangeLockKeys(plan.ScopePath, []store.ShellChangeRecord{change})
-	release, err := s.locks.Lock(ctx, keys...)
-	if err != nil {
-		return store.PlanRecord{}, err
-	}
-	defer release()
-	latest, err := s.store.Plan(ctx, planID)
-	if err != nil {
-		return store.PlanRecord{}, err
-	}
-	if latest.Version != expectedVersion || latest.Status != store.PlanAwaitingApproval {
-		return store.PlanRecord{}, ErrConflict
-	}
-	if decision == "approve" {
-		state, stateErr := decodeShellOriginalState(change)
-		if stateErr != nil {
-			return store.PlanRecord{}, stateErr
-		}
-		if err := s.verifyShellOriginal(ctx, plan.ScopePath, change, state); err != nil {
-			return s.invalidateShellPlan(ctx, plan, change, "审批时文件状态已变化，请重新分析。", err)
-		}
-	}
-	approval := store.ApprovalApproved
-	if decision == "reject" {
-		approval = store.ApprovalRejected
-	}
-	if err := s.store.SetShellChangeApproval(ctx, planID, changeID, approval, expectedVersion, time.Now().UTC()); err != nil {
-		return store.PlanRecord{}, err
-	}
-	updated, err := s.store.Plan(ctx, planID)
-	if decision == "reject" {
-		cleanupErr := s.removeShellPlanPayloads(ctx, planID)
-		if err != nil {
-			return store.PlanRecord{}, errors.Join(err, cleanupErr)
-		}
-		return updated, cleanupErr
-	}
-	return updated, err
-}
-
 func (s *Service) shellChange(ctx context.Context, planID, changeID string) (store.ShellChangeRecord, error) {
 	for offset := 0; offset < store.MaxShellChanges; offset += store.MaxShellChangePageSize {
 		page, err := s.store.ListShellChanges(ctx, planID, store.MaxShellChangePageSize, offset)
@@ -740,6 +681,18 @@ func (s *Service) removeShellPlanPayloads(ctx context.Context, planID string) er
 		}
 	}
 	return cleanupErr
+}
+
+// finishRejectedShellPlan 在拒绝提交后清理暂存并读取最终状态。
+func (s *Service) finishRejectedShellPlan(ctx context.Context, planID string) (store.PlanRecord, error) {
+	persistCtx, cancel := shellPersistenceContext(ctx)
+	defer cancel()
+	cleanupErr := s.removeShellPlanPayloads(persistCtx, planID)
+	plan, err := s.store.Plan(persistCtx, planID)
+	if err != nil {
+		return store.PlanRecord{}, errors.Join(err, cleanupErr)
+	}
+	return plan, cleanupErr
 }
 
 func isShellParent(plan store.PlanRecord) bool {

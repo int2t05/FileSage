@@ -48,7 +48,7 @@ const taskKindIcons: Record<string, LucideIcon> = {
 const taskStatusOptions: readonly { value: TaskStatus; label: string }[] = [
   { value: 'queued', label: '排队中' },
   { value: 'analyzing', label: '分析中' },
-  { value: 'awaiting_approval', label: '待审批' },
+  { value: 'awaiting_approval', label: '待审阅' },
   { value: 'running', label: '进行中' },
   { value: 'paused', label: '已暂停' },
   { value: 'succeeded', label: '已完成' },
@@ -746,7 +746,7 @@ function agentActionLabel(operation: AgentOperation): string {
   return agentActionLabels[operation.action] ?? '文件操作';
 }
 
-// 渲染 Agent 逐项审批与执行结果。
+// 渲染 Agent 计划步骤与执行结果。
 function AgentExecutionDetails({ plan, error, loading }: { plan?: AgentPlan; error: string; loading: boolean }) {
   const shellOnly = plan !== undefined && plan.operations.length === 1 && plan.operations[0]?.action === 'run_shell';
 

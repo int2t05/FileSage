@@ -96,7 +96,9 @@ describe('Agent 移动文件确认卡', () => {
       { label: '待删除项目', path: '文档/过期.txt' },
       { label: '删除后', path: '无法恢复' },
     ]);
-    assert.match(view.notice, /不可恢复/);
+    assert.match(view.notice, /永久删除后无法恢复/);
+    assert.match(view.notice, /审阅计划并明确确认执行/);
+    assert.doesNotMatch(view.notice, /逐项批准|再次确认执行/);
     assert.equal(view.createsPlanOnly, true);
   });
 
@@ -164,10 +166,10 @@ describe('Agent 移动文件确认卡', () => {
       { label: '压缩包', path: '归档/合同.zip' },
       { label: '解压到', path: '根目录' },
     ]);
-    assert.match(extract.notice, /解压清单将在审批方案中展示/);
+    assert.match(extract.notice, /解压清单会列在计划中/);
   });
 
-  it('软链接确认卡显示服务端预期路径，并明确确认不会立即创建链接', () => {
+  it('软链接确认卡显示服务端预期路径，并明确要先审阅执行计划', () => {
     const view = presentationModule.analysisCardPresentation({
       action: 'create_symlink',
       goal: '为合同建立快捷入口',
@@ -185,7 +187,8 @@ describe('Agent 移动文件确认卡', () => {
       { label: '指向', path: '资料/合同.pdf' },
       { label: '新链接路径', path: '快捷入口/合同 (1).pdf' },
     ]);
-    assert.match(view.notice, /不会创建软链接/);
+    assert.match(view.notice, /执行计划/);
+    assert.match(view.notice, /不会立即创建软链接/);
     assert.equal(view.confirmLabel, '确认并生成方案');
     assert.equal(view.createsPlanOnly, true);
   });
@@ -247,7 +250,7 @@ describe('Agent 移动文件确认卡', () => {
       scopePath: '相机',
       targetPath: '照片',
       dataUse: '只读取服务器本机的拍摄日期元数据；不读取或发送图片正文。',
-      notice: '确认后生成逐项待审核方案，不会移动文件。',
+      notice: '确认后生成完整归档计划，不会立即移动文件。',
       confirmLabel: '确认并生成方案',
       createsPlanOnly: true,
     });
@@ -336,7 +339,8 @@ describe('Agent 移动文件确认卡', () => {
     assert.equal(view.modelSummary, 'openai-compatible · glm-5.3-flash · 远程');
     assert.match(view.dataUse, /PDF／Office 最多读取前 20 页/);
     assert.match(view.dataUse, /发送到远程模型/);
-    assert.match(view.notice, /逐项待审核/);
+    assert.match(view.notice, /包含全部移动项的执行计划/);
+    assert.match(view.notice, /不会立即移动文件/);
     assert.equal(view.confirmLabel, '确认并分析正文');
     assert.equal(view.createsPlanOnly, false);
     assert.match(source, /递归范围/);

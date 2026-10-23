@@ -1,4 +1,4 @@
-// Package agent 保存并执行经过人工批准的文件建议。
+// Package agent 保存并执行经过用户计划审阅的文件操作。
 package agent
 
 import (
@@ -249,7 +249,7 @@ func (s *Service) ProposeMany(ctx context.Context, proposals []Proposal) (store.
 		audit.Message = "对话确认后的文件操作建议已保存，尚未执行"
 		reply := first.ConversationReply
 		if reply == "" {
-			reply = "已生成待审批方案。"
+			reply = "已生成执行计划，请审阅。"
 		}
 		if err := s.store.CreateConversationTaskPlan(ctx, first.ConversationID, task, plan, audit, reply); err != nil {
 			return store.PlanRecord{}, err
@@ -665,7 +665,7 @@ func (s *Service) LatestPlan(ctx context.Context, taskID string) (store.PlanReco
 	return s.store.LatestPlanForTask(ctx, taskID)
 }
 
-// Decide 逐项记录用户审批，并在批准时复核文件快照。
+// Decide 供内部兼容流程记录单项状态；用户入口通过 StartPlan 审阅整份计划。
 func (s *Service) Decide(ctx context.Context, planID, operationID, decision string, expectedVersion ...int) (store.PlanRecord, error) {
 	plan, err := s.store.Plan(ctx, planID)
 	if err != nil {
@@ -678,19 +678,7 @@ func (s *Service) Decide(ctx context.Context, planID, operationID, decision stri
 		return store.PlanRecord{}, ErrConflict
 	}
 	if isShellParent(plan) {
-		if decision != "reject" {
-			return store.PlanRecord{}, ErrInvalid
-		}
-		changes, err := s.shellPlanChanges(ctx, planID)
-		if err != nil {
-			return store.PlanRecord{}, err
-		}
-		for _, change := range changes {
-			if change.Approval == store.ApprovalPending && change.Status == store.OperationPending {
-				return s.DecideShellChange(ctx, planID, change.ID, decision, plan.Version)
-			}
-		}
-		return store.PlanRecord{}, ErrConflict
+		return store.PlanRecord{}, ErrInvalid
 	}
 	op, err := singleOperation(plan, operationID)
 	if err != nil {
@@ -748,7 +736,18 @@ func (s *Service) RejectPlan(ctx context.Context, planID string, expectedVersion
 	if plan.Version != expectedVersion || plan.Status != store.PlanAwaitingApproval || len(plan.Operations) == 0 {
 		return store.PlanRecord{}, ErrConflict
 	}
-	return s.Decide(ctx, planID, plan.Operations[0].ID, "reject", expectedVersion)
+	if isShellParent(plan) {
+		if err := s.store.RejectShellPlan(ctx, planID, expectedVersion, time.Now().UTC()); err != nil {
+			return store.PlanRecord{}, err
+		}
+		return s.finishRejectedShellPlan(ctx, planID)
+	}
+	for _, operation := range plan.Operations {
+		if operation.Approval == store.ApprovalPending && operation.Status == store.OperationPending {
+			return s.Decide(ctx, planID, operation.ID, "reject", expectedVersion)
+		}
+	}
+	return store.PlanRecord{}, ErrConflict
 }
 
 // StartPlan 固定审核时的权限模式，并验证不可恢复删除的明确确认。

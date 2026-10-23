@@ -17,7 +17,7 @@
 - `technical-coverage.md`：阅读、编辑、归档和 Agent 执行等需求对应的技术参考与验证缺口。
 - `context7/`：本地 EPUB、工作表阅读与文本编辑的文档查询快照，仅作补充证据；不随仓库发布。
 - `official/`：公开来源、采集时间和哈希清单；HTML 与正文快照仅保存在本地。
-- `docs/TECH.md`：候选架构、选型对照、技术审计 ADR 和未决风险；前端 ADR-0007 已接受。
+- `docs/TECH.md`：当前技术基线与 ADR 导航；方案对比和证据保存在各 ADR 中。
 - `docs/design/UIUX.md`：已定稿的目录优先界面结构、响应式交互、可用性状态和组件基线。
 - `docs/design/icon-study.html`：使用固定提交 SVG 构建的交互式图标规范页。
 - `docs/design/prototype/`：React 桌面／手机交互原型及运行说明。

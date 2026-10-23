@@ -1,6 +1,6 @@
 //go:build linux
 
-// 本文件验证照片归档从索引确认到逐项审批执行的完整流程。
+// 本文件验证照片归档从索引确认到计划审阅执行的完整流程。
 package agent
 
 import (
@@ -71,7 +71,7 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 	if err != nil || len(plan.Operations) != 2 {
 		t.Fatalf("photo plan = (%#v, %v), want two dated photos", plan, err)
 	}
-	if !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "2 张") || !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "1 张缺少拍摄日期") {
+	if !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "2 个照片归档步骤") || !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "1 张缺少拍摄日期并跳过") {
 		t.Fatalf("archive summary does not show candidate and skip counts: %#v", confirmed.Messages)
 	}
 	if plan.Operations[0].SourcePath != "camera/a/photo.jpg" || plan.Operations[0].TargetPath != "camera/archive/2020/01/photo.jpg" ||

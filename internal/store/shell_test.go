@@ -1,4 +1,4 @@
-// 本文件验证 Shell 暂存方案的原子保存、逐项审批与执行状态。
+// 本文件验证 Shell 计划审核、暂存差异与执行状态。
 package store
 
 import (
@@ -47,7 +47,7 @@ func prepareShellFixture(t *testing.T, count int, noChanges bool) shellFixture {
 		t.Fatalf("BeginConversationAnalysis() = (%t, %v)", claimed, err)
 	}
 	taskStatus, planStatus, runStatus := TaskAwaitingApproval, PlanAwaitingApproval, ShellRunAwaitingApproval
-	operationStatus, auditOutcome, reply := OperationPending, "awaiting_approval", "已生成逐项文件变化，请审核。"
+	operationStatus, auditOutcome, reply := OperationPending, "awaiting_approval", "已生成文件差异，请审核。"
 	if noChanges {
 		taskStatus, planStatus, runStatus = TaskSucceeded, PlanCompleted, ShellRunCompleted
 		operationStatus, auditOutcome, reply = OperationSucceeded, "completed", "命令已完成，没有发现文件变化。"
@@ -189,16 +189,17 @@ func TestCreateConversationShellTaskPlanRollsBackEveryRecord(t *testing.T) {
 	}
 }
 
-func TestShellApprovalsUseExpectedVersionAndRejectWholePlan(t *testing.T) {
+func TestRejectShellPlanChecksVersionAndRejectsWholePlan(t *testing.T) {
 	fixture := createShellFixture(t, 3, false)
 	ctx := context.Background()
-	if err := fixture.db.SetShellChangeApproval(ctx, fixture.plan.ID, fixture.changes[0].ID, ApprovalApproved, fixture.plan.Version, time.Now()); err != nil {
+	if err := fixture.db.RejectShellPlan(ctx, fixture.plan.ID, fixture.plan.Version+1, time.Now()); !errors.Is(err, ErrConflict) {
+		t.Fatalf("stale plan version error = %v", err)
+	}
+	if _, err := fixture.db.db.ExecContext(ctx, `UPDATE shell_changes SET approval_state = 'approved', approved_by = 'user', approved_at_ns = ? WHERE plan_id = ? AND id = ?`,
+		time.Now().UnixNano(), fixture.plan.ID, fixture.changes[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.db.SetShellChangeApproval(ctx, fixture.plan.ID, fixture.changes[1].ID, ApprovalApproved, fixture.plan.Version+1, time.Now()); !errors.Is(err, ErrConflict) {
-		t.Fatalf("stale approval version error = %v", err)
-	}
-	if err := fixture.db.SetShellChangeApproval(ctx, fixture.plan.ID, fixture.changes[1].ID, ApprovalRejected, fixture.plan.Version, time.Now()); err != nil {
+	if err := fixture.db.RejectShellPlan(ctx, fixture.plan.ID, fixture.plan.Version, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	plan, err := fixture.db.Plan(ctx, fixture.plan.ID)
@@ -214,12 +215,16 @@ func TestShellApprovalsUseExpectedVersionAndRejectWholePlan(t *testing.T) {
 		FROM shell_changes WHERE plan_id = ?`, fixture.plan.ID).Scan(&approved, &rejected, &invalidated, &cancelled); err != nil {
 		t.Fatal(err)
 	}
-	if approved != 0 || rejected != 1 || invalidated != 2 || cancelled != 2 {
+	if approved != 0 || rejected != 3 || invalidated != 0 || cancelled != 3 {
 		t.Fatalf("change terminal states = approved:%d rejected:%d invalidated:%d cancelled:%d", approved, rejected, invalidated, cancelled)
+	}
+	var staleApprovalMetadata int
+	if err := fixture.db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM shell_changes WHERE plan_id = ? AND (approved_by <> '' OR approved_at_ns IS NOT NULL)`, fixture.plan.ID).Scan(&staleApprovalMetadata); err != nil || staleApprovalMetadata != 0 {
+		t.Fatalf("rejected change approval metadata = (%d, %v)", staleApprovalMetadata, err)
 	}
 	var pathAudits, wrongOperation int
 	if err := fixture.db.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN operation_id <> ? THEN 1 ELSE 0 END), 0)
-		FROM audit_events WHERE plan_id = ? AND event_type IN ('shell_change_proposed', 'shell_change_approved', 'shell_change_rejected', 'shell_change_cancelled') AND source_path <> ''`, fixture.run.OperationID, fixture.plan.ID).Scan(&pathAudits, &wrongOperation); err != nil || pathAudits != 7 || wrongOperation != 0 {
+		FROM audit_events WHERE plan_id = ? AND event_type IN ('shell_change_proposed', 'shell_change_rejected') AND source_path <> ''`, fixture.run.OperationID, fixture.plan.ID).Scan(&pathAudits, &wrongOperation); err != nil || pathAudits != 6 || wrongOperation != 0 {
 		t.Fatalf("path audit = (%d paths, %d wrong parents, %v)", pathAudits, wrongOperation, err)
 	}
 }
@@ -251,9 +256,6 @@ func TestReviewedShellPlanApprovesDiffAsOneToolStep(t *testing.T) {
 		if change.Approval != ApprovalApproved || change.ApprovedBy != "user" {
 			t.Fatalf("Shell diff was not included in plan review: %#v", change)
 		}
-		if err := fixture.db.SetShellChangeApproval(ctx, plan.ID, change.ID, ApprovalApproved, plan.Version, time.Now()); !errors.Is(err, ErrConflict) {
-			t.Fatalf("per-file approval after plan review = %v, want conflict", err)
-		}
 	}
 	run, err := fixture.db.ShellRun(ctx, plan.ID)
 	if err != nil || run.Status != ShellRunApproved || run.ExitCode != 0 || run.OutputDiscarded != fixture.run.OutputDiscarded ||
@@ -268,7 +270,7 @@ func TestReviewedShellPlanApprovesDiffAsOneToolStep(t *testing.T) {
 	}
 }
 
-func TestShellChangeApprovalRaceHasOneWinner(t *testing.T) {
+func TestRejectShellPlanRaceHasOneWinner(t *testing.T) {
 	fixture := createShellFixture(t, 2, false)
 	ctx := context.Background()
 	var wg sync.WaitGroup
@@ -277,7 +279,7 @@ func TestShellChangeApprovalRaceHasOneWinner(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			results <- fixture.db.SetShellChangeApproval(ctx, fixture.plan.ID, fixture.changes[0].ID, ApprovalApproved, fixture.plan.Version, time.Now())
+			results <- fixture.db.RejectShellPlan(ctx, fixture.plan.ID, fixture.plan.Version, time.Now())
 		}()
 	}
 	wg.Wait()
@@ -289,11 +291,11 @@ func TestShellChangeApprovalRaceHasOneWinner(t *testing.T) {
 		}
 	}
 	if successes != 1 {
-		t.Fatalf("approval race succeeded %d times", successes)
+		t.Fatalf("plan rejection race succeeded %d times", successes)
 	}
 	var eventCount int
-	if err := fixture.db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE plan_id = ? AND operation_id = ? AND event_type = 'shell_change_approved' AND source_path = ?`, fixture.plan.ID, fixture.run.OperationID, fixture.changes[0].Path).Scan(&eventCount); err != nil || eventCount != 1 {
-		t.Fatalf("approval audit count = (%d, %v)", eventCount, err)
+	if err := fixture.db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_events WHERE plan_id = ? AND operation_id = ? AND event_type = 'shell_plan_rejected'`, fixture.plan.ID, fixture.run.OperationID).Scan(&eventCount); err != nil || eventCount != 1 {
+		t.Fatalf("plan rejection audit count = (%d, %v)", eventCount, err)
 	}
 }
 
@@ -301,10 +303,11 @@ func TestShellPlanInvalidationAndExecutionAreAtomic(t *testing.T) {
 	ctx := context.Background()
 	t.Run("invalidate before writing", func(t *testing.T) {
 		fixture := createShellFixture(t, 3, false)
-		for _, change := range fixture.changes {
-			if err := fixture.db.SetShellChangeApproval(ctx, fixture.plan.ID, change.ID, ApprovalApproved, fixture.plan.Version, time.Now()); err != nil {
-				t.Fatal(err)
-			}
+		if err := fixture.db.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.ReviewShellPlan(ctx, fixture.plan.ID, fixture.plan.Version, "manual", time.Now().UTC()); err != nil {
+			t.Fatal(err)
 		}
 		if err := fixture.db.InvalidateShellPlan(ctx, fixture.plan.ID, fixture.changes[1].ID, "文件状态已变化", time.Now()); err != nil {
 			t.Fatal(err)
@@ -329,10 +332,11 @@ func TestShellPlanInvalidationAndExecutionAreAtomic(t *testing.T) {
 	})
 	t.Run("execution success", func(t *testing.T) {
 		fixture := createShellFixture(t, 2, false)
-		for _, change := range fixture.changes {
-			if err := fixture.db.SetShellChangeApproval(ctx, fixture.plan.ID, change.ID, ApprovalApproved, fixture.plan.Version, time.Now()); err != nil {
-				t.Fatal(err)
-			}
+		if err := fixture.db.SetAgentBypassPermission(ctx, false, time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.ReviewShellPlan(ctx, fixture.plan.ID, fixture.plan.Version, "manual", time.Now().UTC()); err != nil {
+			t.Fatal(err)
 		}
 		if err := fixture.db.StartShellExecution(ctx, fixture.plan.ID, fixture.plan.Version, time.Now()); err != nil {
 			t.Fatal(err)

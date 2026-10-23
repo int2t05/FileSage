@@ -1,4 +1,4 @@
-// 本文件提供 Agent Shell 变更审阅与逐项审批接口。
+// 本文件提供 Agent Shell 变化查询与差异预览接口。
 package httpapi
 
 import (

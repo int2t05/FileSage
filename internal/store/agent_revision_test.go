@@ -155,7 +155,7 @@ func TestReviseAgentPlanMovesConversationToNewVersionAtomically(t *testing.T) {
 	plan := PlanRecord{ID: "conversation-plan", TaskID: task.ID, Version: 1, Status: PlanAwaitingApproval, ModelProvider: "test", ModelName: "model", DataScopeJSON: `{"proposalSource":"conversation"}`, CreatedAt: now, UpdatedAt: now, Operations: []OperationRecord{operation}}
 	if err := metadata.CreateConversationTaskPlan(ctx, "revision-conversation", task, plan, AuditRecord{
 		TaskID: task.ID, PlanID: plan.ID, OperationID: operation.ID, EventType: "plan_created", Actor: "agent", Outcome: "awaiting_approval", CreatedAt: now,
-	}, "已生成待审批方案。"); err != nil {
+	}, "已生成执行计划，请审阅。"); err != nil {
 		t.Fatal(err)
 	}
 	revised := revisedFixturePlan(plan, 1)

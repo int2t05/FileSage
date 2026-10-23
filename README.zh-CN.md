@@ -72,13 +72,7 @@ npm run e2e
 
 ## 项目文档
 
-- [部署与配置](docs/DEPLOYMENT.md)
-- [产品需求](docs/PRD.md) · [技术决策与 ADR](docs/TECH.md)
-- [Agent 对话 API](docs/agent-conversation-api.md) · [归档 API](docs/archive-api.md)
-- [UI/UX 设计](docs/design/UIUX.md) · [图标展示页](docs/design/icon-study.html) · [交互原型](docs/design/prototype/README.md)
-- [功能验收与格式支持](docs/ACCEPTANCE.md)
-- [项目进度与后续工作](docs/IMPLEMENTATION_PLAN.md)
-- [竞品与实现调研](reference/README.md)
+- [文档导航](docs/README.md) · [项目进度](docs/IMPLEMENTATION_PLAN.md) · [验收记录](docs/ACCEPTANCE.md)
 - [参与贡献](CONTRIBUTING.md) · [安全问题反馈](SECURITY.md)
 
 ## 反馈与支持
