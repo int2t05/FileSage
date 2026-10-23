@@ -11,6 +11,7 @@
 | 本地候选 | Go 测试、`vet`、构建、漏洞扫描通过；Web 273 项测试、TypeScript 检查和生产构建通过。Windows 浏览器 E2E 6 项通过、2 项 Linux 专项跳过。 |
 | Agent 会话 | 同一会话执行后继续新任务的浏览器主流程定向重复 3 次，3/3 通过；审批模式并发变化回归 1/1 通过。 |
 | 真实模型 API | Linux amd64 候选在服务器临时 unit 中通过 `glm-5.3-flash` 澄清对话：HTTP 201、状态 `clarifying`、有助手回复；无分析卡、计划、任务或文件变化。临时服务、SQLite 和根目录均已清理。 |
+| 当前候选 Linux Race `79186f9` | `go test -race -count=1 ./internal/logging ./internal/httpapi ./internal/agent` 通过；临时 unit 内存上限 4 GiB、峰值 555 MiB，持久服务健康，临时源码与运行目录已清理。 |
 | 隔离 Linux 快照 `5dfb722` | Go 全量测试、`vet`、构建，4 个核心包 Race 检查通过；浏览器 E2E 7/7，Agent E2E 8/8 连续两轮通过。不是当前 `fe1da33` 的完整 CI 结果。 |
 | 发布包 | 13 个 Go 模块许可、SHA-256，以及启动、写入、重启、备份和恢复冒烟通过。隔离动态验证确认 `dist` 软链接被拒绝且目标标记保留；占用端口被拒绝且既有监听仍存活。 |
 | 安全与文件操作 | 跨站写请求被拒绝且上传内容未变化；20 GiB 续传／下载、72 GiB 并发上传、双盘恢复和删除竞态测试通过。 |
