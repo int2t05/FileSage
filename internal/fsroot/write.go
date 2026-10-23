@@ -312,6 +312,18 @@ func (e *WriteRecoveryError) Error() string {
 
 func (e *WriteRecoveryError) Unwrap() error { return e.Cause }
 
+// EntryRemovalRecoveryError 表示删除隔离或恢复需要人工核查。
+type EntryRemovalRecoveryError struct {
+	Path  string
+	Cause error
+}
+
+func (e *EntryRemovalRecoveryError) Error() string {
+	return fmt.Sprintf("delete needs manual recovery at %q: %v", e.Path, e.Cause)
+}
+
+func (e *EntryRemovalRecoveryError) Unwrap() error { return e.Cause }
+
 // digestIfUnchanged 在内容摘要前后复核文件身份与路径状态。
 func (r *Root) digestIfUnchanged(rel string, expected Fingerprint) ([32]byte, error) {
 	if err := r.checkFingerprint(rel, expected); err != nil {

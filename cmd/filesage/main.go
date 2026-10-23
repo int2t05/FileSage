@@ -59,14 +59,14 @@ func main() {
 	}
 	moveRecovery, err := root.RecoverInterruptedMoves(context.Background())
 	if err != nil {
-		slog.Error("cannot inspect interrupted moves", "error", err)
+		slog.Error("cannot inspect interrupted file operations", "error", err)
 		os.Exit(1)
 	}
 	if moveRecovery.Restored > 0 || moveRecovery.Cleaned > 0 {
-		slog.Info("interrupted move recovery completed", "restored", moveRecovery.Restored, "cleaned", moveRecovery.Cleaned)
+		slog.Info("interrupted file operation recovery completed", "restored", moveRecovery.Restored, "cleaned", moveRecovery.Cleaned)
 	}
 	if moveRecovery.Pending > 0 {
-		slog.Warn("interrupted moves need manual review", "count", moveRecovery.Pending)
+		slog.Warn("interrupted file operations need manual review", "count", moveRecovery.Pending, "paths", moveRecovery.PendingPaths)
 	}
 	trashManager, err := trashsvc.Open(context.Background(), root, metadata)
 	if err != nil {

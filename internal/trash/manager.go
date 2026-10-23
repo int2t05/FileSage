@@ -282,7 +282,12 @@ func (m *Manager) PermanentRemove(ctx context.Context, expected fsroot.Entry) er
 			})
 			return errors.Join(err, auditErr)
 		}
-		_, _ = m.data.AppendAudit(ctx, store.AuditRecord{EventType: "permanent_delete_failed", Actor: "user", Outcome: "failed", Message: "永久删除未完成", SourcePath: current.Path})
+		message := "永久删除未完成"
+		var recovery *fsroot.EntryRemovalRecoveryError
+		if errors.As(err, &recovery) {
+			message = fmt.Sprintf("永久删除未完成，需核查路径：%s", recovery.Path)
+		}
+		_, _ = m.data.AppendAudit(ctx, store.AuditRecord{EventType: "permanent_delete_failed", Actor: "user", Outcome: "failed", Message: message, SourcePath: current.Path})
 		return err
 	}
 	if _, err := m.data.AppendAudit(ctx, store.AuditRecord{EventType: "permanent_delete_completed", Actor: "user", Outcome: "succeeded", Message: "永久删除已完成", SourcePath: current.Path}); err != nil {

@@ -25,11 +25,12 @@ type FileMoveResult struct {
 	SHA256         string
 }
 
-// MoveRecoverySummary 汇总启动时恢复、清理与待人工核查的移动记录。
+// MoveRecoverySummary 汇总启动时恢复、清理与待人工核查的操作。
 type MoveRecoverySummary struct {
-	Restored int
-	Cleaned  int
-	Pending  int
+	Restored     int
+	Cleaned      int
+	Pending      int
+	PendingPaths []string
 }
 
 // CopyFileNoReplace 只复制状态未变化的普通文件，目标始终禁止覆盖。

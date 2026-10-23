@@ -1000,6 +1000,9 @@ func newMutationHandlerWithFileSystem(t *testing.T, wrap func(string, *fsroot.Ro
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = root.Close() })
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(t.TempDir(), "move-recovery")); err != nil {
+		t.Fatal(err)
+	}
 	files := fileSystem(root)
 	if wrap != nil {
 		files = wrap(rootPath, root)

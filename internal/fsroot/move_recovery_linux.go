@@ -1,6 +1,6 @@
 //go:build linux
 
-// 本文件持久记录跨卷移动，并在重启时安全恢复来源。
+// 本文件持久记录跨卷移动和隔离删除，并在重启时安全恢复来源。
 package fsroot
 
 import (
@@ -24,6 +24,10 @@ import (
 const (
 	moveRecoveryFile        = "file"
 	moveRecoveryTree        = "tree"
+	moveRecoveryDelete      = "delete"
+	moveDeletePrepared      = "prepared"
+	moveDeleteIsolated      = "isolated"
+	moveDeleteCommitted     = "committed"
 	moveRecoveryDirPrefix   = ".filesage-move-quarantine-"
 	moveRecoveryRecordLimit = 4096
 )
@@ -37,6 +41,7 @@ type moveRecoveryRecord struct {
 	Version                int                `json:"version"`
 	ID                     string             `json:"id"`
 	Kind                   string             `json:"kind"`
+	Phase                  string             `json:"phase,omitempty"`
 	SourcePath             string             `json:"source_path"`
 	QuarantinePath         string             `json:"quarantine_path"`
 	DestinationPath        string             `json:"destination_path"`
@@ -122,16 +127,34 @@ func validateMoveRecoveryRecord(record moveRecoveryRecord) error {
 	if record.Version != 1 || record.ID == "" || moveRecoveryID(record.QuarantinePath) != record.ID {
 		return ErrInvalidPath
 	}
-	if record.Kind != moveRecoveryFile && record.Kind != moveRecoveryTree {
+	if record.Kind != moveRecoveryFile && record.Kind != moveRecoveryTree && record.Kind != moveRecoveryDelete {
 		return ErrInvalidPath
 	}
-	if validateMutationPath(record.SourcePath) != nil || validateMutationPath(record.QuarantinePath) != nil || validateMutationPath(record.DestinationPath) != nil || hasTrashComponent(record.SourcePath) || hasTrashComponent(record.QuarantinePath) || hasTrashComponent(record.DestinationPath) {
+	if validateMutationPath(record.SourcePath) != nil || validateMutationPath(record.QuarantinePath) != nil || hasTrashComponent(record.SourcePath) || hasTrashComponent(record.QuarantinePath) {
 		return ErrInvalidPath
 	}
-	if path.Dir(record.SourcePath) != path.Dir(record.QuarantinePath) || record.SourcePath == record.QuarantinePath || record.DestinationPath == record.SourcePath || record.DestinationPath == record.QuarantinePath {
+	if path.Dir(record.SourcePath) != path.Dir(record.QuarantinePath) || record.SourcePath == record.QuarantinePath {
 		return ErrInvalidPath
 	}
-	if record.SourceIdentity.Inode == 0 || record.QuarantineIdentity.Inode == 0 || record.DestinationIdentity.Inode == 0 {
+	if record.SourceIdentity.Inode == 0 || record.QuarantineIdentity.Inode == 0 {
+		return ErrIdentityUnavailable
+	}
+	if record.Kind == moveRecoveryDelete {
+		if record.Phase != moveDeletePrepared && record.Phase != moveDeleteIsolated && record.Phase != moveDeleteCommitted {
+			return ErrConflict
+		}
+		if record.DestinationPath != "" || record.DestinationIdentity.Inode != 0 || record.DestinationFingerprint.Exists || record.DestinationDigest != "" {
+			return ErrConflict
+		}
+		return nil
+	}
+	if record.Phase != "" {
+		return ErrConflict
+	}
+	if validateMutationPath(record.DestinationPath) != nil || hasTrashComponent(record.DestinationPath) || record.DestinationPath == record.SourcePath || record.DestinationPath == record.QuarantinePath {
+		return ErrInvalidPath
+	}
+	if record.DestinationIdentity.Inode == 0 {
 		return ErrIdentityUnavailable
 	}
 	if !record.DestinationFingerprint.Exists || !record.DestinationFingerprint.IdentityAvailable || record.DestinationFingerprint.Device != record.DestinationIdentity.Device || record.DestinationFingerprint.Inode != record.DestinationIdentity.Inode {
@@ -228,6 +251,7 @@ func (r *Root) RecoverInterruptedMoves(ctx context.Context) (MoveRecoverySummary
 		if strings.HasPrefix(name, ".") && strings.HasSuffix(name, ".tmp") {
 			if err := r.removeMoveRecoveryTemporary(name); err != nil {
 				summary.Pending++
+				summary.PendingPaths = append(summary.PendingPaths, name)
 			} else {
 				summary.Cleaned++
 			}
@@ -239,11 +263,13 @@ func (r *Root) RecoverInterruptedMoves(ctx context.Context) (MoveRecoverySummary
 		record, err := r.readMoveRecoveryRecord(name)
 		if err != nil {
 			summary.Pending++
+			summary.PendingPaths = append(summary.PendingPaths, name)
 			continue
 		}
 		status, err := r.recoverMoveRecord(ctx, record)
 		if err != nil {
 			summary.Pending++
+			summary.PendingPaths = append(summary.PendingPaths, record.SourcePath, recoveryEntryPath(record))
 			continue
 		}
 		switch status {
@@ -253,9 +279,18 @@ func (r *Root) RecoverInterruptedMoves(ctx context.Context) (MoveRecoverySummary
 			summary.Cleaned++
 		default:
 			summary.Pending++
+			summary.PendingPaths = append(summary.PendingPaths, record.SourcePath, recoveryEntryPath(record))
 		}
 	}
 	return summary, nil
+}
+
+// recoveryEntryPath 返回需要人工核查的隔离项路径。
+func recoveryEntryPath(record moveRecoveryRecord) string {
+	if record.Kind == moveRecoveryFile || record.Kind == moveRecoveryDelete {
+		return path.Join(record.QuarantinePath, "source")
+	}
+	return record.QuarantinePath
 }
 
 func readMoveRecoveryEntries(root *os.Root) ([]os.DirEntry, error) {
@@ -318,6 +353,9 @@ func (r *Root) readMoveRecoveryRecord(name string) (moveRecoveryRecord, error) {
 func (r *Root) recoverMoveRecord(ctx context.Context, record moveRecoveryRecord) (moveRecoveryStatus, error) {
 	if err := validateMoveRecoveryRecord(record); err != nil {
 		return moveRecoveryNeedsReview, err
+	}
+	if record.Kind == moveRecoveryDelete {
+		return r.recoverDeleteRecord(record)
 	}
 	sourceEntry, sourceErr := r.LstatEntry(record.SourcePath)
 	sourceExists := sourceErr == nil
@@ -392,6 +430,68 @@ func (r *Root) recoverMoveRecord(ctx context.Context, record moveRecoveryRecord)
 		return moveRecoveryNeedsReview, err
 	}
 	return moveRecoveryRestored, r.removeMoveRecoveryRecord(record.ID)
+}
+
+// recoverDeleteRecord 恢复中断时隔离的目录项，绝不覆盖原路径的新内容。
+func (r *Root) recoverDeleteRecord(record moveRecoveryRecord) (moveRecoveryStatus, error) {
+	sourceEntry, sourceErr := r.LstatEntry(record.SourcePath)
+	sourceExists := sourceErr == nil
+	if sourceErr != nil && !errors.Is(sourceErr, os.ErrNotExist) {
+		return moveRecoveryNeedsReview, sourceErr
+	}
+	quarantineEntry, quarantineErr := r.LstatEntry(record.QuarantinePath)
+	quarantineExists := quarantineErr == nil
+	if quarantineErr != nil && !errors.Is(quarantineErr, os.ErrNotExist) {
+		return moveRecoveryNeedsReview, quarantineErr
+	}
+	if !quarantineExists {
+		if (sourceExists && sameRemovalIdentity(sourceEntry, record.SourceIdentity)) || record.Phase == moveDeleteCommitted {
+			return moveRecoveryCleaned, r.removeMoveRecoveryRecord(record.ID)
+		}
+		return moveRecoveryNeedsReview, ErrConflict
+	}
+	if quarantineEntry.Kind != KindDirectory || !sameMoveObject(quarantineEntry, record.QuarantineIdentity) {
+		return moveRecoveryNeedsReview, ErrConflict
+	}
+
+	stagedPath := path.Join(record.QuarantinePath, "source")
+	stagedEntry, stagedErr := r.LstatEntry(stagedPath)
+	stagedExists := stagedErr == nil
+	if stagedErr != nil && !errors.Is(stagedErr, os.ErrNotExist) {
+		return moveRecoveryNeedsReview, stagedErr
+	}
+	if stagedExists {
+		if sourceExists || record.Phase == moveDeleteCommitted || !sameRemovalIdentity(stagedEntry, record.SourceIdentity) {
+			return moveRecoveryNeedsReview, ErrConflict
+		}
+		if err := r.RenameNoReplace(stagedPath, record.SourcePath); err != nil {
+			return moveRecoveryNeedsReview, err
+		}
+		if err := syncMoveParents(r, stagedPath, record.SourcePath); err != nil {
+			return moveRecoveryNeedsReview, err
+		}
+		if err := removeRecoveryQuarantineDirectory(r, record.QuarantinePath, record.QuarantineIdentity); err != nil {
+			return moveRecoveryNeedsReview, err
+		}
+		return moveRecoveryRestored, r.removeMoveRecoveryRecord(record.ID)
+	}
+
+	entries, err := r.List(record.QuarantinePath)
+	if err != nil || len(entries) != 0 {
+		return moveRecoveryNeedsReview, errors.Join(ErrConflict, err)
+	}
+	if err := removeRecoveryQuarantineDirectory(r, record.QuarantinePath, record.QuarantineIdentity); err != nil {
+		return moveRecoveryNeedsReview, err
+	}
+	return moveRecoveryCleaned, r.removeMoveRecoveryRecord(record.ID)
+}
+
+// sameRemovalIdentity 比较目录项与恢复日志中的对象身份。
+func sameRemovalIdentity(entry Entry, expected moveObjectIdentity) bool {
+	if entry.Symlink {
+		return entry.LinkIdentityAvailable && entry.LinkDevice == expected.Device && entry.LinkInode == expected.Inode
+	}
+	return entry.IdentityAvailable && entry.Device == expected.Device && entry.Inode == expected.Inode
 }
 
 // verifyMoveRecoveryDestination 确认目标仍是移动完成时发布的副本。

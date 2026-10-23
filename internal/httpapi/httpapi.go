@@ -1962,6 +1962,15 @@ func writeFileError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, fmt.Sprintf("文件状态冲突；待核查文件保留在管理目录内的 %q。", recovery.Path))
 		return
 	}
+	var removalRecovery *fsroot.EntryRemovalRecoveryError
+	if errors.As(err, &removalRecovery) {
+		writeError(w, http.StatusConflict, fmt.Sprintf("删除未完成；请核查管理目录中的 %q。", removalRecovery.Path))
+		return
+	}
+	if errors.Is(err, fsroot.ErrPublishedNotDurable) {
+		writeError(w, http.StatusConflict, "文件操作可能已完成但未确认持久化；请刷新文件列表并检查操作记录。")
+		return
+	}
 	switch {
 	case errors.Is(err, syscall.EROFS):
 		writeError(w, http.StatusForbidden, "管理卷为只读状态，无法修改文件")

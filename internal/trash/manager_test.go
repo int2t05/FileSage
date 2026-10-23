@@ -54,6 +54,9 @@ func TestPermanentRemovePreservesReplacementAfterAuditWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(t.TempDir(), "move-recovery")); err != nil {
+		t.Fatal(err)
+	}
 	metadata, err := store.Open(ctx, databasePath)
 	if err != nil {
 		t.Fatal(err)

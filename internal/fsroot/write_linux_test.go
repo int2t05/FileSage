@@ -198,6 +198,9 @@ func TestRemoveEntryIfUnchangedRemovesOnlyApprovedEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(t.TempDir(), "move-recovery")); err != nil {
+		t.Fatal(err)
+	}
 
 	approved, err := root.LstatEntry("note.txt")
 	if err != nil {
@@ -256,6 +259,9 @@ func TestRemoveEntryIfUnchangedRejectsExternalOpenWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer root.Close()
+	if err := root.ConfigureMoveRecoveryDirectory(filepath.Join(t.TempDir(), "move-recovery")); err != nil {
+		t.Fatal(err)
+	}
 	entry, err := root.LstatEntry("note.txt")
 	if err != nil {
 		t.Fatal(err)

@@ -55,6 +55,20 @@ func TestWriteFileErrorReportsPreservedRecoveryPath(t *testing.T) {
 	}
 }
 
+func TestWriteFileErrorReportsRetainedDeletePath(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeFileError(response, &fsroot.EntryRemovalRecoveryError{
+		Path:  "notes/.filesage-move-quarantine-0123456789abcdef01234567/source",
+		Cause: errors.Join(fsroot.ErrConflict, errors.New("source path is occupied")),
+	})
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
+	}
+	if !strings.Contains(response.Body.String(), "notes/.filesage-move-quarantine-0123456789abcdef01234567/source") {
+		t.Fatalf("retained delete path missing from response: %s", response.Body.String())
+	}
+}
+
 func TestRequestLoggerUsesRouteTemplateAndOmitsRequestData(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
