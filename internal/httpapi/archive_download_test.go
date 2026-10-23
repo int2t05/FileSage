@@ -123,6 +123,10 @@ func TestArchiveStorageErrorsAreRecoverable(t *testing.T) {
 	if status != http.StatusInsufficientStorage {
 		t.Fatalf("archive storage status = %d, want %d", status, http.StatusInsufficientStorage)
 	}
+	status, message := archiveErrorResponse(fsroot.ErrArchiveIsolation)
+	if status != http.StatusServiceUnavailable || message != "服务器无法安全启动归档工具，操作未执行。" {
+		t.Fatalf("archive isolation status = %d, message = %q", status, message)
+	}
 }
 
 func TestCollapseArchiveSelectionsPrunesInterleavedChildren(t *testing.T) {

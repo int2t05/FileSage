@@ -586,16 +586,6 @@ func (s *ConversationService) validateCard(ctx context.Context, card *store.Anal
 		}
 		return state, "确认后会读取目标文件全文并生成完整替换候选；你可审阅或修改，执行后原内容不会保留。"
 	}
-	if card.Action == "create_file" {
-		return s.validateCreateFileCard(card.FilePath, reply)
-	}
-	if card.Action == "overwrite_file" {
-		state, _ := s.validateTextEditCard(card.FilePath)
-		if state != store.ConversationAwaitingConfirmation {
-			return state, "请提供已存在的普通 UTF-8 文本或 Markdown 文件路径；不存在的文件请明确要求新建。"
-		}
-		return state, "确认后会读取目标文件全文并生成完整替换候选；你可审阅或修改，执行后原内容不会保留。"
-	}
 	if card.Action != "" && card.Action != "rename" {
 		return store.ConversationUnsupported, "目前不支持这类 Agent 操作。"
 	}
@@ -1542,9 +1532,6 @@ func (s *ConversationService) ConfirmAnalysis(ctx context.Context, id string, en
 	}
 	if card.Action == "edit_text" {
 		return s.proposeTextEdit(ctx, id, card)
-	}
-	if card.Action == "create_file" || card.Action == "overwrite_file" {
-		return s.proposeTextFileWrite(ctx, id, card)
 	}
 	if card.Action == "create_file" || card.Action == "overwrite_file" {
 		return s.proposeTextFileWrite(ctx, id, card)

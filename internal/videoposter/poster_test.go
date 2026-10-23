@@ -32,6 +32,9 @@ func TestVideoPosterProcessHelper(t *testing.T) {
 	if marker < 0 {
 		os.Exit(81)
 	}
+	if os.Getenv("FILESAGE_VIDEOPOSTER_ASSERT_SECRET_ABSENT") == "1" && os.Getenv("FILESAGE_VIDEOPOSTER_UNEXPECTED") != "" {
+		os.Exit(86)
+	}
 	if file := os.Getenv("FILESAGE_VIDEOPOSTER_ARGS_FILE"); file != "" {
 		_ = os.WriteFile(file, []byte(strings.Join(args[marker+1:], "\x00")), 0600)
 	}
@@ -100,6 +103,15 @@ func TestGenerateUsesStdinAndRestrictedFFmpegArguments(t *testing.T) {
 		if strings.Contains(arg, "video payload") {
 			t.Fatal("video bytes were passed as an argument")
 		}
+	}
+}
+
+// TestGenerateDoesNotInheritServiceEnvironment 验证 ffmpeg 子进程不继承服务环境。
+func TestGenerateDoesNotInheritServiceEnvironment(t *testing.T) {
+	t.Setenv("FILESAGE_VIDEOPOSTER_UNEXPECTED", "secret")
+	generator := helperGenerator(t, "success", map[string]string{"FILESAGE_VIDEOPOSTER_ASSERT_SECRET_ABSENT": "1"}, Options{})
+	if _, err := generator.Generate(context.Background(), strings.NewReader("video")); err != nil {
+		t.Fatal(err)
 	}
 }
 

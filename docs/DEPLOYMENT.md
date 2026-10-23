@@ -4,7 +4,13 @@ FileSage 直接读写服务器原生文件系统。首次部署先使用独立�
 
 ## 安装 Release 包
 
-Release 包适用于 Linux amd64，不需要在服务器安装 Go 或 Node.js。从 [GitHub Releases](https://github.com/int2t05/FileSage/releases) 下载 tar 包和校验文件，放在同一目录后先校验再解压：
+Release 包适用于 Linux amd64，不需要在服务器安装 Go 或 Node.js。从 [GitHub Releases](https://github.com/int2t05/FileSage/releases) 下载 tar 包和校验文件。若服务器无法直连 GitHub，可在可联网设备下载后传至服务器：
+
+```sh
+scp filesage_vX.Y.Z_linux_amd64.tar.gz filesage_vX.Y.Z_linux_amd64.tar.gz.sha256 user@server:~/
+```
+
+在服务器进入两份文件所在目录，先校验再解压：
 
 ```sh
 set -eu
@@ -13,7 +19,7 @@ tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
 cd filesage_vX.Y.Z_linux_amd64
 ```
 
-包内含 `filesage`、预构建页面 `web/`、systemd 模板、环境示例、部署说明和许可证文件。推送指向 `main` 历史的已审阅 `vMAJOR.MINOR.PATCH` 标签会触发构建和发布；当前仓库尚无稳定版 Release。
+包内含 `filesage`、预构建页面 `web/`、systemd 模板、环境示例、部署说明和许可证文件。推送指向 `main` 历史的已审阅 `vMAJOR.MINOR.PATCH` 标签会触发发布工作流：只读验证任务完成密钥扫描、Go／Web 检查、systemd 校验和 Linux 包冒烟；独立发布任务校验安装包 SHA-256 与标签目标后创建 Release。发布写权限不提供给构建、测试或依赖安装步骤。当前仓库尚无稳定版 Release。
 
 ## 从源码构建
 
@@ -113,6 +119,8 @@ unit 的 `RequiresMountsFor` 必须与实际 `FILESAGE_ROOT` 和启动时必需�
 
 模板保留 `Delegate=cpu memory pids` 和 user namespace，供 Shell 子任务隔离与资源限制使用；不要启用 `ProtectControlGroups`、`ProtectHostname`、`ProtectKernelTunables`、`ProtectKernelLogs` 或 `RestrictNamespaces`，这些设置会阻止 Bubblewrap 建立所需的私有 cgroup、UTS 或 proc 环境。服务以非特权账户运行，能力边界包含 Bubblewrap 所需的 `CAP_SYS_ADMIN`、`CAP_NET_ADMIN`，以及在 ACL／专用组授权的异主文件上设置读写租约所需的 `CAP_LEASE`。`CAP_LEASE` 不绕过文件读写权限，但可对进程能打开的文件设置租约；应用只在管理根目录内的文件操作中使用它，保留其余 systemd 文件系统限制。若 drop-in 重设 `CapabilityBoundingSet` 或 `AmbientCapabilities`，应保留这三项边界并授予 `AmbientCapabilities=CAP_LEASE`；空值会清除模板中的 ambient 能力。部署后可用 `systemctl show filesage.service -p CapabilityBoundingSet -p AmbientCapabilities` 核对能力配置。FileSage 启动 Bubblewrap 前通过 util-linux 的 `setpriv` 清除子进程 ambient capabilities，避免把文件租约能力传给沙箱；不要改用 setuid Bubblewrap。服务需要局域网监听及访问配置的模型端点，因此保留主机网络和 `AF_UNIX`、`AF_INET`、`AF_INET6`；`AF_NETLINK` 供 Bubblewrap 初始化无网络的隔离命名空间使用。
 
+压缩包、图片和视频由独立工具解析；这些子进程通过 `setpriv` 清除 ambient capabilities，并只接收最小环境，不继承模型 API 密钥。Linux 缺少 `setpriv` 时对应操作会失败关闭。
+
 unit 会等待 `network-online.target` 再启动。启用当前网络管理器对应的 wait-online 服务，确保固定监听地址已配置；例如 NetworkManager 使用 `NetworkManager-wait-online.service`，systemd-networkd 使用 `systemd-networkd-wait-online.service`。
 
 若另一个卷挂载在管理根目录的子目录，为它添加 systemd drop-in；每个启动前必须就绪的挂载点各列一项：
@@ -172,7 +180,7 @@ curl --fail --silent --show-error http://127.0.0.1:8080/api/v1/health
 sudo rmdir "$stage"
 ```
 
-若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。本版本新增 `delete` 恢复记录类型，旧版不会自动恢复尚未完成的删除；若启动日志报告待核查路径，先按源路径与隔离路径恢复或前向修复，不要直接回退旧二进制。无待恢复操作且无数据库迁移时，可恢复程序副本：
+若 `FILESAGE_LISTEN_ADDR` 绑定了其他地址，健康检查应替换为对应地址。数据库迁移在服务启动时执行。包含 `delete` 恢复记录的数据库不能直接交给不兼容的旧版启动；若日志报告待核查路径，先按源路径与隔离路径恢复，或修复当前版本，不要直接回退旧二进制。无待恢复操作且无数据库迁移时，可恢复程序副本：
 
 ```sh
 set -eu
@@ -280,9 +288,9 @@ sudo rm -rf /usr/local/lib/filesage
 | 工具 | 功能 |
 | --- | --- |
 | `sqlite3` | 离线备份恢复完整性检查；不是运行依赖。 |
-| `ffmpeg` | 视频海报 |
-| `heif-dec` 或 `heif-convert`、`dcraw_emu`、`prlimit` | HEIF／HEIC 与 RAW 图片预览 |
-| `7z`、`7zz` 或 `7za` | 7z／RAR 浏览，7z 归档创建 |
+| `ffmpeg`、util-linux（`setpriv`） | 视频海报 |
+| `heif-dec` 或 `heif-convert`、`dcraw_emu`、`prlimit`、`setpriv` | HEIF／HEIC 与 RAW 图片预览 |
+| `7z`、`7zz` 或 `7za`、`setpriv` | 7z／RAR 浏览，7z 归档创建 |
 | LibreOffice、Bubblewrap（`bwrap`）、`prlimit`、util-linux（`setpriv`） | PPTX 预览；Bubblewrap 和 systemd cgroup v2 委托也用于 Agent Shell |
 | Poppler `pdftotext`、`pdftoppm`、`pdfinfo`，Bubblewrap、`prlimit`、`setpriv` | Office／PDF 正文提取与 OCR 流程 |
 | Tesseract 与 `chi_sim`、`eng` 语言包 | 用户主动启用的中文／英文扫描件 OCR |

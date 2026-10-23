@@ -8,7 +8,7 @@
 
 首期需在浏览器内阅读图像、视频、PDF、Markdown、代码、DOCX、XLSX/CSV/TSV、PPTX、EPUB 和压缩包条目。DOCX/XLSX/PPTX 阅读只读；需展示书签、工作表、章节、幻灯片或包内导航。不得执行文件脚本／宏／外链，也不要求前端 Office 编辑或全格式转码。
 
-## 建议决策
+## 决策方向
 
 对各格式组合专用浏览器阅读器和按需派生预览。PDF.js 负责 PDF；CodeMirror 6 与经过消毒的 Markdown 渲染负责文本；epub.js 负责 EPUB；SheetJS/ExcelJS 负责工作表数据呈现；DOCX/PPTX 先评估 LibreOffice 隔离转换为只读 PDF，再单独解析标题或幻灯片导航。图像／缩略图、元数据、OCR、归档分别调用对应库或受限工具。派生文件使用可失效缓存，不作为原件备份。
 

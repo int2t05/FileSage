@@ -187,6 +187,8 @@ Agent 方案 API 只返回明确允许展示的字段，不暴露内部文件快
 
 `POST /agent/plans/{planId}/start` 接收 `{"expectedPlanVersion":1,"expectedExecutionMode":"bypass","confirmPermanentDelete":false}`。存在永久删除项时该字段必须为 `true`，其他计划必须为 `false`；缺少字段返回 `400`，确认值与计划内容不匹配返回 `409`。客户端应提交刚读取并向用户展示的执行模式；服务端在审核事务中核对计划版本、永久删除项和当前设置。删除确认写入计划审核审计；bypass 模式下对应的删除操作批准记录也注明不可恢复确认。状态变化时不审核、不执行。bypass 模式审核成功后自动顺序执行；manual 模式只确认整份计划，文件操作尚未执行，后续每一步仍由用户启动。两个模式下计划审核都是必需门禁。
 
+`POST /agent/plans/{planId}/reject` 接收 `{"expectedPlanVersion":1}`，仅拒绝当前版本的待审核计划；缺少或无效版本返回 `400`，成功返回更新后的完整方案，版本过期或状态已变化返回 `409`，方案不存在返回 `404`。拒绝 Shell 计划会整体拒绝变更集并清理隔离暂存，不会提交其中的文件变化。该接口也遵循同源校验。
+
 manual 模式使用 `POST /agent/plans/{planId}/steps/{operationId}/execute` 和 `{"expectedPlanVersion":1}`，只运行计划中的下一项；非下一项、模式错误或方案版本变化返回 `409`。成功响应是当前完整方案。执行期间客户端可轮询 `GET /agent/plans/{planId}`，逐项读取 `executionStatus` 和 `resultMessage`。`stopRequested` 表示已收到停止请求；`POST /agent/plans/{planId}/stop` 接收 `{"expectedPlanVersion":1}`，当前操作安全结束后停止后续项。已完成的文件操作不会回滚，未开始的步骤保持未执行。服务重启后核查已完成／在途操作，不自动重放不确定操作。
 
 计划响应包含稳定工具动作 ID；未知工具仍按通用步骤展示，后端不允许未注册的动作执行。Shell 操作返回 `exitCode`、`stdout`、`stderr` 和 `outputTruncated`；每路输出最多 16 KiB，SQLite 本地保留且 API 禁用缓存。旧记录若返回 `outputDiscarded: true`，表示升级前的原始输出已不可恢复。用户确认分析卡后，Shell 输出会保存在本地任务记录；同一会话下一轮还会把命令范围、工作目录、执行状态、退出码、输出及最多 8 KiB 的文件变化路径／类型／状态作为不可信证据发给配置模型。FileSage 不会为 Shell 另行读取文件正文，但命令输出可能包含文件内容或其他敏感信息并随 stdout/stderr 发送。超出回执上限的变化项会标注省略；完整清单仍在任务记录中。确认卡会提前说明这一数据流，系统提示禁止将 Shell 输出和路径视为指令或授权。Shell 文件变化作为单个工具步骤的详情呈现，不再逐文件审批；计划审计后由受控 Shell 执行器统一提交并逐项记录结果。

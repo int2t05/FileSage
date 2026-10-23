@@ -12,5 +12,6 @@
 | Agent 与归档接口 | [Agent API](agent-conversation-api.md) · [归档 API](archive-api.md) |
 | 界面设计、图标与原型 | [UI/UX](design/UIUX.md) · [图标页](design/icon-study.html) · [交互原型](design/prototype/README.md) |
 | 竞品调研与技术覆盖 | [调研索引](../reference/README.md) · [技术覆盖](../reference/technical-coverage.md) |
+| 最近审计 | [文档整理](audit/2026-10-24-documentation.md) · [纯净审计](audit/2026-10-24-purity.md) |
 
-整体状态只在[项目进度](IMPLEMENTATION_PLAN.md)维护，验证证据只在[验收记录](ACCEPTANCE.md)维护；ADR 记录决策及依据。
+整体状态与下一步只在[项目进度](IMPLEMENTATION_PLAN.md)维护，验证证据只在[验收记录](ACCEPTANCE.md)维护；ADR 记录决策及依据。

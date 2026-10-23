@@ -24,6 +24,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"filesage/internal/safecmd"
 )
 
 var (
@@ -1232,7 +1234,10 @@ func listSevenZip(ctx context.Context, archivePath string, extraFiles []*os.File
 	}
 	stdout := &boundedBuffer{limit: sevenZipOutputLimit}
 	stderr := &boundedBuffer{limit: 64 << 10}
-	command := exec.CommandContext(ctx, binary, "l", "-slt", sevenZipTypeFlag(format), archivePath)
+	command, err := safecmd.CommandContext(ctx, binary, "l", "-slt", sevenZipTypeFlag(format), archivePath)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrArchiveIsolation, err)
+	}
 	command.ExtraFiles = extraFiles
 	command.Stdout, command.Stderr = stdout, stderr
 	if err := command.Run(); err != nil {
@@ -1324,7 +1329,10 @@ func readSevenZipEntry(ctx context.Context, archivePath string, extraFiles []*os
 	}
 	output := &boundedBuffer{limit: int(limit)}
 	stderr := &boundedBuffer{limit: 64 << 10}
-	command := exec.CommandContext(ctx, binary, "x", "-so", "-spd", sevenZipTypeFlag(format), archivePath, entry)
+	command, err := safecmd.CommandContext(ctx, binary, "x", "-so", "-spd", sevenZipTypeFlag(format), archivePath, entry)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrArchiveIsolation, err)
+	}
 	command.ExtraFiles = extraFiles
 	command.Stdout, command.Stderr = output, stderr
 	if err := command.Run(); err != nil {
@@ -1356,7 +1364,10 @@ func extractSevenZipEntry(ctx context.Context, archivePath string, extraFiles []
 	}
 	limited := &exactLimitWriter{writer: file, limit: size}
 	stderr := &boundedBuffer{limit: 64 << 10}
-	command := exec.CommandContext(ctx, binary, "x", "-so", "-spd", sevenZipTypeFlag(format), archivePath, entry)
+	command, err := safecmd.CommandContext(ctx, binary, "x", "-so", "-spd", sevenZipTypeFlag(format), archivePath, entry)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrArchiveIsolation, err)
+	}
 	command.ExtraFiles = extraFiles
 	command.Stdout, command.Stderr = limited, stderr
 	commandErr := command.Run()

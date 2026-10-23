@@ -164,6 +164,10 @@ func TestArchiveReadErrorMessagesAreSpecific(t *testing.T) {
 	if status != http.StatusUnprocessableEntity || message == "" {
 		t.Fatalf("encrypted mapping = %d, %q", status, message)
 	}
+	status, message = archiveReadErrorMessage(fsroot.ErrArchiveIsolation)
+	if status != http.StatusServiceUnavailable || message != "服务器无法安全启动归档工具，操作未执行。" {
+		t.Fatalf("isolation mapping = %d, %q", status, message)
+	}
 }
 
 func archiveReadErrorMessage(err error) (int, string) {

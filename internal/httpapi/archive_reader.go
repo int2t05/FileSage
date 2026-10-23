@@ -408,6 +408,8 @@ func writeArchiveReadError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "压缩包内未找到可读取的普通文件。")
 	case errors.Is(err, fsroot.ErrArchiveStorage):
 		writeError(w, http.StatusInsufficientStorage, "服务器暂存空间不足，操作未完成。")
+	case errors.Is(err, fsroot.ErrArchiveIsolation):
+		writeError(w, http.StatusServiceUnavailable, "服务器无法安全启动归档工具，操作未执行。")
 	case errors.Is(err, fsroot.ErrConflict), errors.Is(err, fsroot.ErrPathChanged):
 		writeError(w, http.StatusConflict, "压缩包或目标目录状态已变化，请刷新后重试。")
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):

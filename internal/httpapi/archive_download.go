@@ -345,6 +345,8 @@ func archiveErrorResponse(err error) (int, string) {
 		return http.StatusRequestEntityTooLarge, "所选内容超过当前打包上限，请减少文件或分批下载。"
 	case errors.Is(err, fsroot.ErrArchiveStorage):
 		return http.StatusInsufficientStorage, "服务器临时空间不足，压缩包未能完成。"
+	case errors.Is(err, fsroot.ErrArchiveIsolation):
+		return http.StatusServiceUnavailable, "服务器无法安全启动归档工具，操作未执行。"
 	case errors.Is(err, fsroot.ErrArchiveUnsupported), errors.Is(err, fsroot.ErrWalkUnsupported):
 		return http.StatusServiceUnavailable, "当前平台尚不支持安全的目录打包。"
 	case errors.Is(err, fsroot.ErrIdentityUnavailable):

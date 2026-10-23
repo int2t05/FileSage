@@ -22,6 +22,7 @@ var (
 	ErrArchiveStorage       = errors.New("archive temporary storage failed")
 	ErrArchiveDependency    = errors.New("7-Zip is not installed")
 	ErrArchiveCommand       = errors.New("7-Zip archive creation failed")
+	ErrArchiveIsolation     = errors.New("archive process isolation unavailable")
 )
 
 // ArchiveLimits 限制打包期间的条目数和源文件总大小。

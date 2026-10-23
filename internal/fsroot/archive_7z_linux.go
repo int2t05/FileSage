@@ -10,10 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"filesage/internal/safecmd"
 )
 
 const (
@@ -57,7 +58,7 @@ func writeSevenZipArchive(ctx context.Context, root *Root, selectedPaths []strin
 	}
 
 	archivePath := filepath.Join(workDir, "archive.7z")
-	if err := createSevenZipFile(ctx, binary, stageRoot, archivePath, workDir, selectedPaths, maxOutput); err != nil {
+	if err := createSevenZipFile(ctx, binary, stageRoot, archivePath, selectedPaths, maxOutput); err != nil {
 		return err
 	}
 	archive, err := os.Open(archivePath)
@@ -221,14 +222,16 @@ func extractSevenZipStage(ctx context.Context, source io.Reader, stageRoot strin
 }
 
 // createSevenZipFile 限制命令参数并在生成期间监控归档大小。
-func createSevenZipFile(ctx context.Context, binary, stageRoot, archivePath, workDir string, selectedPaths []string, maxOutput int64) error {
+func createSevenZipFile(ctx context.Context, binary, stageRoot, archivePath string, selectedPaths []string, maxOutput int64) error {
 	arguments := []string{"a", "-t7z", "-mx=1", "-mmt=2", "-bd", "-y", "-spd", archivePath}
 	for _, selectedPath := range selectedPaths {
 		arguments = append(arguments, "./"+selectedPath)
 	}
-	command := exec.CommandContext(ctx, binary, arguments...)
+	command, err := safecmd.CommandContext(ctx, binary, arguments...)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrArchiveIsolation, err)
+	}
 	command.Dir = stageRoot
-	command.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + workDir, "LANG=C.UTF-8", "LC_ALL=C.UTF-8"}
 	command.Stdout = io.Discard
 	stderr := &boundedBuffer{limit: 64 << 10}
 	command.Stderr = stderr

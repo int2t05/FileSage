@@ -9,11 +9,12 @@ permissions:
   contents: read
 
 jobs:
-  release:
-    name: Verify and publish Linux package
+  verify:
+    name: Verify and package Linux release
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -25,6 +26,13 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Scan Git history for secrets
+        run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner .
+      - name: Verify systemd service unit
+        run: |
+          # 固定生产路径需要可执行文件，CI 用无副作用占位程序满足静态校验。
+          sudo install -D -m 0755 /usr/bin/true /usr/local/lib/filesage/filesage
+          systemd-analyze verify deploy/filesage.service
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
@@ -66,7 +74,45 @@ jobs:
           set -euo pipefail
           bundle="filesage_"$GITHUB_REF_NAME"_linux_amd64"
           bash scripts/smoke-release-package.sh "dist/$bundle.tar.gz" "$bundle"
-      - name: Publish GitHub release
+
+      - name: Upload verified release package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: filesage-release
+          path: |
+            ${{ steps.package.outputs.archive }}
+            ${{ steps.package.outputs.checksum }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
+
+  publish:
+    name: Publish GitHub release
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Download and verify release files
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" "${{ steps.package.outputs.archive }}" "${{ steps.package.outputs.checksum }}" --verify-tag --title "FileSage $GITHUB_REF_NAME" --generate-notes
+        run: |
+          set -euo pipefail
+          bundle="filesage_${GITHUB_REF_NAME}_linux_amd64"
+          archive="$bundle.tar.gz"
+          checksum="$archive.sha256"
+          mkdir -p dist
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" --name filesage-release --dir dist
+          (cd dist && sha256sum -c "$checksum")
+
+          tag_ref="refs/tags/$GITHUB_REF_NAME"
+          remote_refs="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "$tag_ref" "${tag_ref}^{}")"
+          tested_sha="$(printf '%s\n' "$remote_refs" | awk -v ref="$tag_ref" '$2 == ref"^{}" { peeled = $1 } $2 == ref { direct = $1 } END { if (peeled != "") print peeled; else if (direct != "") print direct }')"
+          if [ "$tested_sha" != "$GITHUB_SHA" ]; then
+            printf 'release tag changed after verification: expected %s, got %s\n' "$GITHUB_SHA" "$tested_sha" >&2
+            exit 1
+          fi
+
+          gh release create "$GITHUB_REF_NAME" "dist/$archive" "dist/$checksum" --repo "$GITHUB_REPOSITORY" --verify-tag --title "FileSage $GITHUB_REF_NAME" --generate-notes

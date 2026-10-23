@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"filesage/internal/safecmd"
 )
 
 const (
@@ -137,9 +139,12 @@ func (g *Generator) Generate(ctx context.Context, video io.Reader) ([]byte, erro
 	prefix := append([]string(nil), g.commandPrefix...)
 	extraEnv := append([]string(nil), g.commandEnv...)
 	g.commandMu.Unlock()
-	cmd := exec.CommandContext(runCtx, g.binary, append(prefix, args...)...)
+	cmd, err := safecmd.CommandContext(runCtx, g.binary, append(prefix, args...)...)
+	if err != nil {
+		return nil, fmt.Errorf("prepare ffmpeg isolation: %w", err)
+	}
 	if len(extraEnv) > 0 {
-		cmd.Env = mergeEnvironment(cmd.Environ(), extraEnv)
+		cmd.Env = mergeEnvironment(cmd.Env, extraEnv)
 	}
 	configureProcess(cmd)
 	cmd.Stdin = video

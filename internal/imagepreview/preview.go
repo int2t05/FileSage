@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"filesage/internal/safecmd"
 )
 
 const (
@@ -264,8 +266,10 @@ func (g *Generator) command(ctx context.Context, decoder string, args ...string)
 		args = append(limited, args...)
 		decoder = g.limiter
 	}
-	cmd := exec.CommandContext(ctx, decoder, args...)
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "LC_ALL=C", "LANG=C"}
+	cmd, err := safecmd.CommandContext(ctx, decoder, args...)
+	if err != nil {
+		return nil, fmt.Errorf("%w: parser isolation unavailable", ErrDisabled)
+	}
 	cmd.Stderr = &limitedBuffer{limit: maxStderrBytes}
 	configureProcess(cmd)
 	return cmd, nil
