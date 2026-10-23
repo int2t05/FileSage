@@ -73,6 +73,8 @@ sudo useradd --system --user-group --home-dir /var/lib/filesage --no-create-home
 sudo install -d -o root -g root -m 0755 /usr/local/lib/filesage/web
 sudo install -o root -g root -m 0755 ./filesage /usr/local/lib/filesage/filesage
 sudo cp -R web/. /usr/local/lib/filesage/web/
+sudo find /usr/local/lib/filesage/web -type d -exec chmod 0755 {} +
+sudo find /usr/local/lib/filesage/web -type f -exec chmod 0644 {} +
 sudo install -d -o root -g root -m 0755 /etc/filesage
 sudo install -o root -g root -m 0600 deploy/filesage.env.example /etc/filesage/filesage.env
 sudoedit /etc/filesage/filesage.env
@@ -117,7 +119,7 @@ sudo systemctl status filesage.service
 sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor -p CapabilityBoundingSet -p AmbientCapabilities
 ```
 
-更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。运行日志由 systemd journal 接收，使用 `sudo journalctl -u filesage.service` 查看。HTTP 错误和超过 2 秒的请求带有 `X-Request-ID`；同一标识进入请求上下文，Agent 对话、模型与工具步骤日志以 `request_id` 关联。Agent 日志只记录会话／计划／操作 ID、动作、状态、错误类别和耗时，不记录路径、命令、消息正文或文件内容。
+更改 unit 后先运行 `daemon-reload`。更改环境文件后重启服务。运行日志由 systemd journal 接收，使用 `sudo journalctl -u filesage.service` 查看。每个 HTTP 响应均包含 `X-Request-ID`；日志仅记录错误与慢请求。超过 2 秒的成功 TUS 分块按 INFO 记录，其他慢请求按 WARN 记录，4xx 为 WARN、5xx 为 ERROR。日志只记录路由模板、状态和耗时，不写入路径、查询参数或正文；Agent 日志只记录会话／计划／操作 ID、动作、状态、错误类别和耗时。
 
 ## 更新版本
 
@@ -139,6 +141,8 @@ sudo install -d -o root -g root -m 0700 "$rollback"
 sudo install -d -o root -g root -m 0755 "$stage/web"
 sudo install -o root -g root -m 0755 "$release/filesage" "$stage/filesage"
 sudo cp -R "$release/web/." "$stage/web/"
+sudo find "$stage/web" -type d -exec chmod 0755 {} +
+sudo find "$stage/web" -type f -exec chmod 0644 {} +
 sudo chown -R root:root "$stage"
 
 sudo systemctl stop filesage.service
