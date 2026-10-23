@@ -13,6 +13,18 @@ async function readManagedRoot(page) {
   return root;
 }
 
+// 通过浏览器同源请求修改持久化执行模式。
+async function setBypassPermission(page, bypassPermission) {
+  return page.evaluate(async (value) => {
+    const response = await fetch('/api/v1/settings/agent', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bypassPermission: value }),
+    });
+    return response.status;
+  }, bypassPermission);
+}
+
 test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录创建', async ({ page }, testInfo) => {
   const suffix = `-${testInfo.repeatEachIndex}`;
   const targetName = `agent-e2e-reviewed${suffix}`;
@@ -143,6 +155,70 @@ test('Agent 拒绝整份计划后不执行文件操作', async ({ page }, testIn
   await expect(page.getByRole('status').filter({ hasText: '已拒绝整份方案。' })).toBeVisible();
   await expect(access(targetPath)).rejects.toThrow();
   expect(browserErrors).toEqual([]);
+});
+
+test('Agent 设置并发变化时拒绝旧模式计划且不执行文件操作', async ({ page }, testInfo) => {
+  const targetName = `agent-e2e-reviewed-${50 + testInfo.repeatEachIndex}`;
+  const browserErrors = [];
+  const startRoute = '**/api/v1/agent/plans/*/start';
+  let requestMode = '';
+  let settingsStatus = 0;
+  let rejectedRequestConsoleErrors = 0;
+  page.on('console', (message) => {
+    if (message.type() !== 'error') return;
+    if (message.text().includes('status of 409 (Conflict)')) {
+      rejectedRequestConsoleErrors += 1;
+      return;
+    }
+    browserErrors.push(message.text());
+  });
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+
+  const conversationListResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await page.goto('/#agent');
+  await conversationListResponse;
+  const root = await readManagedRoot(page);
+  const managedTarget = path.join(root, targetName);
+  await expect(access(managedTarget)).rejects.toThrow();
+  expect(await setBypassPermission(page, true)).toBe(200);
+  await page.reload();
+
+  const composer = page.getByRole('textbox', { name: '整理需求消息' });
+  const createdConversationResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await composer.fill(`请在根目录新建一个名为 ${targetName} 的文件夹。`);
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+  await createdConversationResponse;
+  await expect(page.getByRole('region', { name: '确认操作' })).toContainText(targetName);
+  await page.getByRole('button', { name: '确认并生成方案' }).click();
+
+  const steps = page.getByRole('list', { name: '执行步骤' });
+  await expect(steps).toContainText(targetName);
+  await expect(page.getByRole('button', { name: '审阅完成，开始执行' })).toBeEnabled();
+  await page.route(startRoute, async (route) => {
+    requestMode = route.request().postDataJSON().expectedExecutionMode;
+    settingsStatus = await setBypassPermission(page, false);
+    await route.continue();
+  });
+
+  const startResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname.endsWith('/start'));
+  try {
+    await page.getByRole('button', { name: '审阅完成，开始执行' }).click();
+    const response = await startResponse;
+    expect(requestMode).toBe('bypass');
+    expect(settingsStatus).toBe(200);
+    expect(response.status()).toBe(409);
+    await expect(page.getByText('方案或文件状态已变化，操作未生效。最新状态已刷新，请重新核对。')).toBeVisible();
+    await expect(page.getByRole('button', { name: '审阅完成，开始执行' })).toBeEnabled();
+    await expect(access(managedTarget)).rejects.toThrow();
+    expect(rejectedRequestConsoleErrors).toBe(1);
+    expect(browserErrors).toEqual([]);
+  } finally {
+    await page.unroute(startRoute);
+    expect(await setBypassPermission(page, true)).toBe(200);
+  }
 });
 
 test('Agent 审阅并执行同目录重命名，保留原文件内容', async ({ page }, testInfo) => {
