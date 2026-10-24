@@ -65,11 +65,13 @@ for output in "$archive" "$checksum"; do
   fi
 done
 rm -rf -- "$stage"
-mkdir -p "$stage/web" "$stage/deploy" "$stage/docs" "$stage/LICENSES"
+mkdir -p "$stage/web" "$stage/deploy" "$stage/docs/operations" "$stage/docs/api" "$stage/LICENSES"
 install -m 0755 dist/filesage "$stage/filesage"
 cp -R web/dist/. "$stage/web/"
 cp deploy/filesage.service deploy/filesage.env.example "$stage/deploy/"
-cp docs/DEPLOYMENT.md docs/agent-conversation-api.md "$stage/docs/"
+cp docs/DEPLOYMENT.md "$stage/docs/"
+cp docs/operations/deployment.md "$stage/docs/operations/"
+cp docs/api/agent-conversation.md "$stage/docs/api/"
 cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
 cp -R LICENSES/. "$stage/LICENSES/"
 bash scripts/collect-go-licenses.sh "$stage/LICENSES"
