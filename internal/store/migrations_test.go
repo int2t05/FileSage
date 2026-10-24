@@ -648,7 +648,7 @@ func TestV29FileIndexOrderingIndexes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 将新库还原为 v28 的索引状态，验证 v29 与 v30 的升级路径。
+	// 将新库还原为 v28 的结构，验证后续迁移路径。
 	tx, err := db.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -662,6 +662,8 @@ func TestV29FileIndexOrderingIndexes(t *testing.T) {
 		ALTER TABLE shell_runs DROP COLUMN stderr;
 		ALTER TABLE shell_runs DROP COLUMN stdout;
 		ALTER TABLE agent_conversations DROP COLUMN tool_context_plan_id;
+		DROP INDEX agent_conversations_visible_updated;
+		ALTER TABLE agent_conversations DROP COLUMN deleted_at_ns;
 		DELETE FROM schema_migrations WHERE version >= 29;
 	`); err != nil {
 		_ = tx.Rollback()

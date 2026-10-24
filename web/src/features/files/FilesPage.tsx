@@ -41,6 +41,7 @@ import { incompleteBatchOperationPaths } from './batchFileOperationRules';
 import { FileOperationDialog } from './FileOperationDialog';
 import { FileMetadataDialog, type FileMetadataEditMode } from './FileMetadataDialog';
 import { canEditFileMetadata, formatOwnerId, formatPermissionMode } from './fileMetadataRules';
+import { readFileViewPreferences, saveFileViewPreferences } from './fileViewPreferences';
 import { ArchiveReader } from '../reader/ArchiveReader';
 import { ReaderPanel, type ReaderMediaKind } from '../reader/ReaderPanel';
 import { isSupportedArchiveName } from '../reader/archiveReaderRules';
@@ -49,7 +50,6 @@ import type { AgentLaunchContext } from '../agent/AgentPage';
 import './FilesPage.css';
 
 type EntryKind = 'folder' | 'image' | 'audio' | 'pdf' | 'text' | 'office' | 'spreadsheet' | 'archive' | 'video' | 'other';
-type ViewMode = 'list' | 'grid';
 const pageSize = 100;
 const mebibyte = 1024 * 1024;
 
@@ -302,9 +302,8 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   const [searchScope, setSearchScope] = useState<FileSearchScope>('current');
   const [filterInputs, setFilterInputs] = useState<FileFilterInputs>(emptyFileFilterInputs);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [showHidden, setShowHidden] = useState(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
-  const [sortMode, setSortMode] = useState<FileSortMode>('name-asc');
+  const [viewPreferences, setViewPreferences] = useState(readFileViewPreferences);
+  const { showHidden, viewMode, sortMode } = viewPreferences;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [activeEntry, setActiveEntry] = useState<FileEntry | null>(null);
   const [readerTarget, setReaderTarget] = useState<{ path: string; name: string; kind: ReaderMediaKind; capturedAt?: string } | null>(null);
@@ -377,6 +376,10 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
   const hasListingCriteria = Boolean(queryTerm || activeFilterCount);
   const viewKey = JSON.stringify([relativePath, queryTerm, effectiveScope, sortMode, filterKey]);
   const listingKey = JSON.stringify([relativePath, queryTerm, effectiveScope, sortMode, filterKey, refreshKey]);
+
+  useEffect(() => {
+    saveFileViewPreferences(viewPreferences);
+  }, [viewPreferences]);
 
   useEffect(() => {
     const requestId = ++requestIdRef.current;
@@ -1360,7 +1363,10 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                 </label>
               )}
             </div>
-            <select className="files-sort-select" aria-label="排序方式" value={sortMode} onChange={(event) => setSortMode(event.currentTarget.value as FileSortMode)}>
+            <select className="files-sort-select" aria-label="排序方式" value={sortMode} onChange={(event) => {
+              const nextSortMode = event.currentTarget.value as FileSortMode;
+              setViewPreferences((current) => ({ ...current, sortMode: nextSortMode }));
+            }}>
               <option value="name-asc">名称升序</option>
               <option value="name-desc">名称降序</option>
               <option value="modified-desc">修改时间（最新优先）</option>
@@ -1369,10 +1375,10 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
               <option value="size-asc">文件大小（小到大）</option>
             </select>
             <div className="files-view-switch" role="group" aria-label="显示方式">
-              <button type="button" className={viewMode === 'list' ? 'is-active' : ''} aria-pressed={viewMode === 'list'} aria-label="列表视图" onClick={() => setViewMode('list')}>
+              <button type="button" className={viewMode === 'list' ? 'is-active' : ''} aria-pressed={viewMode === 'list'} aria-label="列表视图" onClick={() => setViewPreferences((current) => ({ ...current, viewMode: 'list' }))}>
                 <List size={17} aria-hidden="true" /><span>列表</span>
               </button>
-              <button type="button" className={viewMode === 'grid' ? 'is-active' : ''} aria-pressed={viewMode === 'grid'} aria-label="网格视图" onClick={() => setViewMode('grid')}>
+              <button type="button" className={viewMode === 'grid' ? 'is-active' : ''} aria-pressed={viewMode === 'grid'} aria-label="网格视图" onClick={() => setViewPreferences((current) => ({ ...current, viewMode: 'grid' }))}>
                 <LayoutGrid size={16} aria-hidden="true" /><span>网格</span>
               </button>
             </div>
@@ -1395,7 +1401,8 @@ export function FilesPage({ onOpenTrash, onOpenAgent }: FilesPageProps) {
                 type="checkbox"
                 checked={showHidden}
                 onChange={(event) => {
-                  setShowHidden(event.currentTarget.checked);
+                  const nextShowHidden = event.currentTarget.checked;
+                  setViewPreferences((current) => ({ ...current, showHidden: nextShowHidden }));
                   clearSelection();
                 }}
               />

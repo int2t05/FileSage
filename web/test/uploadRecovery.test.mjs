@@ -24,6 +24,7 @@ const filesUrl = `data:text/javascript;base64,${Buffer.from(transpile(await read
 const tasksUrl = `data:text/javascript;base64,${Buffer.from(transpile((await readFile(new URL('../src/api/tasks.ts', import.meta.url), 'utf8')).replace("'./files'", `'${filesUrl}'`))).toString('base64')}`;
 const uploadsApi = await loadSource('../src/api/uploads.ts', [["'./tasks'", `'${tasksUrl}'`]]);
 const recovery = await loadSource('../src/features/uploads/uploadRecovery.ts');
+const dismissals = await loadSource('../src/features/uploads/uploadDismissals.ts');
 const nobleURL = import.meta.resolve('@noble/hashes/sha2.js');
 const fingerprint = await loadSource('../src/features/uploads/uploadFingerprint.ts', [["'@noble/hashes/sha2.js'", `'${nobleURL}'`]]);
 const uploadPanelSource = await readFile(new URL('../src/features/uploads/UploadPanel.tsx', import.meta.url), 'utf8');
@@ -52,6 +53,14 @@ function publication(uploadId, status, extra = {}) {
     targetPath: '恢复/合同.pdf',
     updatedAt: '2026-10-16T00:00:00Z',
     ...extra,
+  };
+}
+
+function memoryStorage() {
+  const values = new Map();
+  return {
+    getItem(key) { return values.get(key) ?? null; },
+    setItem(key, value) { values.set(key, value); },
   };
 }
 
@@ -115,6 +124,26 @@ describe('上传刷新恢复', () => {
     assert.equal(records[0].publication.offset, 80);
     assert.equal(records[1].publication.publishedPath, '归档/合同.pdf');
     assert.equal(records[2].publication.error, '目标文件已变化。');
+  });
+
+  it('清除的已完成上传在刷新恢复时保持隐藏', () => {
+    const storage = memoryStorage();
+    const publishedID = '0123456789abcdef0123456789abcdef';
+    const cancelledID = 'fedcba9876543210fedcba9876543210';
+    const records = [publishedID, cancelledID, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'].map((id) => ({ task: uploadTask(id) }));
+
+    assert.equal(dismissals.dismissUploadIds([publishedID, cancelledID], storage), true);
+    assert.deepEqual(dismissals.filterDismissedUploadRecoveries(records, storage).map(({ task }) => task.id), [
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    ]);
+    assert.match(uploadPanelSource, /filterDismissedUploadRecoveries\(records\)/);
+    assert.match(uploadPanelSource, /dismissUploadIds\(uploadIDs\)/);
+  });
+
+  it('浏览器存储不可用时不清除可由服务端恢复的任务', () => {
+    const records = [{ task: uploadTask('0123456789abcdef0123456789abcdef') }];
+    assert.equal(dismissals.dismissUploadIds([records[0].task.id], undefined), false);
+    assert.deepEqual(dismissals.filterDismissedUploadRecoveries(records, undefined), records);
   });
 
   it('状态接口暂时不可读时保留任务并区分不可确认与服务端明确不存在', async () => {

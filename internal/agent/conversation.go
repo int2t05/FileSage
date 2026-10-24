@@ -53,6 +53,10 @@ type classificationConversationModel interface {
 	completeClassification(context.Context, []ChatMessage) (string, error)
 }
 
+type streamingConversationModel interface {
+	completeStream(context.Context, []ChatMessage, func(string)) (string, error)
+}
+
 type conversationModel interface {
 	Status() ModelStatus
 	complete(context.Context, []ChatMessage) (string, error)
@@ -75,6 +79,17 @@ type ConversationService struct {
 	model         conversationModel
 	duplicateScan *duplicateScanManager
 	photoIndex    photoArchiveIndex
+}
+
+// ConversationStreamUpdate 保存一段待展示的回复文本或重试清空信号。
+type ConversationStreamUpdate struct {
+	Text  string `json:"text,omitempty"`
+	Reset bool   `json:"reset,omitempty"`
+}
+
+// Create 保存首条消息并以流式方式返回模型回复片段。
+func (s *ConversationService) CreateStream(ctx context.Context, message string, onUpdate func(ConversationStreamUpdate)) (store.AgentConversation, error) {
+	return s.create(ctx, message, onUpdate)
 }
 
 type conversationTurnResult struct {
@@ -150,6 +165,10 @@ func (s *ConversationService) List(ctx context.Context, limit, offset int) ([]st
 
 // Create 保存首条消息并进行只含对话文本的澄清。
 func (s *ConversationService) Create(ctx context.Context, message string) (store.AgentConversation, error) {
+	return s.create(ctx, message, nil)
+}
+
+func (s *ConversationService) create(ctx context.Context, message string, onUpdate func(ConversationStreamUpdate)) (store.AgentConversation, error) {
 	if err := validateConversationMessage(message); err != nil {
 		return store.AgentConversation{}, err
 	}
@@ -160,11 +179,20 @@ func (s *ConversationService) Create(ctx context.Context, message string) (store
 	if err := s.store.CreateConversation(ctx, id, message, time.Now().UTC()); err != nil {
 		return store.AgentConversation{}, err
 	}
-	return s.runTurn(ctx, id)
+	return s.runTurn(ctx, id, onUpdate)
 }
 
 // AddMessage 持久化新一轮澄清；已有方案不可修改。
 func (s *ConversationService) AddMessage(ctx context.Context, id, message string) (store.AgentConversation, error) {
+	return s.addMessage(ctx, id, message, nil)
+}
+
+// AddMessageStream 保存新消息并以流式方式返回模型回复片段。
+func (s *ConversationService) AddMessageStream(ctx context.Context, id, message string, onUpdate func(ConversationStreamUpdate)) (store.AgentConversation, error) {
+	return s.addMessage(ctx, id, message, onUpdate)
+}
+
+func (s *ConversationService) addMessage(ctx context.Context, id, message string, onUpdate func(ConversationStreamUpdate)) (store.AgentConversation, error) {
 	if !validConversationID(id) {
 		return store.AgentConversation{}, ErrInvalid
 	}
@@ -174,7 +202,7 @@ func (s *ConversationService) AddMessage(ctx context.Context, id, message string
 	if err := s.store.StartConversationTurn(ctx, id, message, time.Now().UTC()); err != nil {
 		return store.AgentConversation{}, err
 	}
-	return s.runTurn(ctx, id)
+	return s.runTurn(ctx, id, onUpdate)
 }
 
 // Get 恢复会话，不访问根目录或模型。
@@ -185,7 +213,15 @@ func (s *ConversationService) Get(ctx context.Context, id string) (store.AgentCo
 	return s.store.Conversation(ctx, id)
 }
 
-func (s *ConversationService) runTurn(ctx context.Context, id string) (store.AgentConversation, error) {
+// Delete 隐藏对话历史并保留关联任务记录。
+func (s *ConversationService) Delete(ctx context.Context, id string) error {
+	if !validConversationID(id) {
+		return ErrInvalid
+	}
+	return s.store.DeleteConversation(ctx, id, time.Now().UTC())
+}
+
+func (s *ConversationService) runTurn(ctx context.Context, id string, onUpdate func(ConversationStreamUpdate)) (store.AgentConversation, error) {
 	startedAt := time.Now()
 	status := s.model.Status()
 	if !status.Available {
@@ -220,7 +256,21 @@ func (s *ConversationService) runTurn(ctx context.Context, id string) (store.Age
 	var result conversationTurnResult
 	modelAttempts := 0
 	for modelAttempts = 1; modelAttempts <= 2; modelAttempts++ {
-		content, completionErr := s.model.complete(ctx, messages)
+		var content string
+		var completionErr error
+		if streamed, ok := s.model.(streamingConversationModel); ok && onUpdate != nil {
+			if modelAttempts > 1 {
+				onUpdate(ConversationStreamUpdate{Reset: true})
+			}
+			var replyStream replyFieldStreamer
+			content, completionErr = streamed.completeStream(ctx, messages, func(piece string) {
+				if delta := replyStream.Feed(piece); delta != "" {
+					onUpdate(ConversationStreamUpdate{Text: delta})
+				}
+			})
+		} else {
+			content, completionErr = s.model.complete(ctx, messages)
+		}
 		if completionErr != nil {
 			failureClass, providerStatus := modelFailureLogDetails(completionErr)
 			logAttrs := []any{"conversation_id", id, "message_count", len(messages), "attempt", modelAttempts, "duration_ms", time.Since(startedAt).Milliseconds(), "reason", "provider_error", "failure_class", failureClass}

@@ -69,6 +69,44 @@ test('上传经服务端确认发布并可下载原件', async ({ page }) => {
   expect(browserErrors).toEqual([]);
 });
 
+test('清除已完成上传后刷新不再恢复记录', async ({ page }) => {
+  const externalService = Boolean(process.env.FILESAGE_E2E_BASE_URL);
+  test.skip(process.platform !== 'linux' && !externalService, '需要 Linux 服务；可用隔离远程服务运行');
+
+  const fileName = `upload-clear-${randomUUID()}.txt`;
+  const content = Buffer.from('clear completed upload');
+  await page.goto('/#files');
+  await page.getByRole('button', { name: '列表视图' }).click();
+  await page.getByRole('button', { name: '上传', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '上传文件' });
+  const queue = dialog.getByRole('list', { name: '上传队列' });
+  await dialog.getByLabel('选择要上传的文件', { exact: true }).setInputFiles({
+    name: fileName,
+    mimeType: 'text/plain',
+    buffer: content,
+  });
+
+  const task = queue.getByRole('listitem').filter({ hasText: fileName });
+  await expect(task.getByRole('status')).toContainText('服务端已确认发布', { timeout: 30_000 });
+  await dialog.getByRole('button', { name: '清除已完成' }).click();
+  await expect(queue.getByRole('listitem')).toHaveCount(0);
+
+  await page.reload();
+  await page.getByRole('button', { name: '列表视图' }).click();
+  await page.getByRole('button', { name: '上传', exact: true }).click();
+  const restoredDialog = page.getByRole('dialog', { name: '上传文件' });
+  const restoredQueue = restoredDialog.getByRole('list', { name: '上传队列' });
+  await expect(restoredQueue.getByRole('listitem')).toHaveCount(0);
+  await expect(restoredDialog.getByText('选择文件后会在这里显示真实进度与发布结果。')).toBeVisible();
+
+  const taskResponse = await page.request.get('/api/v1/tasks?kind=upload&limit=50&offset=0');
+  expect(taskResponse.ok()).toBe(true);
+  expect((await taskResponse.json()).tasks).toHaveLength(1);
+  const fileResponse = await page.request.get(`/api/v1/files?path=${encodeURIComponent(fileName)}`);
+  expect(fileResponse.ok()).toBe(true);
+  expect((await fileResponse.json()).entries[0]?.name).toBe(fileName);
+});
+
 test('确认丢失时按服务端发布状态核对结果', async ({ page }) => {
   const externalService = Boolean(process.env.FILESAGE_E2E_BASE_URL);
   test.skip(process.platform !== 'linux' && !externalService, '需要 Linux 服务；可用隔离远程服务运行');

@@ -661,6 +661,89 @@ async function requestConversation(url: string, init?: RequestInit, expectedStat
   return parseAgentConversation(payload);
 }
 
+async function requestConversationStream(
+  url: string,
+  init: RequestInit,
+  jsonStatus: number,
+  onUpdate: (update: { text?: string; reset?: boolean }) => void,
+): Promise<AgentConversation> {
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...init,
+      headers: {
+        Accept: 'text/event-stream, application/json',
+        ...(init.body ? { 'Content-Type': 'application/json' } : {}),
+        ...init.headers,
+      },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new AgentConversationApiError('无法连接当前 FileSage 服务。');
+  }
+  if (!response.ok) throw await readResponseError(response, 'Agent 请求失败');
+  if (!response.headers.get('content-type')?.includes('text/event-stream')) {
+    if (response.status !== jsonStatus) {
+      throw new AgentConversationApiError(`Agent 服务返回了意外状态（HTTP ${response.status}）。`, response.status);
+    }
+    return parseAgentConversation(await response.json().catch(() => undefined) as unknown);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new AgentConversationApiError('Agent 流式响应不可用。');
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let completed: AgentConversation | null = null;
+  let streamError: AgentConversationApiError | null = null;
+  const consume = (frame: string) => {
+    let event = 'message';
+    const data: string[] = [];
+    for (const line of frame.split(/\r?\n/)) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    const payload = JSON.parse(data.join('\n')) as unknown;
+    if (event === 'delta' && isRecord(payload)) {
+      if (payload.reset === true) onUpdate({ reset: true });
+      else if (typeof payload.text === 'string' && payload.text) onUpdate({ text: payload.text });
+      return;
+    }
+    if (event === 'done') {
+      completed = parseAgentConversation(payload);
+      return;
+    }
+    if (event === 'error' && isRecord(payload)) {
+      const status = Number.isSafeInteger(payload.status) ? Number(payload.status) : 500;
+      const message = typeof payload.message === 'string' ? payload.message : 'Agent 服务暂不可用。';
+      streamError = new AgentConversationApiError(message, status);
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      let boundary = buffer.search(/\r?\n\r?\n/);
+      while (boundary >= 0) {
+        const frame = buffer.slice(0, boundary);
+        const separator = buffer.slice(boundary).match(/^\r?\n\r?\n/)?.[0] ?? '\n\n';
+        buffer = buffer.slice(boundary + separator.length);
+        consume(frame);
+        boundary = buffer.search(/\r?\n\r?\n/);
+      }
+      if (done) break;
+    }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    if (error instanceof AgentConversationApiError) throw error;
+    throw new AgentConversationApiError('Agent 流式响应格式无效。');
+  }
+  if (streamError) throw streamError;
+  if (!completed) throw new AgentConversationApiError('Agent 流式响应未完整结束。');
+  return completed;
+}
+
 export async function listAgentConversations(
   limit = 20,
   offset = 0,
@@ -704,6 +787,16 @@ export function createAgentConversation(message: string): Promise<AgentConversat
   }, 201);
 }
 
+export function createAgentConversationStreaming(
+  message: string,
+  onUpdate: (update: { text?: string; reset?: boolean }) => void,
+): Promise<AgentConversation> {
+  return requestConversationStream('/api/v1/agent/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  }, 201, onUpdate);
+}
+
 export function getAgentConversation(id: string, signal?: AbortSignal): Promise<AgentConversation> {
   return requestConversation(`/api/v1/agent/conversations/${encodeURIComponent(id)}`, { signal });
 }
@@ -713,6 +806,32 @@ export function sendAgentConversationMessage(id: string, message: string): Promi
     method: 'POST',
     body: JSON.stringify({ message }),
   });
+}
+
+export function sendAgentConversationMessageStreaming(
+  id: string,
+  message: string,
+  onUpdate: (update: { text?: string; reset?: boolean }) => void,
+): Promise<AgentConversation> {
+  return requestConversationStream(`/api/v1/agent/conversations/${encodeURIComponent(id)}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ message }),
+  }, 200, onUpdate);
+}
+
+export async function deleteAgentConversation(id: string): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/v1/agent/conversations/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new AgentConversationApiError('无法连接当前 FileSage 服务。');
+  }
+  if (!response.ok) throw await readResponseError(response, '删除会话失败');
+  if (response.status !== 204) throw new AgentConversationApiError(`Agent 服务返回了意外状态（HTTP ${response.status}）。`, response.status);
 }
 
 export function confirmAgentAnalysis(id: string, enableOCR = false): Promise<AgentConversation> {

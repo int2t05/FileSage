@@ -924,7 +924,7 @@ export function ReaderPanel({ path, name, kind, capturedAt, onClose, onFileCreat
         </header>
 
         <div className="reader-toolbar">
-          <span>{isReadOnly ? '压缩包内容 · 只读' : kind === 'epub' ? 'EPUB · 只读阅读' : kind === 'xlsx' ? 'XLSX · 只读表格' : kind === 'text' ? (tableFormat ? `${tableFormat.label} · ${isEditing ? '编辑' : '表格'}` : isMarkdown(name) ? `Markdown · ${isEditing ? '编辑' : markdownMode === 'preview' ? '阅读' : '原文'}` : '纯文本') : kind === 'pdf' ? 'PDF · 阅读' : kind === 'office' && extensionOf(name) === 'docx' ? 'DOCX · 结构化只读阅读' : kind === 'office' ? 'Office · PDF 只读预览' : `${kind} · 浏览器原生预览`}</span>
+          <span>{isReadOnly ? '压缩包内容 · 只读' : kind === 'epub' ? 'EPUB · 只读阅读' : kind === 'xlsx' ? 'XLSX · 只读表格' : kind === 'text' ? (tableFormat ? `${tableFormat.label} · ${isEditing ? '编辑' : '表格'}` : isMarkdown(name) ? `Markdown · ${isEditing ? '编辑' : markdownMode === 'preview' ? '阅读' : '原文'}` : '纯文本') : kind === 'pdf' ? 'PDF · 阅读' : kind === 'office' && extensionOf(name) === 'docx' ? 'DOCX · 结构化只读阅读' : kind === 'office' ? 'Office · PDF 只读预览' : kind === 'image' ? '图片' : kind === 'audio' ? '音频' : '视频'}</span>
           {kind === 'image' && <span className="reader-image-capture"><span>拍摄时间</span><time dateTime={capturedAt}>{formatCaptureDateTime(capturedAt)}</time></span>}
         </div>
 

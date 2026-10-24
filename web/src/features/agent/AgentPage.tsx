@@ -10,6 +10,7 @@ import {
   RefreshCw,
   FolderOpen,
   ShieldCheck,
+  Trash2,
 } from 'lucide-react';
 import {
   AgentApiError,
@@ -17,7 +18,6 @@ import {
   executeAgentStep,
   getAgentPlan,
   getAgentTask,
-  listAgentTaskHistory,
   requestAgentPlanStop,
   rejectAgentPlan,
   reviseAgentOperationContent,
@@ -26,22 +26,21 @@ import {
   type AgentPlan,
   type AgentPlanEditOperation,
   type AgentTextCandidateAction,
-  type AgentTaskHistoryItem,
 } from '../../api/agent';
 import {
   AgentConversationApiError,
   canConfirmAgentAnalysis,
   canSendAgentMessage,
   confirmAgentAnalysis,
-  createAgentConversation,
+  createAgentConversationStreaming,
+  deleteAgentConversation,
   getAgentConversation,
   getAgentModelStatus,
   listAgentConversations,
-  sendAgentConversationMessage,
+  sendAgentConversationMessageStreaming,
   type AgentConversation,
   type AgentAnalysisCard,
   type AgentConversationSummary,
-  type AgentConversationState,
   type AgentModelStatus,
 } from '../../api/agentConversation';
 import { getAgentSettings } from '../../api/agentSettings';
@@ -49,29 +48,6 @@ import { DuplicateScanReport } from './DuplicateScanReport';
 import { AgentPlanReview, canResumeBypassPlan, canStartPlanReview, executionProgress } from './AgentPlanReview';
 import { isSameDirectoryPath } from './pathSemantics';
 import './AgentPage.css';
-
-const TASK_STATUS_LABELS: Record<string, string> = {
-  queued: '排队中',
-  analyzing: '处理中',
-  awaiting_approval: '待审阅',
-  running: '执行中',
-  paused: '已暂停',
-  succeeded: '已完成',
-  partial: '部分完成 · 需核查',
-  failed: '失败',
-  cancelled: '已取消',
-};
-
-const CONVERSATION_STATUS_LABELS: Record<AgentConversationState, string> = {
-  clarifying: '沟通中',
-  awaiting_confirmation: '待你确认',
-  unsupported: '暂不支持',
-  failed: '未完成',
-  processing: '处理中',
-  analyzing: '分析中',
-  awaiting_approval: '待你审阅',
-  analysis_complete: '分析完成',
-};
 
 const SELECTED_ITEM_KEY = 'filesage.agent.selectedItem';
 const MAX_CONVERSATIONS = 20;
@@ -99,14 +75,6 @@ function formatDate(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.valueOf())) return '时间未知';
   return new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
-}
-
-function taskStatusLabel(status: string): string {
-  return TASK_STATUS_LABELS[status] ?? `未知状态：${status || '空'}`;
-}
-
-function conversationStatusLabel(status: string): string {
-  return CONVERSATION_STATUS_LABELS[status as AgentConversationState] ?? `未知状态：${status || '空'}`;
 }
 
 function readSavedSelection(): SavedSelection {
@@ -530,11 +498,10 @@ export function AgentPage({
   const [draft, setDraft] = useState('');
   const [composerError, setComposerError] = useState('');
   const [conversationBusy, setConversationBusy] = useState('');
+  const [pendingUserMessage, setPendingUserMessage] = useState('');
+  const [streamingReply, setStreamingReply] = useState('');
+  const [deletingConversationId, setDeletingConversationId] = useState('');
   const [enableDocumentOCR, setEnableDocumentOCR] = useState(false);
-  const [history, setHistory] = useState<AgentTaskHistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  const [historyError, setHistoryError] = useState('');
-  const [historyRefreshKey, setHistoryRefreshKey] = useState(0);
   const [plan, setPlan] = useState<AgentPlan | null>(null);
   const [planLoading, setPlanLoading] = useState(false);
   const [planError, setPlanError] = useState('');
@@ -695,23 +662,6 @@ export function AgentPage({
   }, [selectedConversationId, conversationRefreshKey, currentConversation]);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setHistoryLoading(true);
-    setHistoryError('');
-    listAgentTaskHistory(controller.signal)
-      .then((items) => {
-        if (!controller.signal.aborted) setHistory(items);
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setHistoryError(apiMessage(error, '读取任务历史失败。'));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setHistoryLoading(false);
-      });
-    return () => controller.abort();
-  }, [historyRefreshKey]);
-
-  useEffect(() => {
     const conversationReady = !selectedConversationId || currentConversation !== null;
     const taskId = selectedConversationId ? currentConversation?.taskId ?? '' : selectedTaskId;
     const planId = selectedConversationId ? currentConversation?.planId ?? '' : '';
@@ -812,14 +762,21 @@ export function AgentPage({
     }
 
     setConversationBusy('message');
+    setPendingUserMessage(message);
+    setStreamingReply('');
     setComposerError('');
     setConversationError('');
     setActionError('');
     setNotice('');
+    const onStreamUpdate = (update: { text?: string; reset?: boolean }) => {
+      setStreamingReply((current) => update.reset ? '' : current + (update.text ?? ''));
+    };
     try {
       const updated = selectedConversationId
-        ? await sendAgentConversationMessage(selectedConversationId, message)
-        : await createAgentConversation(initialMessage);
+        ? await sendAgentConversationMessageStreaming(selectedConversationId, message, onStreamUpdate)
+        : await createAgentConversationStreaming(initialMessage, onStreamUpdate);
+      setStreamingReply('');
+      setPendingUserMessage('');
       setConversation(updated);
       setSelectedTaskId('');
       setSelectedConversationId(updated.id);
@@ -835,6 +792,8 @@ export function AgentPage({
       setConversationHistoryOffset(0);
       setConversationHistoryRefreshKey((value) => value + 1);
     } catch (error) {
+      setStreamingReply('');
+      setPendingUserMessage('');
       setComposerError(`${apiMessage(error, '消息发送失败。')} 草稿已保留。`);
       if (error instanceof AgentConversationApiError && error.status === 409 && selectedConversationId) {
         setConversationRefreshKey((value) => value + 1);
@@ -864,6 +823,24 @@ export function AgentPage({
       }
     } finally {
       setConversationBusy('');
+    }
+  }
+
+  async function removeConversation(item: AgentConversationSummary) {
+    const title = conversationTitle(item);
+    if (!window.confirm(`删除“${title}”？对话内容删除后无法恢复，关联任务记录仍会保留。`)) return;
+    setDeletingConversationId(item.id);
+    setConversationHistoryError('');
+    try {
+      await deleteAgentConversation(item.id);
+      setConversationHistory((items) => items.filter((existing) => existing.id !== item.id));
+      if (selectedConversationId === item.id) startNewConversation();
+      setConversationHistoryOffset(0);
+      setConversationHistoryRefreshKey((value) => value + 1);
+    } catch (error) {
+      setConversationHistoryError(apiMessage(error, '删除会话失败。'));
+    } finally {
+      setDeletingConversationId('');
     }
   }
 
@@ -911,14 +888,13 @@ export function AgentPage({
     setNotice('');
   }
 
-  function refreshAgentHistory() {
-    setHistoryRefreshKey((value) => value + 1);
+  function refreshConversationHistory() {
     setConversationHistoryRefreshKey((value) => value + 1);
   }
 
-  function refreshHistory() {
+  function refreshConversationList() {
     autoExpandHistoryOffset.current = null;
-    refreshAgentHistory();
+    refreshConversationHistory();
     setConversationHistoryOffset(0);
     if (selectedConversationId) setConversationRefreshKey((value) => value + 1);
   }
@@ -931,14 +907,14 @@ export function AgentPage({
     try {
       const latestPlan = await rejectAgentPlan(plan.planId, plan.planVersion);
       setPlan(latestPlan);
-      refreshAgentHistory();
+      refreshConversationHistory();
       if (selectedConversationId) setConversationRefreshKey((current) => current + 1);
       setNotice('已拒绝整份方案。');
     } catch (error) {
       if (error instanceof AgentApiError && error.status === 409) {
         setActionError('方案状态已变化，拒绝未生效。最新状态已刷新，请重新核对。');
         await reloadPlanAfterConflict(plan.planId);
-        refreshAgentHistory();
+        refreshConversationHistory();
       } else {
         setActionError(apiMessage(error, '拒绝方案失败，请重新载入核对。'));
       }
@@ -975,7 +951,7 @@ export function AgentPage({
       polling = false;
       pollController.abort();
       setPlan(latestPlan);
-      refreshAgentHistory();
+      refreshConversationHistory();
       if (selectedConversationId) setConversationRefreshKey((current) => current + 1);
       setNotice(latestPlan.status === 'completed'
         ? '计划已完成，服务端已记录结果。'
@@ -992,12 +968,12 @@ export function AgentPage({
       if (error instanceof AgentApiError && error.status === 409) {
         setActionError('方案或文件状态已变化，操作未生效。最新状态已刷新，请重新核对。');
         await reloadPlanAfterConflict(planId);
-        refreshAgentHistory();
+        refreshConversationHistory();
       } else {
         try {
           const latestPlan = await getAgentPlan(planId);
           setPlan((selected) => selected?.planId === planId ? latestPlan : selected);
-          refreshAgentHistory();
+          refreshConversationHistory();
           setActionError(apiMessage(error, '执行失败，最新方案状态已刷新。'));
         } catch (refreshError) {
           setActionError(`${apiMessage(error, '执行失败。')} ${apiMessage(refreshError, '最新方案读取失败，请手动刷新。')}`);
@@ -1049,7 +1025,7 @@ export function AgentPage({
       setPlan((selected) => selected?.planId === planId
         ? { ...latestPlan, stopRequested: selected.stopRequested || latestPlan.stopRequested }
         : selected);
-      refreshAgentHistory();
+      refreshConversationHistory();
       if (selectedConversationId) setConversationRefreshKey((current) => current + 1);
       setNotice(latestPlan.status === 'cancelled'
         ? `已停止：完成 ${executionProgress(latestPlan).completed} 项，后续项未执行。`
@@ -1058,7 +1034,7 @@ export function AgentPage({
       if (error instanceof AgentApiError && error.status === 409) {
         setActionError('任务状态已变化，停止请求未生效。最新状态已刷新，请核对。');
         await reloadPlanAfterConflict(planId);
-        refreshAgentHistory();
+        refreshConversationHistory();
       } else {
         setActionError(apiMessage(error, '停止请求失败；请刷新任务核对当前状态。'));
       }
@@ -1075,7 +1051,7 @@ export function AgentPage({
     try {
       const revised = await reviseAgentPlan(plan.planId, plan.planVersion, operations);
       setPlan(revised);
-      refreshAgentHistory();
+      refreshConversationHistory();
       if (selectedConversationId) setConversationRefreshKey((current) => current + 1);
       setNotice('修改已保存；所有操作需要重新审核。');
       return true;
@@ -1120,14 +1096,14 @@ export function AgentPage({
         proposedContent,
       );
       setPlan(updated);
-      refreshAgentHistory();
+      refreshConversationHistory();
       if (selectedConversationId) setConversationRefreshKey((current) => current + 1);
       setNotice('修改候选已保存，方案已重置为待审核。');
       return updated;
     } catch (error) {
       if (error instanceof AgentApiError && error.status === 409) {
         await reloadPlanAfterConflict(plan.planId);
-        refreshAgentHistory();
+        refreshConversationHistory();
       }
       throw error;
     } finally {
@@ -1139,8 +1115,6 @@ export function AgentPage({
     ? plan && ((currentConversation?.taskId && plan.taskId === currentConversation.taskId)
       || (currentConversation?.planId && plan.planId === currentConversation.planId)) ? plan : null
     : plan?.taskId === selectedTaskId ? plan : null;
-  const conversationTaskIds = new Set(conversationHistory.flatMap((item) => item.taskId ? [item.taskId] : []));
-  const taskHistory = history.filter((item) => !conversationTaskIds.has(item.id));
   const composerLocked = Boolean(conversationBusy || actionBusy
     || (selectedConversationId && currentConversation === null)
     || !currentConversationCanSend);
@@ -1154,7 +1128,7 @@ export function AgentPage({
     : modelStatusError ? 'AI 服务暂不可用。'
       : modelStatus?.available === false ? 'AI 尚未配置。' : '';
   const showModelUnavailable = Boolean(modelUnavailableMessage && !conversationError);
-  const isNewConversation = !selectedConversationId && !selectedTaskId;
+  const isNewConversation = !selectedConversationId && !selectedTaskId && conversationBusy !== 'message';
 
   return (
     <section className="agent-page" aria-labelledby="agent-page-title">
@@ -1168,7 +1142,7 @@ export function AgentPage({
         <aside className="agent-session-sidebar" aria-label="Agent 会话">
           <div className="agent-session-heading">
             <strong>对话</strong>
-            <button className="agent-session-refresh" type="button" onClick={refreshHistory} aria-label="刷新会话和任务记录" disabled={conversationHistoryLoading || historyLoading || planLoading || Boolean(actionBusy)}>
+            <button className="agent-session-refresh" type="button" onClick={refreshConversationList} aria-label="刷新对话" disabled={conversationHistoryLoading || planLoading || Boolean(actionBusy)}>
               <RefreshCw size={15} aria-hidden="true" />
             </button>
           </div>
@@ -1188,17 +1162,27 @@ export function AgentPage({
               <div className="agent-session-group">
                 <div className="agent-session-list" role="group" aria-label="已保存对话">
                   {conversationHistory.map((item) => (
-                    <button
-                      className={`agent-session-item${selectedConversationId === item.id ? ' is-active' : ''}`}
-                      type="button"
-                      key={item.id}
-                      onClick={() => selectConversation(item.id)}
-                      disabled={Boolean(actionBusy || conversationBusy)}
-                      aria-current={selectedConversationId === item.id ? 'true' : undefined}
-                    >
-                      <span className="agent-session-item-main"><strong>{conversationTitle(item)}</strong><small>{formatDate(item.updatedAt)}</small></span>
-                      <span className="agent-session-state">{item.taskStatus ? taskStatusLabel(item.taskStatus) : conversationStatusLabel(item.state)}</span>
-                    </button>
+                    <div className="agent-session-item-row" key={item.id} data-conversation-id={item.id}>
+                      <button
+                        className={`agent-session-item${selectedConversationId === item.id ? ' is-active' : ''}`}
+                        type="button"
+                        onClick={() => selectConversation(item.id)}
+                        disabled={Boolean(actionBusy || conversationBusy)}
+                        aria-current={selectedConversationId === item.id ? 'true' : undefined}
+                      >
+                        <span className="agent-session-item-main"><strong>{conversationTitle(item)}</strong><small>{formatDate(item.updatedAt)}</small></span>
+                      </button>
+                      <button
+                        className="agent-session-delete"
+                        type="button"
+                        aria-label={`删除对话：${conversationTitle(item)}`}
+                        title="删除对话"
+                        onClick={() => { void removeConversation(item); }}
+                        disabled={Boolean(actionBusy || conversationBusy || deletingConversationId)}
+                      >
+                        {deletingConversationId === item.id ? <Loader2 size={15} aria-hidden="true" /> : <Trash2 size={15} aria-hidden="true" />}
+                      </button>
+                    </div>
                   ))}
                 </div>
                 {conversationHistoryHasMore && (
@@ -1215,34 +1199,11 @@ export function AgentPage({
                 )}
               </div>
             )}
-            {(taskHistory.length > 0 || historyLoading || historyError) && (
-              <details className="agent-task-history" open={Boolean(selectedTaskId)}>
-                <summary><span>任务记录</span>{taskHistory.length > 0 && <small>{taskHistory.length}</small>}</summary>
-                {historyError && <p className="agent-inline-error" role="alert"><AlertTriangle size={15} aria-hidden="true" />{historyError}</p>}
-                {historyLoading && taskHistory.length === 0 && <div className="agent-loading" role="status"><Loader2 className="agent-spinner" size={16} aria-hidden="true" />正在读取任务…</div>}
-                <div className="agent-session-list" role="group" aria-label="历史 Agent 任务">
-                  {taskHistory.map((item) => (
-                    <button
-                      className={`agent-session-item${selectedTaskId === item.id ? ' is-active' : ''}`}
-                      type="button"
-                      key={item.id}
-                      onClick={() => selectTask(item.id)}
-                      disabled={Boolean(actionBusy || conversationBusy)}
-                      aria-current={selectedTaskId === item.id ? 'true' : undefined}
-                    >
-                      <span className="agent-session-item-main"><strong>{item.scopePath || '根目录'}</strong><small>{formatDate(item.createdAt)}</small></span>
-                      <span className="agent-session-state">{taskStatusLabel(item.status)}</span>
-                    </button>
-                  ))}
-                </div>
-              </details>
-            )}
           </div>
         </aside>
         <section className="agent-chat-panel" aria-label="与整理助手对话">
           <header className="agent-chat-header">
-            <h2>{selectedTaskId ? '任务记录' : selectedConversationId ? selectedConversationLabel : '新对话'}</h2>
-            {currentConversation && !currentConversation.planId && <span className="agent-conversation-status">{conversationStatusLabel(currentConversation.state)}</span>}
+            <h2>{selectedTaskId ? '执行记录' : selectedConversationId ? selectedConversationLabel : '新对话'}</h2>
           </header>
           <div className={`agent-conversation-flow${isNewConversation ? ' is-empty' : ''}`}>
             <div className="agent-chat-thread" role="log" aria-label="Agent 对话" aria-live="polite">
@@ -1294,6 +1255,16 @@ export function AgentPage({
                   </article>
                 );
               })}
+              {conversationBusy === 'message' && pendingUserMessage && (
+                <article className="agent-chat-message is-user" aria-label="你的消息">
+                  <p>{pendingUserMessage}</p>
+                </article>
+              )}
+              {conversationBusy === 'message' && (
+                <article className="agent-chat-message is-assistant agent-streaming-message" aria-label="整理助手正在回复" aria-live="polite">
+                  <p>{streamingReply || '正在思考…'}</p>
+                </article>
+              )}
               {currentConversation?.state === 'failed'
                 && currentConversation.error
                 && currentConversation.messages.at(-1)?.role !== 'assistant' && (
@@ -1443,7 +1414,6 @@ export function AgentPage({
                 scanId={currentConversation.duplicateScanId}
                 onTaskCreated={(taskId) => {
                   selectTask(taskId);
-                  setHistoryRefreshKey((value) => value + 1);
                 }}
               />
             )}

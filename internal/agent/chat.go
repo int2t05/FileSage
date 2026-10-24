@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -161,6 +162,95 @@ func (c *chatClient) complete(ctx context.Context, messages []ChatMessage) (stri
 // completeTextEdit 为正文分析单独扩大传输边界，不改变其他模型请求上限。
 func (c *chatClient) completeTextEdit(ctx context.Context, messages []ChatMessage) (string, error) {
 	return c.completeWithLimits(ctx, messages, 512<<10, 512<<10, 256<<10, 256<<10)
+}
+
+// completeStream 以 OpenAI SSE 协议读取对话响应，回调只接收模型内容片段。
+func (c *chatClient) completeStream(ctx context.Context, messages []ChatMessage, onContent func(string)) (string, error) {
+	if c == nil || !c.status.Available {
+		return "", ErrModelUnavailable
+	}
+	if len(messages) == 0 {
+		return "", ErrModelResponse
+	}
+	for _, message := range messages {
+		if (message.Role != "system" && message.Role != "user" && message.Role != "assistant") || message.Content == "" || len(message.Content) > 64<<10 {
+			return "", ErrModelResponse
+		}
+	}
+	requestBody, err := json.Marshal(struct {
+		Model          string        `json:"model"`
+		Messages       []ChatMessage `json:"messages"`
+		Stream         bool          `json:"stream"`
+		Temperature    float64       `json:"temperature"`
+		ResponseFormat struct {
+			Type string `json:"type"`
+		} `json:"response_format"`
+	}{Model: c.status.Model, Messages: messages, Stream: true, Temperature: 0, ResponseFormat: struct {
+		Type string `json:"type"`
+	}{Type: "json_object"}})
+	if err != nil || len(requestBody) > maxModelRequestBytes {
+		return "", ErrModelResponse
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(requestBody))
+	if err != nil {
+		return "", &modelRequestFailure{class: "request_build"}
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "text/event-stream")
+	if c.apiKey != "" {
+		request.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return "", &modelRequestFailure{class: "transport"}
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return "", &modelRequestFailure{class: "http_status", status: response.StatusCode}
+	}
+	scanner := bufio.NewScanner(response.Body)
+	scanner.Buffer(make([]byte, 4096), maxModelResponseBytes+1)
+	var content strings.Builder
+	responseBytes := 0
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		responseBytes += len(line) + 1
+		if responseBytes > maxModelResponseBytes {
+			return "", ErrModelResponse
+		}
+		if !bytes.HasPrefix(line, []byte("data:")) {
+			continue
+		}
+		data := bytes.TrimSpace(line[len("data:"):])
+		if bytes.Equal(data, []byte("[DONE]")) {
+			break
+		}
+		var chunk struct {
+			Choices []struct {
+				Delta struct {
+					Content string `json:"content"`
+				} `json:"delta"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal(data, &chunk); err != nil {
+			return "", ErrModelResponse
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		piece := chunk.Choices[0].Delta.Content
+		if len(content.String())+len(piece) > maxModelContentBytes {
+			return "", ErrModelResponse
+		}
+		content.WriteString(piece)
+		if piece != "" && onContent != nil {
+			onContent(piece)
+		}
+	}
+	if err := scanner.Err(); err != nil || content.Len() == 0 {
+		return "", ErrModelResponse
+	}
+	return content.String(), nil
 }
 
 // completeClassification 单独放宽传输包络，正文总量仍由分类流程限制在 256 KiB。

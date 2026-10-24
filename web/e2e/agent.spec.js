@@ -25,6 +25,17 @@ async function setBypassPermission(page, bypassPermission) {
   }, bypassPermission);
 }
 
+async function readConversationResponse(response) {
+  if (!response.headers()['content-type']?.includes('text/event-stream')) return response.json();
+  const frames = (await response.text()).split(/\r?\n\r?\n/);
+  for (const frame of frames) {
+    if (!frame.startsWith('event: done')) continue;
+    const data = frame.split(/\r?\n/).find((line) => line.startsWith('data:'))?.slice(5).trimStart();
+    if (data) return JSON.parse(data);
+  }
+  throw new Error('Agent 流式响应缺少最终会话');
+}
+
 test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录创建', async ({ page }, testInfo) => {
   const suffix = `-${testInfo.repeatEachIndex}`;
   const targetName = `agent-e2e-reviewed${suffix}`;
@@ -47,7 +58,8 @@ test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录�
     && new URL(response.url()).pathname === '/api/v1/agent/conversations');
   await page.goto('/#agent');
   await conversationListResponse;
-  const savedConversations = page.getByRole('group', { name: '已保存对话' }).getByRole('button');
+  const savedConversations = page.getByRole('group', { name: '已保存对话' }).locator('.agent-session-item');
+  await expect(page.locator('.agent-session-state, .agent-task-history')).toHaveCount(0);
   const initialConversationCount = await savedConversations.count();
   const root = await readManagedRoot(page);
   const targetPath = path.join(root, targetName);
@@ -58,7 +70,7 @@ test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录�
     && new URL(response.url()).pathname === '/api/v1/agent/conversations');
   await composer.fill(`请在根目录新建一个名为 ${targetName} 的文件夹。`);
   await page.getByRole('button', { name: '发送', exact: true }).click();
-  const conversationID = (await (await createdConversationResponse).json()).id;
+  const conversationID = (await readConversationResponse(await createdConversationResponse)).id;
 
   const confirmation = page.getByRole('region', { name: '确认操作' });
   await expect(confirmation).toContainText(targetName);
@@ -93,7 +105,7 @@ test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录�
     && new URL(response.url()).pathname === '/api/v1/agent/conversations');
   await composer.fill(`请新建一个名为 ${separateConversationName} 的文件夹。`);
   await page.getByRole('button', { name: '发送', exact: true }).click();
-  const separateConversationID = (await (await separateConversationResponse).json()).id;
+  const separateConversationID = (await readConversationResponse(await separateConversationResponse)).id;
   expect(separateConversationID).not.toBe(conversationID);
   await expect(page.getByRole('region', { name: '确认操作' })).toContainText(separateConversationName);
   await page.getByRole('button', { name: '确认并生成方案' }).click();
@@ -118,6 +130,15 @@ test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录�
   await page.getByRole('button', { name: '审阅完成，开始执行' }).click();
   await expect(steps.getByRole('listitem').getByText('已完成', { exact: true })).toBeVisible({ timeout: 30_000 });
   await expect.poll(async () => (await stat(followupPath).catch(() => undefined))?.isDirectory() ?? false, { timeout: 5_000 }).toBe(true);
+
+  page.once('dialog', (dialog) => dialog.accept());
+  const separateSession = page.locator(`.agent-session-item-row[data-conversation-id="${separateConversationID}"]`);
+  await separateSession.hover();
+  await separateSession.locator('.agent-session-delete').click();
+  await expect(savedConversations).toHaveCount(initialConversationCount + 1);
+  await page.reload();
+  await expect(savedConversations).toHaveCount(initialConversationCount + 1);
+  await expect(page.getByRole('group', { name: '已保存对话' })).not.toContainText(separateConversationName);
   expect(browserErrors).toEqual([]);
 });
 

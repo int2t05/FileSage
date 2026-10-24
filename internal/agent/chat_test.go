@@ -56,6 +56,32 @@ func TestChatClientUsesOpenAICompatibleJSONAndKeepsKeyPrivate(t *testing.T) {
 	}
 }
 
+func TestChatClientStreamsOpenAICompatibleJSONContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || !request.Stream || r.Header.Get("Accept") != "text/event-stream" {
+			t.Errorf("stream request = (%#v, %v, %q)", request, err, r.Header.Get("Accept"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, content := range []string{`{"state":"clarifying","reply":"请补`, `充范围"}`} {
+			payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}}}})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	client := newChatClient(config.AgentModelConfig{BaseURL: server.URL + "/v1", Model: "local-model"})
+	var streamed strings.Builder
+	response, err := client.completeStream(context.Background(), []ChatMessage{{Role: "user", Content: "继续"}}, func(piece string) {
+		streamed.WriteString(piece)
+	})
+	if err != nil || response != `{"state":"clarifying","reply":"请补充范围"}` || streamed.String() != response {
+		t.Fatalf("completeStream() = (%q, %v), streamed %q", response, err, streamed.String())
+	}
+}
+
 func TestChatClientDoesNotFollowRedirectOrExposeProviderBody(t *testing.T) {
 	const secret = "provider-secret"
 	var redirected bool

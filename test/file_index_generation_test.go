@@ -46,8 +46,8 @@ func TestFileIndexGenerationMigrationPreservesLegacyRows(t *testing.T) {
 		t.Fatalf("upgrade v4 database: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	if version, err := db.SchemaVersion(ctx); err != nil || version != 30 {
-		t.Fatalf("SchemaVersion() = (%d, %v), want (30, nil)", version, err)
+	if version, err := db.SchemaVersion(ctx); err != nil || version != 31 {
+		t.Fatalf("SchemaVersion() = (%d, %v), want (31, nil)", version, err)
 	}
 	record, err := db.FileIndex(ctx, "old/report.pdf")
 	if err != nil {

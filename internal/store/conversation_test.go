@@ -3,6 +3,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -27,6 +28,60 @@ func TestAnalysisFileSizeLimitMatchesSupportedFormats(t *testing.T) {
 		if limit := AnalysisFileSizeLimit(file); limit != 0 {
 			t.Errorf("AnalysisFileSizeLimit(%q) = %d, want 0", file, limit)
 		}
+	}
+}
+
+func TestDeleteConversationHidesAndErasesChatWhileKeepingTaskRecord(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	now := time.Now().UTC()
+	if err := db.CreateConversation(ctx, "conversation-delete", "删除前的用户内容", now); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.FinishConversationTurn(ctx, "conversation-delete", ConversationClarifying, "删除前的模型回复", AnalysisCard{}, "", now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeleteConversation(ctx, "conversation-delete", now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Conversation(ctx, "conversation-delete"); !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("deleted Conversation() error = %v", err)
+	}
+	if list, _, err := db.ListConversations(ctx, 20, 0); err != nil || len(list) != 0 {
+		t.Fatalf("ListConversations() after deletion = (%#v, %v)", list, err)
+	}
+	var messageCount, deletedAt int
+	var goal string
+	if err := db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM agent_conversation_messages WHERE conversation_id = ?`, "conversation-delete").Scan(&messageCount); err != nil || messageCount != 0 {
+		t.Fatalf("deleted messages = (%d, %v)", messageCount, err)
+	}
+	if err := db.db.QueryRowContext(ctx, `SELECT deleted_at_ns, goal FROM agent_conversations WHERE id = ?`, "conversation-delete").Scan(&deletedAt, &goal); err != nil || deletedAt == 0 || goal != "" {
+		t.Fatalf("conversation tombstone = (%d, %q, %v)", deletedAt, goal, err)
+	}
+	if err := db.DeleteConversation(ctx, "conversation-delete", now); !errors.Is(err, ErrConversationNotFound) {
+		t.Fatalf("repeated deletion error = %v", err)
+	}
+}
+
+func TestDeleteConversationRejectsActiveTurn(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(ctx, filepath.Join(t.TempDir(), "filesage.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.CreateConversation(ctx, "conversation-active", "处理中", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.DeleteConversation(ctx, "conversation-active", time.Now()); !errors.Is(err, ErrConversationConflict) {
+		t.Fatalf("active conversation deletion error = %v", err)
+	}
+	if _, err := db.Conversation(ctx, "conversation-active"); err != nil {
+		t.Fatalf("active conversation was hidden: %v", err)
 	}
 }
 

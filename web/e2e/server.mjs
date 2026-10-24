@@ -35,6 +35,19 @@ async function readBody(request) {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+function sendModelResponse(requestBody, response, content) {
+  if (!requestBody.stream) {
+    response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+    return;
+  }
+  response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  for (let offset = 0; offset < content.length; offset += 12) {
+    const payload = JSON.stringify({ choices: [{ delta: { content: content.slice(offset, offset + 12) } }] });
+    response.write(`data: ${payload}\n\n`);
+  }
+  response.end('data: [DONE]\n\n');
+}
+
 // 只为约定的目录任务返回固定 JSON，不访问外网模型。
 async function answerModel(request, response) {
   if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
@@ -50,7 +63,7 @@ async function answerModel(request, response) {
     const systemMessage = body.messages?.find((message) => message.role === 'system')?.content;
     if (body.model === 'filesage-e2e' && typeof systemMessage === 'string' && systemMessage.includes('单文件重命名分析器')) {
       const content = JSON.stringify({ supported: true, targetName: 'renamed.md', reasonCode: 'title' });
-      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+      sendModelResponse(body, response, content);
       return;
     }
     const userMessage = body.messages?.findLast((message) => message.role === 'user')?.content;
@@ -83,7 +96,7 @@ async function answerModel(request, response) {
           workingDir: 'reports',
         }],
       });
-      response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+      sendModelResponse(body, response, content);
       return;
     }
     if (body.model !== 'filesage-e2e' || typeof userMessage !== 'string'
@@ -100,7 +113,7 @@ async function answerModel(request, response) {
       filePath: isRename ? renameSourcePath || '' : '',
       targetPath: isRename ? '' : target,
     });
-    response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ choices: [{ message: { content } }] }));
+    sendModelResponse(body, response, content);
   } catch {
     response.writeHead(400, { 'Content-Type': 'application/json' }).end('{"error":"invalid test request"}');
   }

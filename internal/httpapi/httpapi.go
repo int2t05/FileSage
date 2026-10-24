@@ -110,6 +110,7 @@ type agentConversationWorkflow interface {
 	List(context.Context, int, int) ([]store.ConversationSummary, bool, error)
 	Create(context.Context, string) (store.AgentConversation, error)
 	Get(context.Context, string) (store.AgentConversation, error)
+	Delete(context.Context, string) error
 	AddMessage(context.Context, string, string) (store.AgentConversation, error)
 	ConfirmAnalysis(context.Context, string, ...bool) (store.AgentConversation, error)
 }
@@ -312,6 +313,7 @@ func NewWithAgentAndIndexAndConversation(files fileSystem, tasks taskReader, tra
 	mux.HandleFunc("GET /api/v1/agent/conversations", api.listAgentConversations)
 	mux.HandleFunc("POST /api/v1/agent/conversations", api.createAgentConversation)
 	mux.HandleFunc("GET /api/v1/agent/conversations/{id}", api.getAgentConversation)
+	mux.HandleFunc("DELETE /api/v1/agent/conversations/{id}", api.deleteAgentConversation)
 	mux.HandleFunc("POST /api/v1/agent/conversations/{id}/messages", api.addAgentConversationMessage)
 	mux.HandleFunc("POST /api/v1/agent/conversations/{id}/confirm-analysis", api.confirmAgentConversationAnalysis)
 	mux.HandleFunc("GET /api/v1/agent/duplicate-scans/{id}", api.getDuplicateScan)

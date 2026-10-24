@@ -26,6 +26,9 @@ type conversationServiceStub struct {
 	listedOffset int
 	createCalls  int
 	addCalls     int
+	deleteCalls  int
+	createStream int
+	addStream    int
 	confirmCalls int
 	confirmOCR   bool
 	conversation store.AgentConversation
@@ -71,11 +74,25 @@ func (stub *conversationServiceStub) Create(context.Context, string) (store.Agen
 	stub.createCalls++
 	return stub.conversation, stub.err
 }
+func (stub *conversationServiceStub) CreateStream(_ context.Context, _ string, update func(agent.ConversationStreamUpdate)) (store.AgentConversation, error) {
+	stub.createStream++
+	update(agent.ConversationStreamUpdate{Text: "请补充"})
+	return stub.conversation, stub.err
+}
 func (stub *conversationServiceStub) Get(context.Context, string) (store.AgentConversation, error) {
 	return stub.conversation, stub.err
 }
+func (stub *conversationServiceStub) Delete(context.Context, string) error {
+	stub.deleteCalls++
+	return stub.err
+}
 func (stub *conversationServiceStub) AddMessage(context.Context, string, string) (store.AgentConversation, error) {
 	stub.addCalls++
+	return stub.conversation, stub.err
+}
+func (stub *conversationServiceStub) AddMessageStream(_ context.Context, _, _ string, update func(agent.ConversationStreamUpdate)) (store.AgentConversation, error) {
+	stub.addStream++
+	update(agent.ConversationStreamUpdate{Reset: true})
 	return stub.conversation, stub.err
 }
 func (stub *conversationServiceStub) ConfirmAnalysis(_ context.Context, _ string, options ...bool) (store.AgentConversation, error) {
@@ -253,6 +270,36 @@ func TestConversationWritesRequireSameOriginAndEmptyConfirmBody(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || stub.confirmCalls != 2 || !stub.confirmOCR {
 		t.Fatalf("confirm with OCR = status %d, calls %d, OCR %t", response.Code, stub.confirmCalls, stub.confirmOCR)
+	}
+}
+
+func TestAgentConversationStreamingAndDeletion(t *testing.T) {
+	stub := &conversationServiceStub{conversation: store.AgentConversation{
+		ID: "0123456789abcdef0123456789abcdef", State: store.ConversationClarifying,
+		Messages: []store.ConversationMessage{{Role: "assistant", Content: "请补充范围"}},
+	}}
+	handler := NewWithAgentAndIndexAndConversation(nil, nil, nil, nil, nil, stub, nil, nil)
+	request := httptest.NewRequest(http.MethodPost, "http://filesage.local/api/v1/agent/conversations", strings.NewReader(`{"message":"整理合同"}`))
+	request.Header.Set("Origin", "http://filesage.local")
+	request.Header.Set("Accept", "text/event-stream")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "text/event-stream") || !strings.Contains(response.Body.String(), "event: delta") || !strings.Contains(response.Body.String(), "event: done") || stub.createStream != 1 || stub.createCalls != 0 {
+		t.Fatalf("stream response = (%d, %s, %s), calls=(%d,%d)", response.Code, response.Header().Get("Content-Type"), response.Body.String(), stub.createStream, stub.createCalls)
+	}
+	request = httptest.NewRequest(http.MethodDelete, "http://filesage.local/api/v1/agent/conversations/0123456789abcdef0123456789abcdef", nil)
+	request.Header.Set("Origin", "http://evil.local")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || stub.deleteCalls != 0 {
+		t.Fatalf("cross-origin delete = status %d, calls %d", response.Code, stub.deleteCalls)
+	}
+	request = httptest.NewRequest(http.MethodDelete, "http://filesage.local/api/v1/agent/conversations/0123456789abcdef0123456789abcdef", nil)
+	request.Header.Set("Origin", "http://filesage.local")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || stub.deleteCalls != 1 {
+		t.Fatalf("delete response = status %d, calls %d", response.Code, stub.deleteCalls)
 	}
 }
 

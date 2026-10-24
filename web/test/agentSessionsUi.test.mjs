@@ -42,22 +42,21 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentPage, /agent-composer-hint agent-composer-keyboard-hint/);
   });
 
-  it('把聊天放在主视区并收起次要任务历史', () => {
+  it('会话侧栏只管理对话，任务进度留在执行计划里', () => {
     assert.match(agentPage, /<header className="agent-chat-header">/);
     assert.match(agentPage, /selectedConversationLabel = selectedConversationSummary \? conversationTitle\(selectedConversationSummary\) : '对话'/);
-    assert.match(agentPage, /<h2>\{selectedTaskId \? '任务记录' : selectedConversationId \? selectedConversationLabel : '新对话'\}<\/h2>/);
-    assert.match(agentPage, /currentConversation && !currentConversation\.planId && <span className="agent-conversation-status">/);
+    assert.match(agentPage, /<h2>\{selectedTaskId \? '执行记录' : selectedConversationId \? selectedConversationLabel : '新对话'\}<\/h2>/);
     assert.doesNotMatch(agentPage, /activeConversationTitle/);
-    assert.match(agentPage, /<details className="agent-task-history" open=\{Boolean\(selectedTaskId\)\}>/);
-    assert.match(agentStyles, /\.agent-chat-thread,[\s\S]*?\.agent-chat-composer\s*\{[\s\S]*?width: min\(100%, 840px\)/);
+    assert.doesNotMatch(agentPage, /agent-task-history|agent-session-state|agent-conversation-status/);
+    assert.match(agentPage, /aria-label="刷新对话"/);
+    assert.match(agentPage, /data-conversation-id=\{item\.id\}/);
+    assert.match(agentStyles, /\.agent-chat-thread,[\s\S]*?\.agent-chat-composer\s*\{[\s\S]*?width: min\(100%, 760px\)/);
     assert.match(agentStyles, /\.agent-chat-header h2\s*\{[^}]*flex: 1/);
-    assert.match(agentStyles, /\.agent-chat-header \.agent-conversation-status\s*\{[^}]*white-space: nowrap/);
     assert.match(agentStyles, /\.agent-chat-composer-footer > div\s*\{[^}]*margin-left: auto/);
     assert.match(agentStyles, /\.agent-workspace\s*\{[^}]*border: 1px solid var\(--color-line\)[^}]*background: var\(--color-surface\)/);
     assert.match(agentStyles, /\.agent-session-sidebar\s*\{[^}]*border-right: 1px solid var\(--color-line\)/);
     assert.match(agentStyles, /\.agent-chat-panel\s*\{[^}]*border: 0[^}]*background: var\(--color-surface-subtle\)/);
     assert.match(agentStyles, /\.agent-session-item\s*\{[^}]*display: flex[^}]*align-items: center/);
-    assert.match(agentStyles, /\.agent-session-item\.is-active \.agent-session-state\s*\{[^}]*display: none/);
     assert.match(agentStyles, /@media \(max-width: 760px\)[\s\S]*?\.agent-chat-composer\s*\{[^}]*position: sticky[^}]*bottom: calc\(var\(--mobile-nav-height\) \+ env\(safe-area-inset-bottom\)\)/);
   });
 
@@ -67,10 +66,11 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentPage, /setConversation\(updated\);[\s\S]*?setSelectedConversationId\(updated\.id\)/);
   });
 
-  it('计划结果同步刷新会话摘要与任务历史', () => {
-    assert.match(agentPage, /function refreshAgentHistory\(\)[\s\S]*?setHistoryRefreshKey[\s\S]*?setConversationHistoryRefreshKey/);
+  it('计划结果只同步刷新会话摘要', () => {
+    assert.match(agentPage, /function refreshConversationHistory\(\)[\s\S]*?setConversationHistoryRefreshKey/);
+    assert.doesNotMatch(agentPage, /listAgentTaskHistory|setHistoryRefreshKey/);
     const planRequests = agentPage.slice(agentPage.indexOf('async function runPlanRequest'), agentPage.indexOf('async function runPlan()'));
-    assert.match(planRequests, /refreshAgentHistory\(\)/);
+    assert.match(planRequests, /refreshConversationHistory\(\)/);
   });
 
   it('设置页简洁说明模式范围与逐步确认行为', () => {

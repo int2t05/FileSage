@@ -2,9 +2,12 @@
 package httpapi
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"filesage/internal/agent"
@@ -13,6 +16,11 @@ import (
 
 type conversationRequest struct {
 	Message string `json:"message"`
+}
+
+type agentConversationStreamer interface {
+	CreateStream(context.Context, string, func(agent.ConversationStreamUpdate)) (store.AgentConversation, error)
+	AddMessageStream(context.Context, string, string, func(agent.ConversationStreamUpdate)) (store.AgentConversation, error)
 }
 
 type analysisConfirmationRequest struct {
@@ -135,6 +143,13 @@ func (api *API) createAgentConversation(w http.ResponseWriter, r *http.Request) 
 	if !decodeRequestJSON(w, r, &request) {
 		return
 	}
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		if streamer, ok := api.conversations.(agentConversationStreamer); ok && streamConversation(w, r, func(onUpdate func(agent.ConversationStreamUpdate)) (store.AgentConversation, error) {
+			return streamer.CreateStream(r.Context(), request.Message, onUpdate)
+		}) {
+			return
+		}
+	}
 	conversation, err := api.conversations.Create(r.Context(), request.Message)
 	if conversation.ID != "" {
 		writeJSON(w, http.StatusCreated, toConversationResponse(conversation))
@@ -156,6 +171,21 @@ func (api *API) getAgentConversation(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toConversationResponse(conversation))
 }
 
+func (api *API) deleteAgentConversation(w http.ResponseWriter, r *http.Request) {
+	if !requireSameOrigin(w, r) {
+		return
+	}
+	if api.conversations == nil {
+		writeError(w, http.StatusServiceUnavailable, "Agent conversation service is unavailable")
+		return
+	}
+	if err := api.conversations.Delete(r.Context(), r.PathValue("id")); err != nil {
+		writeConversationError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (api *API) addAgentConversationMessage(w http.ResponseWriter, r *http.Request) {
 	if !requireSameOrigin(w, r) {
 		return
@@ -167,6 +197,13 @@ func (api *API) addAgentConversationMessage(w http.ResponseWriter, r *http.Reque
 	var request conversationRequest
 	if !decodeRequestJSON(w, r, &request) {
 		return
+	}
+	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		if streamer, ok := api.conversations.(agentConversationStreamer); ok && streamConversation(w, r, func(onUpdate func(agent.ConversationStreamUpdate)) (store.AgentConversation, error) {
+			return streamer.AddMessageStream(r.Context(), r.PathValue("id"), request.Message, onUpdate)
+		}) {
+			return
+		}
 	}
 	conversation, err := api.conversations.AddMessage(r.Context(), r.PathValue("id"), request.Message)
 	if conversation.ID != "" {
@@ -228,26 +265,61 @@ func toConversationResponse(conversation store.AgentConversation) conversationRe
 	return response
 }
 
+func streamConversation(w http.ResponseWriter, r *http.Request, run func(func(agent.ConversationStreamUpdate)) (store.AgentConversation, error)) bool {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return false
+	}
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-transform")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+	conversation, err := run(func(update agent.ConversationStreamUpdate) {
+		writeConversationEvent(w, flusher, "delta", update)
+	})
+	if conversation.ID != "" {
+		writeConversationEvent(w, flusher, "done", toConversationResponse(conversation))
+		return true
+	}
+	status, message := conversationErrorDetails(err)
+	writeConversationEvent(w, flusher, "error", map[string]any{"status": status, "message": message})
+	return true
+}
+
+func writeConversationEvent(w http.ResponseWriter, flusher http.Flusher, name string, value any) {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return
+	}
+	_, _ = w.Write([]byte("event: " + name + "\ndata: " + string(data) + "\n\n"))
+	flusher.Flush()
+}
+
 func writeConversationError(w http.ResponseWriter, err error) {
-	message := "Agent conversation request failed"
+	status, message := conversationErrorDetails(err)
+	writeError(w, status, message)
+}
+
+func conversationErrorDetails(err error) (int, string) {
 	switch {
 	case errors.Is(err, store.ErrConversationNotFound), errors.Is(err, store.ErrNotFound):
-		writeError(w, http.StatusNotFound, "Agent conversation not found")
+		return http.StatusNotFound, "Agent conversation not found"
 	case errors.Is(err, agent.ErrInvalid):
-		writeError(w, http.StatusBadRequest, "invalid Agent conversation request")
+		return http.StatusBadRequest, "invalid Agent conversation request"
 	case errors.Is(err, store.ErrConversationConflict), errors.Is(err, store.ErrConflict), errors.Is(err, agent.ErrConflict):
-		writeError(w, http.StatusConflict, "Agent conversation state or file version changed")
+		return http.StatusConflict, "Agent conversation state or file version changed"
 	case errors.Is(err, store.ErrConversationLimit):
-		writeError(w, http.StatusRequestEntityTooLarge, "Agent conversation limit reached")
+		return http.StatusRequestEntityTooLarge, "Agent conversation limit reached"
 	case errors.Is(err, agent.ErrMessageTooLarge):
-		writeError(w, http.StatusRequestEntityTooLarge, "Agent conversation message is too large")
+		return http.StatusRequestEntityTooLarge, "Agent conversation message is too large"
 	case errors.Is(err, agent.ErrUnsupported):
-		writeError(w, http.StatusUnprocessableEntity, "Agent operation is not supported")
+		return http.StatusUnprocessableEntity, "Agent operation is not supported"
 	case errors.Is(err, agent.ErrModelUnavailable):
-		writeError(w, http.StatusServiceUnavailable, "Agent model is not configured")
+		return http.StatusServiceUnavailable, "Agent model is not configured"
 	case errors.Is(err, agent.ErrModelRequest), errors.Is(err, agent.ErrModelResponse):
-		writeError(w, http.StatusBadGateway, "Agent model request failed")
+		return http.StatusBadGateway, "Agent model request failed"
 	default:
-		writeError(w, http.StatusInternalServerError, message)
+		return http.StatusInternalServerError, "Agent conversation request failed"
 	}
 }

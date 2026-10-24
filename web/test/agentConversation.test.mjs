@@ -6,11 +6,14 @@ import {
   canSendAgentMessage,
   confirmAgentAnalysis,
   createAgentConversation,
+  createAgentConversationStreaming,
+  deleteAgentConversation,
   listAgentConversations,
   parseAgentConversation,
   parseAgentConversationPage,
   parseAgentModelStatus,
   sendAgentConversationMessage,
+  sendAgentConversationMessageStreaming,
 } from '../src/api/agentConversation.ts';
 import { MAX_AGENT_PLAN_OPERATIONS } from '../src/api/agentPlanLimits.ts';
 
@@ -755,6 +758,54 @@ describe('Agent 对话 API 请求', () => {
     assert.equal(request.init.method, undefined);
     assert.equal(page.offset, 40);
     assert.equal(page.hasMore, false);
+  });
+
+  it('以 SSE 接收回复增量并以服务端最终会话作为结果', async () => {
+    const chunks = [
+      `event: delta\ndata: ${JSON.stringify({ text: '请补' })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ text: '充范围' })}\n\n`,
+      `event: done\ndata: ${JSON.stringify(conversation())}\n\n`,
+    ];
+    const updates = [];
+    let request;
+    globalThis.fetch = async (url, init) => {
+      request = { url: String(url), init };
+      return new Response(new ReadableStream({
+        start(controller) {
+          chunks.forEach((chunk) => controller.enqueue(new TextEncoder().encode(chunk)));
+          controller.close();
+        },
+      }), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+
+    const result = await createAgentConversationStreaming('整理合同', (update) => updates.push(update));
+    assert.equal(request.url, '/api/v1/agent/conversations');
+    assert.equal(request.init.headers.Accept, 'text/event-stream, application/json');
+    assert.equal(result.id, 'conv-1');
+    assert.deepEqual(updates, [{ text: '请补' }, { text: '充范围' }]);
+  });
+
+  it('支持会话续聊的 SSE 与同源删除请求', async () => {
+    const updates = [];
+    let request;
+    globalThis.fetch = async (url, init) => {
+      request = { url: String(url), init };
+      return new Response([
+        `event: delta\ndata: ${JSON.stringify({ reset: true })}\n\n`,
+        `event: done\ndata: ${JSON.stringify(conversation())}\n\n`,
+      ].join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    };
+    await sendAgentConversationMessageStreaming('conv/1', '继续', (update) => updates.push(update));
+    assert.equal(request.url, '/api/v1/agent/conversations/conv%2F1/messages');
+    assert.deepEqual(updates, [{ reset: true }]);
+
+    globalThis.fetch = async (url, init) => {
+      request = { url: String(url), init };
+      return new Response(null, { status: 204 });
+    };
+    await deleteAgentConversation('conv/1');
+    assert.equal(request.url, '/api/v1/agent/conversations/conv%2F1');
+    assert.equal(request.init.method, 'DELETE');
   });
 
   it('拒绝创建接口的意外成功状态码', async () => {

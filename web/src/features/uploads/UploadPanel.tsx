@@ -24,6 +24,7 @@ import {
   UploadApiError,
 } from '../../api/uploads';
 import { createUploadFingerprint } from './uploadFingerprint';
+import { dismissUploadIds, filterDismissedUploadRecoveries } from './uploadDismissals';
 import { findMatchingPreviousUpload, recoveryPhase } from './uploadRecovery';
 import { createUploadTaskStore, uploadCancellationRequests } from './uploadTaskStore';
 import './UploadPanel.css';
@@ -276,6 +277,7 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
   const [recoveryState, setRecoveryState] = useState<RecoveryLoadState>('idle');
   const [recoveryError, setRecoveryError] = useState('');
   const [recoveryRetryToken, setRecoveryRetryToken] = useState(0);
+  const [clearError, setClearError] = useState('');
   const [dropActive, setDropActive] = useState(false);
   const [selectionError, setSelectionError] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -374,7 +376,8 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
     listUploadRecoveries(controller.signal)
       .then((records) => {
         if (!active) return;
-        const restored = records.map(recoveredUploadTask);
+        const visibleRecords = filterDismissedUploadRecoveries(records);
+        const restored = visibleRecords.map(recoveredUploadTask);
         setTasks((current) => {
           const liveTasks = current.filter((task) => !task.restored);
           const liveUploadIds = new Set(liveTasks.flatMap((task) => task.uploadId ? [task.uploadId] : []));
@@ -383,7 +386,7 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
             ...restored.filter((task) => task.uploadId && !liveUploadIds.has(task.uploadId)),
           ];
         });
-        for (const record of records) {
+        for (const record of visibleRecords) {
           if (record.publication && ['queued', 'publishing', 'cancelling'].includes(record.publication.status)) {
             scheduleStatusCheck(record.task.id, record.task.id, 0, 1200);
           }
@@ -746,11 +749,16 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
   }
 
   function clearFinished() {
-    setTasks((current) => {
-      const finished = current.filter((task) => ['published', 'cancelled'].includes(task.phase));
-      finished.forEach((task) => uploadCancellationRequests.delete(task.id));
-      return current.filter((task) => !['published', 'cancelled'].includes(task.phase));
-    });
+    const finished = uploadTaskStore.getSnapshot().filter((task) => ['published', 'cancelled'].includes(task.phase));
+    const uploadIDs = finished.flatMap((task) => task.uploadId ? [task.uploadId] : []);
+    if (!dismissUploadIds(uploadIDs)) {
+      setClearError('无法保存清除状态，请检查浏览器存储设置后重试。');
+      return;
+    }
+    setClearError('');
+    const finishedTaskIDs = new Set(finished.map((task) => task.id));
+    finished.forEach((task) => uploadCancellationRequests.delete(task.id));
+    setTasks((current) => current.filter((task) => !finishedTaskIDs.has(task.id)));
   }
 
   if (!open) return null;
@@ -802,6 +810,7 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
             <div><h3>上传队列</h3><span>{tasks.length} 个文件{activeCount ? ` · ${activeCount} 项进行中` : ''}</span></div>
             {tasks.some((task) => ['published', 'cancelled'].includes(task.phase)) && <button type="button" onClick={clearFinished}>清除已完成</button>}
           </div>
+          {clearError && <p className="upload-recovery-error" role="alert">{clearError}</p>}
 
           {tasks.length === 0 ? (
             <div className="upload-empty-state"><FolderOpen size={20} aria-hidden="true" /><span>选择文件后会在这里显示真实进度与发布结果。</span></div>

@@ -342,7 +342,7 @@ func (s *Store) StartConversationTurn(ctx context.Context, id, message string, a
 	defer func() { _ = tx.Rollback() }()
 	var state ConversationState
 	var planID sql.NullString
-	if err := tx.QueryRowContext(ctx, `SELECT state, plan_id FROM agent_conversations WHERE id = ?`, id).Scan(&state, &planID); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT state, plan_id FROM agent_conversations WHERE id = ? AND deleted_at_ns IS NULL`, id).Scan(&state, &planID); errors.Is(err, sql.ErrNoRows) {
 		return ErrConversationNotFound
 	} else if err != nil {
 		return fmt.Errorf("read conversation turn state: %w", err)
@@ -689,7 +689,7 @@ func (s *Store) BeginConversationAnalysis(ctx context.Context, id string, at tim
 	}
 	defer func() { _ = tx.Rollback() }()
 	var operationsJSON string
-	if err := tx.QueryRowContext(ctx, `SELECT operations_json FROM agent_conversations WHERE id = ? AND state = 'awaiting_confirmation' AND plan_id IS NULL`, id).Scan(&operationsJSON); errors.Is(err, sql.ErrNoRows) {
+	if err := tx.QueryRowContext(ctx, `SELECT operations_json FROM agent_conversations WHERE id = ? AND state = 'awaiting_confirmation' AND plan_id IS NULL AND deleted_at_ns IS NULL`, id).Scan(&operationsJSON); errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("read conversation analysis operations: %w", err)
@@ -711,7 +711,7 @@ func (s *Store) BeginConversationAnalysis(ctx context.Context, id string, at tim
 	}
 	result, err := tx.ExecContext(ctx, `
 		UPDATE agent_conversations SET state = 'analyzing', operations_json = ?, error_code = '', updated_at_ns = ?
-		WHERE id = ? AND state = 'awaiting_confirmation' AND plan_id IS NULL`, operationsJSON, atNS, id)
+		WHERE id = ? AND state = 'awaiting_confirmation' AND plan_id IS NULL AND deleted_at_ns IS NULL`, operationsJSON, atNS, id)
 	if err != nil {
 		return false, fmt.Errorf("claim conversation analysis: %w", err)
 	}
@@ -814,6 +814,44 @@ func (s *Store) Conversation(ctx context.Context, id string) (AgentConversation,
 	return loadConversation(ctx, s.db, id)
 }
 
+// DeleteConversation 隐藏会话历史，不删除关联任务和审计数据。
+func (s *Store) DeleteConversation(ctx context.Context, id string, at time.Time) error {
+	if !validShellID(id) {
+		return ErrConversationNotFound
+	}
+	atNS := conversationTime(at).UnixNano()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin conversation deletion: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	var state ConversationState
+	err = tx.QueryRowContext(ctx, `SELECT state FROM agent_conversations WHERE id = ? AND deleted_at_ns IS NULL`, id).Scan(&state)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrConversationNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("read conversation before deletion: %w", err)
+	}
+	if state == ConversationProcessing || state == ConversationAnalyzing {
+		return ErrConversationConflict
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE agent_conversations SET deleted_at_ns = ?, updated_at_ns = ?, goal = '', file_path = '',
+		target_path = '', mode = NULL, owner_uid = NULL, group_gid = NULL, operations_json = '[]', provider = '', model = '', destination = '',
+		error_code = '', context_summary = '', tool_context_plan_id = ''
+		WHERE id = ? AND deleted_at_ns IS NULL AND state NOT IN ('processing', 'analyzing')`, atNS, atNS, id)
+	if err != nil {
+		return fmt.Errorf("hide conversation: %w", err)
+	}
+	if err := requireOneRow(result, "agent conversation"); err != nil {
+		return ErrConversationConflict
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM agent_conversation_messages WHERE conversation_id = ?`, id); err != nil {
+		return fmt.Errorf("delete conversation messages: %w", err)
+	}
+	return tx.Commit()
+}
+
 // ListConversations 返回不含消息正文的有界会话摘要。
 func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]ConversationSummary, bool, error) {
 	if limit < 1 || limit > 100 || offset < 0 || offset > 100000 {
@@ -831,6 +869,7 @@ func (s *Store) ListConversations(ctx context.Context, limit, offset int) ([]Con
 			ELSE 'Agent 对话' END),
 		COALESCE(c.task_id, ''), COALESCE(t.status, ''), COALESCE(c.plan_id, ''), COALESCE(c.duplicate_scan_id, ''), c.updated_at_ns
 		FROM agent_conversations c LEFT JOIN tasks t ON t.id = c.task_id
+		WHERE c.deleted_at_ns IS NULL
 		ORDER BY c.updated_at_ns DESC, c.id DESC LIMIT ? OFFSET ?`, limit+1, offset)
 	if err != nil {
 		return nil, false, fmt.Errorf("list agent conversations: %w", err)
@@ -1209,7 +1248,7 @@ func loadConversation(ctx context.Context, queryer interface {
 	var action, goal, filePath, targetPath, operationsJSON, provider, model, destination, toolContextPlanID string
 	var mode, ownerUID, groupGID sql.NullInt64
 	var taskID, planID, duplicateScanID sql.NullString
-	err := queryer.QueryRowContext(ctx, `SELECT id, state, analysis_action, goal, file_path, target_path, mode, owner_uid, group_gid, operations_json, provider, model, destination, task_id, plan_id, duplicate_scan_id, error_code, created_at_ns, updated_at_ns, context_summary, tool_context_plan_id FROM agent_conversations WHERE id = ?`, id).Scan(
+	err := queryer.QueryRowContext(ctx, `SELECT id, state, analysis_action, goal, file_path, target_path, mode, owner_uid, group_gid, operations_json, provider, model, destination, task_id, plan_id, duplicate_scan_id, error_code, created_at_ns, updated_at_ns, context_summary, tool_context_plan_id FROM agent_conversations WHERE id = ? AND deleted_at_ns IS NULL`, id).Scan(
 		&conversation.ID, &conversation.State, &action, &goal, &filePath, &targetPath, &mode, &ownerUID, &groupGID, &operationsJSON, &provider, &model, &destination,
 		&taskID, &planID, &duplicateScanID, &conversation.Error, &createdAt, &updatedAt, &conversation.ContextSummary, &toolContextPlanID,
 	)

@@ -25,8 +25,8 @@ describe('从文件页打开 Agent 的范围上下文', () => {
     assert.match(agentPage, /currentDirectory: context\.path/);
     assert.match(agentPage, /空目录路径表示管理根目录/);
     assert.match(agentPage, /new TextEncoder\(\)\.encode\(initialMessage\)\.byteLength > MAX_MESSAGE_BYTES/);
-    assert.match(agentPage, /createAgentConversation\(initialMessage\)/);
-    assert.match(agentPage, /sendAgentConversationMessage\(selectedConversationId, message\)/);
+    assert.match(agentPage, /createAgentConversationStreaming\(initialMessage, onStreamUpdate\)/);
+    assert.match(agentPage, /sendAgentConversationMessageStreaming\(selectedConversationId, message, onStreamUpdate\)/);
     assert.match(agentPage, /if \(activeLaunchContext\) \{\s*setActiveLaunchContext\(null\);\s*onLaunchContextConsumed\?\.\(\);\s*\}/);
     assert.match(agentPage, /整理范围：\{activeLaunchContext\.kind === 'directory'/);
   });

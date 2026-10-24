@@ -1644,6 +1644,14 @@ ALTER TABLE agent_conversations ADD COLUMN tool_context_plan_id TEXT NOT NULL DE
 	CHECK (length(tool_context_plan_id) <= 256);
 `,
 	},
+	{
+		version: 31,
+		// 软删除会话，保留关联任务与审计记录。
+		sql: `
+ALTER TABLE agent_conversations ADD COLUMN deleted_at_ns INTEGER;
+CREATE INDEX agent_conversations_visible_updated ON agent_conversations(deleted_at_ns, updated_at_ns DESC);
+`,
+	},
 }
 
 // migrate 顺序应用迁移，并清理旧 Shell 输出的 SQLite 残留。
