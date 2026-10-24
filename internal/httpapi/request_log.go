@@ -95,5 +95,26 @@ func (w *requestLogResponse) Write(body []byte) (int, error) {
 	return w.ResponseWriter.Write(body)
 }
 
+func (w *requestLogResponse) Flush() {
+	_ = w.FlushError()
+}
+
+// FlushError 透传流式响应，并先记录隐式的 HTTP 200 状态。
+func (w *requestLogResponse) FlushError() error {
+	flushError, supportsFlushError := w.ResponseWriter.(interface{ FlushError() error })
+	flusher, supportsFlush := w.ResponseWriter.(http.Flusher)
+	if !supportsFlushError && !supportsFlush {
+		return http.ErrNotSupported
+	}
+	if w.status == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	if supportsFlushError {
+		return flushError.FlushError()
+	}
+	flusher.Flush()
+	return nil
+}
+
 // Unwrap 保留 ResponseController 对底层 writer 的访问。
 func (w *requestLogResponse) Unwrap() http.ResponseWriter { return w.ResponseWriter }

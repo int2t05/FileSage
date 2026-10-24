@@ -278,7 +278,7 @@ func TestAgentConversationStreamingAndDeletion(t *testing.T) {
 		ID: "0123456789abcdef0123456789abcdef", State: store.ConversationClarifying,
 		Messages: []store.ConversationMessage{{Role: "assistant", Content: "请补充范围"}},
 	}}
-	handler := NewWithAgentAndIndexAndConversation(nil, nil, nil, nil, nil, stub, nil, nil)
+	handler := RequestLogger(nil, NewWithAgentAndIndexAndConversation(nil, nil, nil, nil, nil, stub, nil, nil))
 	request := httptest.NewRequest(http.MethodPost, "http://filesage.local/api/v1/agent/conversations", strings.NewReader(`{"message":"整理合同"}`))
 	request.Header.Set("Origin", "http://filesage.local")
 	request.Header.Set("Accept", "text/event-stream")

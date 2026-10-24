@@ -266,34 +266,34 @@ func toConversationResponse(conversation store.AgentConversation) conversationRe
 }
 
 func streamConversation(w http.ResponseWriter, r *http.Request, run func(func(agent.ConversationStreamUpdate)) (store.AgentConversation, error)) bool {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		return false
-	}
 	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-transform")
 	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	flusher.Flush()
+	controller := http.NewResponseController(w)
+	if err := controller.Flush(); errors.Is(err, http.ErrNotSupported) {
+		return false
+	} else if err != nil {
+		return true
+	}
 	conversation, err := run(func(update agent.ConversationStreamUpdate) {
-		writeConversationEvent(w, flusher, "delta", update)
+		writeConversationEvent(w, controller, "delta", update)
 	})
 	if conversation.ID != "" {
-		writeConversationEvent(w, flusher, "done", toConversationResponse(conversation))
+		writeConversationEvent(w, controller, "done", toConversationResponse(conversation))
 		return true
 	}
 	status, message := conversationErrorDetails(err)
-	writeConversationEvent(w, flusher, "error", map[string]any{"status": status, "message": message})
+	writeConversationEvent(w, controller, "error", map[string]any{"status": status, "message": message})
 	return true
 }
 
-func writeConversationEvent(w http.ResponseWriter, flusher http.Flusher, name string, value any) {
+func writeConversationEvent(w http.ResponseWriter, controller *http.ResponseController, name string, value any) {
 	data, err := json.Marshal(value)
 	if err != nil {
 		return
 	}
 	_, _ = w.Write([]byte("event: " + name + "\ndata: " + string(data) + "\n\n"))
-	flusher.Flush()
+	_ = controller.Flush()
 }
 
 func writeConversationError(w http.ResponseWriter, err error) {
