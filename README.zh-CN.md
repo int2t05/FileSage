@@ -1,11 +1,11 @@
-# FileSage
+# FileSage — Linux 自托管文件管理器
 
 <p align="right"><img src="web/public/filesage.svg" width="64" alt="FileSage 图标" /></p>
 
 [![CI](https://github.com/int2t05/FileSage/actions/workflows/ci.yml/badge.svg)](https://github.com/int2t05/FileSage/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-面向 Linux 的本地优先文件工作台。FileSage 直接管理挂载磁盘上的真实目录；
+FileSage 是自托管 Linux 文件管理器，直接管理挂载磁盘上的真实目录，支持大文件续传和浏览器阅读。
 Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。默认开启
 `bypasspermission`，按顺序执行；在设置中关闭后，每一步由你手动执行。
 
@@ -13,8 +13,8 @@ Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。�
 
 ## 项目状态
 
-MVP 已部署为局域网测试服务，尚无稳定版或预编译安装包。后续工作见
-[项目进度](docs/IMPLEMENTATION_PLAN.md)，验证范围见[验收记录](docs/ACCEPTANCE.md)。
+公开候选已部署为局域网测试服务，尚无稳定版或预编译安装包。当前状态见
+[项目状态](docs/STATUS.md)，验证范围见[验收记录](docs/ACCEPTANCE.md)。
 
 ## 能力
 
@@ -72,7 +72,7 @@ npm run e2e
 
 ## 项目文档
 
-- [文档导航](docs/README.md) · [项目进度](docs/IMPLEMENTATION_PLAN.md) · [验收记录](docs/ACCEPTANCE.md)
+- [文档导航](docs/README.md) · [项目状态](docs/STATUS.md) · [验收记录](docs/ACCEPTANCE.md)
 - [参与贡献](CONTRIBUTING.md) · [安全问题反馈](SECURITY.md)
 
 ## 反馈与支持

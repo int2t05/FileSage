@@ -1,20 +1,23 @@
-# FileSage
+# FileSage — Self-Hosted Linux File Manager
 
 <p align="right"><img src="web/public/filesage.svg" width="64" alt="FileSage logo" /></p>
 
 [![CI](https://github.com/int2t05/FileSage/actions/workflows/ci.yml/badge.svg)](https://github.com/int2t05/FileSage/actions/workflows/ci.yml)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-A local-first file workspace for Linux. FileSage manages real directories across
-mounted disks and lets you review AI-proposed file changes before they run.
+## Overview
+
+A local-first, self-hosted Linux file manager for mounted disks. FileSage
+manages real directories, resumes large uploads, and lets you review
+AI-proposed file operations before they run.
 
 [简体中文](README.zh-CN.md)
 
 ## Status
 
-The MVP runs as a LAN test service; there is no stable release or prebuilt
-package yet. Track [progress and remaining work](docs/IMPLEMENTATION_PLAN.md)
-and see [acceptance evidence](docs/ACCEPTANCE.md).
+The public candidate is deployed as a LAN test service; there is no stable
+release or prebuilt package yet. See [current status](docs/STATUS.md) and
+[acceptance evidence](docs/ACCEPTANCE.md).
 
 ## What it does
 
@@ -36,7 +39,7 @@ and see [acceptance evidence](docs/ACCEPTANCE.md).
   the task record and can inform the next turn in the same conversation.
 - Keep SQLite task and search metadata outside the managed files. The filesystem remains the source of truth.
 
-## Quick start
+## Getting started
 
 Requirements: Linux, Go 1.27.3 or newer, Node.js 24 and npm. Optional system
 tools enable formats and operations such as Office conversion, OCR, video
@@ -84,10 +87,10 @@ vulnerability scanning and a Linux package smoke test.
 
 ## Project docs
 
-- [Documentation index](docs/README.md) · [progress](docs/IMPLEMENTATION_PLAN.md) · [acceptance evidence](docs/ACCEPTANCE.md)
+- [Documentation index](docs/README.md) · [status](docs/STATUS.md) · [acceptance evidence](docs/ACCEPTANCE.md)
 - [Contributing](CONTRIBUTING.md) · [security reporting](SECURITY.md)
 
-## Support and feedback
+## Contact and support
 
 Report a reproducible bug or suggest an improvement through
 [GitHub Issues](https://github.com/int2t05/FileSage/issues/new/choose). Do not
