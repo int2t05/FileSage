@@ -8,8 +8,7 @@
 
 | 范围 | 状态 |
 | --- | --- |
-| GitHub `main` | 已部署代码候选为 `d58a7d8`；[Go 与 Web CI 全部通过](https://github.com/int2t05/FileSage/actions/runs/40066333581)。无开放 PR 或 Release；`main` 未启用分支保护。 |
-| 文档 | 部署与验收状态已同步；当前工作区的后续改动仅涉及这两份进度文档。 |
+| GitHub `main` | 当前提交 `bb89415` 的[CI 全部通过](https://github.com/int2t05/FileSage/actions/runs/40092029803)；服务器运行代码候选 `d58a7d8` 的[CI 也通过](https://github.com/int2t05/FileSage/actions/runs/40066333581)。无开放 PR 或 Release；`main` 未启用分支保护。 |
 | 测试服务器 | `filesage.service` 已运行候选，健康检查正常，重启数为 0；Agent 模型可用；双盘挂载与环境文件权限核验通过。保留当前回滚副本。 |
 
 ## 已完成
