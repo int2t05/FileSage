@@ -12,9 +12,6 @@
 /reference/official/*.txt
 /reference/context7/
 
-# 私有维护记录
-/docs/USER_ACTIONS.md
-
 # 本地数据库与服务数据
 /data/
 *.db

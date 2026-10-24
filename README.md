@@ -15,9 +15,9 @@ AI-proposed file operations before they run.
 
 ## Status
 
-The public candidate is deployed as a LAN test service; there is no stable
-release or prebuilt package yet. See [current status](docs/STATUS.md) and
-[acceptance evidence](docs/ACCEPTANCE.md).
+The release workflow publishes verified Linux amd64 packages from version tags.
+See [current status](docs/STATUS.md), [acceptance evidence](docs/ACCEPTANCE.md),
+and [GitHub Releases](https://github.com/int2t05/FileSage/releases).
 
 ## What it does
 
@@ -111,7 +111,7 @@ run, stdout and stderr are stored locally (up to 16 KiB per stream). The next
 turn sends the confirmed command, scope, working directory, execution status,
 bounded output and changed paths, types and statuses to the configured model
 as untrusted evidence. Command output may contain file contents or other sensitive information. See the
-[Agent API notes](docs/agent-conversation-api.md).
+[Agent API notes](docs/api/agent-conversation.md).
 
 ## License
 

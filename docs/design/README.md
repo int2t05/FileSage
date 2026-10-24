@@ -1,6 +1,6 @@
 # 设计与实现决策
 
-本目录记录长期有效的界面基线和架构取舍。产品范围见[PRD](../PRD.md)，当前技术结构见[技术基线](../TECH.md)；运行接口契约见[Agent API](../agent-conversation-api.md)与[归档 API](../archive-api.md)。
+本目录记录长期有效的界面基线和架构取舍。产品范围见[PRD](../PRD.md)，当前技术结构见[技术基线](../TECH.md)；运行接口契约见[Agent API](../api/agent-conversation.md)与[归档 API](../api/archive.md)。
 
 ## 设计基线
 

@@ -13,8 +13,8 @@ Agent 通过自然语言澄清需求，并在你审阅整份计划后执行。�
 
 ## 项目状态
 
-公开候选已部署为局域网测试服务，尚无稳定版或预编译安装包。当前状态见
-[项目状态](docs/STATUS.md)，验证范围见[验收记录](docs/ACCEPTANCE.md)。
+稳定版通过 CI 验证后提供 Linux amd64 发布包。当前状态见[项目状态](docs/STATUS.md)、
+[验收摘要](docs/ACCEPTANCE.md)和 [GitHub Releases](https://github.com/int2t05/FileSage/releases)。
 
 ## 能力
 
@@ -89,7 +89,7 @@ FileSage 面向可信个人网络，不提供用户认证或 HTTPS 终止。能�
 Agent 对话消息会随每轮交流发送给已配置模型；文件分析只在你确认分析卡后
 读取并发送正文。确认 Shell 分析卡后，stdout/stderr 每路最多 16 KiB 并保存到本地任务记录。
 下一轮会将确认过的命令、范围、工作目录、执行状态、限长输出和文件变化路径、类型与状态作为不可信证据发送给配置模型。FileSage 不会为 Shell 另行读取文件正文；命令输出可能包含文件内容或其他敏感信息。确认前请查看卡片列出的数据范围，具体边界见
-[Agent API 说明](docs/agent-conversation-api.md)。
+[Agent API 说明](docs/api/agent-conversation.md)。
 
 ## 许可证
 

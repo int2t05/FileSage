@@ -53,7 +53,7 @@ Agent 已支持多类文件操作和隔离 Shell。原流程把计划、文件�
 
 ## 依据
 
-- [Agent API 契约](../../agent-conversation-api.md)
-- [成熟 PRD：Agent 与审批](../../PRD.md#4-agent-与审批)
+- [Agent API 契约](../../api/agent-conversation.md)
+- [PRD](../../PRD.md)
 - [Claude Code 桌面会话与权限模式](https://code.claude.com/docs/en/desktop)：仅作交互参考，不作为 FileSage 的文件安全策略。
 - [Claude Code 会话恢复](https://code.claude.com/docs/en/sessions)、[项目记忆](https://code.claude.com/docs/en/memory)和[上下文窗口](https://code.claude.com/docs/en/context-window)：参考可恢复会话和摘要压缩，不采用其私有存储格式。

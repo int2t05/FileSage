@@ -55,6 +55,7 @@ jobs:
       - name: Verify web and dependencies
         working-directory: web
         run: |
+          test "$(node -p 'require("./package.json").version')" = "${GITHUB_REF_NAME#v}"
           npm ci
           npm audit --registry=https://registry.npmjs.org/ --audit-level=high
           npm test
@@ -73,7 +74,7 @@ jobs:
       - name: Smoke-test release package
         run: |
           set -euo pipefail
-          bundle="filesage_"$GITHUB_REF_NAME"_linux_amd64"
+          bundle="filesage_${GITHUB_REF_NAME}_linux_amd64"
           bash scripts/smoke-release-package.sh "dist/$bundle.tar.gz" "$bundle"
 
       - name: Upload verified release package
@@ -96,6 +97,10 @@ jobs:
       actions: read
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
       - name: Download and verify release files
         env:
           GH_TOKEN: ${{ github.token }}
@@ -116,4 +121,6 @@ jobs:
             exit 1
           fi
 
-          gh release create "$GITHUB_REF_NAME" "dist/$archive" "dist/$checksum" --repo "$GITHUB_REPOSITORY" --verify-tag --title "FileSage $GITHUB_REF_NAME" --generate-notes
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          test -s "$notes"
+          gh release create "$GITHUB_REF_NAME" "dist/$archive" "dist/$checksum" --repo "$GITHUB_REPOSITORY" --verify-tag --title "FileSage $GITHUB_REF_NAME" --notes-file "$notes"
