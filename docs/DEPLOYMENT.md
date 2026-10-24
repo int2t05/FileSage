@@ -15,8 +15,13 @@ scp filesage_vX.Y.Z_linux_amd64.tar.gz filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
 ```sh
 set -eu
 sha256sum -c filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
+bundle=filesage_vX.Y.Z_linux_amd64
+if [ -e "$bundle" ] || [ -L "$bundle" ]; then
+  printf 'refusing to reuse existing path: %s\n' "$bundle" >&2
+  exit 1
+fi
 tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
-cd filesage_vX.Y.Z_linux_amd64
+cd "$bundle"
 ```
 
 包内含 `filesage`、预构建页面 `web/`、systemd 模板、环境示例、部署说明和许可证文件。推送指向 `main` 历史的已审阅 `vMAJOR.MINOR.PATCH` 标签会触发发布工作流：只读验证任务完成密钥扫描、Go／Web 检查、systemd 校验和 Linux 包冒烟；独立发布任务校验安装包 SHA-256 与标签目标后创建 Release。发布写权限不提供给构建、测试或依赖安装步骤。当前仓库尚无稳定版 Release。
@@ -150,18 +155,24 @@ sudo systemctl show filesage.service -p Wants -p After -p RequiresMountsFor -p C
 
 保持现有环境文件、管理根目录、数据目录和服务器专用 drop-in 不变。先校验发布包并解压。若版本包含数据库迁移，先按“备份与恢复”完成停服一致性备份并校验校验和；迁移失败时修复前向版本或恢复完整快照，不要单独回退旧二进制。
 
+以下步骤遇到已存在的解包目录、暂存目录或回退目录会停止；检查并按需手动处理后再重试，避免旧构建内容混入新版本或覆盖回退副本。
+
 ```sh
 set -eu
 sha256sum -c filesage_vX.Y.Z_linux_amd64.tar.gz.sha256
-tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
-
 app=/usr/local/lib/filesage
 release="$PWD/filesage_vX.Y.Z_linux_amd64"
 rollback="$app/rollback-before-vX.Y.Z"
 stage="$app/.release-vX.Y.Z"
+for path in "$release" "$rollback" "$stage"; do
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    printf 'refusing to reuse existing path: %s\n' "$path" >&2
+    exit 1
+  fi
+done
+tar -xzf filesage_vX.Y.Z_linux_amd64.tar.gz
 test -x "$release/filesage"
 test -s "$release/web/index.html"
-test ! -e "$rollback"
 
 sudo install -d -o root -g root -m 0700 "$rollback"
 sudo install -d -o root -g root -m 0755 "$stage/web"
