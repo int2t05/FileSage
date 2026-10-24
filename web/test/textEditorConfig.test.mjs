@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EditorState } from '@codemirror/state';
-import { defaultHighlightStyle, syntaxTree } from '@codemirror/language';
+import { defaultHighlightStyle, ensureSyntaxTree, syntaxTree } from '@codemirror/language';
 import { getSearchQuery, SearchCursor } from '@codemirror/search';
 import { highlightTree } from '@lezer/highlight';
 import {
@@ -15,7 +15,9 @@ import {
 // 本测试验证白名单语法解析、编辑快捷键与文内查找行为。
 function syntaxNodeNames(state) {
   const names = new Set();
-  syntaxTree(state).iterate({ enter: (node) => names.add(node.name) });
+  const tree = ensureSyntaxTree(state, state.doc.length, 1000);
+  assert.ok(tree, '语法树应在检查前完成解析');
+  tree.iterate({ enter: (node) => names.add(node.name) });
   return names;
 }
 

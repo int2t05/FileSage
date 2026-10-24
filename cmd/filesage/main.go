@@ -117,7 +117,7 @@ func main() {
 	publication.SetIndexRefresh(fileIndex.Refresh)
 	mux := http.NewServeMux()
 	mux.Handle(uploadStatusPath, publication)
-	mux.Handle("/api/v1/uploads/", uploads)
+	mux.Handle(uploadTUSPath, publication.tusHandler(uploads))
 	apiHandler := httpapi.NewWithAgentAndIndexAndConversation(root, metadata, trashManager, agentService, fileIndex, conversationService, metadata.Health, locks)
 	videoPoster := videoposter.New(videoposter.Options{})
 	mux.Handle("GET /api/v1/files/video-poster", httpapi.NewVideoPosterHandler(root, videoPoster))

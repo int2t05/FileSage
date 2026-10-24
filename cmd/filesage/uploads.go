@@ -12,7 +12,9 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -26,6 +28,7 @@ import (
 )
 
 const uploadStatusPath = "/api/v1/uploads/status/"
+const uploadTUSPath = "/api/v1/uploads/"
 
 type publicationStatus string
 
@@ -99,6 +102,58 @@ func newPublicationManager(uploads *upload.Server, root *fsroot.Root, locks *coo
 // SetIndexRefresh 注册发布后的索引校准回调。
 func (manager *publicationManager) SetIndexRefresh(refresh func(context.Context)) {
 	manager.refreshIndex = refresh
+}
+
+// tusHandler 用持久发布状态恢复已清理上传的 TUS 确认。
+func (manager *publicationManager) tusHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead && r.Header.Get("Tus-Resumable") == "1.0.0" {
+			uploadID := strings.TrimPrefix(r.URL.Path, uploadTUSPath)
+			if safeUploadID(uploadID) {
+				result, err := manager.loadResult(uploadID)
+				if err != nil && !errors.Is(err, store.ErrNotFound) {
+					slog.Warn("upload publication state unavailable", "upload_id", uploadID, "error", err)
+					response := httptest.NewRecorder()
+					next.ServeHTTP(response, r)
+					if response.Code != http.StatusNotFound {
+						copyTUSHeadResponse(w, response)
+						return
+					}
+					writeTUSUnavailable(w)
+					return
+				}
+				if err == nil && isPublishedResult(result) {
+					if result.Size < 0 {
+						slog.Warn("published upload has invalid size", "upload_id", uploadID)
+						writeTUSUnavailable(w)
+						return
+					}
+					w.Header().Set("Tus-Resumable", "1.0.0")
+					w.Header().Set("Upload-Offset", strconv.FormatInt(result.Size, 10))
+					w.Header().Set("Upload-Length", strconv.FormatInt(result.Size, 10))
+					w.Header().Set("Cache-Control", "no-store")
+					w.WriteHeader(http.StatusOK)
+					return
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// copyTUSHeadResponse 转发活动上传资源的状态与响应头。
+func copyTUSHeadResponse(w http.ResponseWriter, response *httptest.ResponseRecorder) {
+	for key, values := range response.Header() {
+		w.Header()[key] = append([]string(nil), values...)
+	}
+	w.WriteHeader(response.Code)
+}
+
+// writeTUSUnavailable 返回可重试错误，避免把暂时不可读的状态误判为不存在。
+func writeTUSUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Tus-Resumable", "1.0.0")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(http.StatusServiceUnavailable)
 }
 
 func (manager *publicationManager) run(ctx context.Context) error {

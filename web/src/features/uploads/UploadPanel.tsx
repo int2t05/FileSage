@@ -111,6 +111,9 @@ type DataTransferItemWithEntry = DataTransferItem & {
 };
 
 const UPLOAD_ENDPOINT = '/api/v1/uploads/';
+// 限制单次中断后的重传量。
+const UPLOAD_CHUNK_SIZE = 64 * 1024 * 1024;
+const transferErrorPollLimit = 4;
 const uploadTaskStore = createUploadTaskStore<UploadTask>();
 const pollingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -292,17 +295,18 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
     setTasks((current) => current.map((task) => task.id === id ? update(task) : task));
   }, []);
 
-  const scheduleStatusCheck = useCallback((taskId: string, uploadId: string, attempt: number, delay: number) => {
+  const scheduleStatusCheck = useCallback((taskId: string, uploadId: string, attempt: number, delay: number, stopOnReceiving = false) => {
     const previous = pollingTimers.get(taskId);
     if (previous) clearTimeout(previous);
     const timer = setTimeout(() => {
       pollingTimers.delete(taskId);
-      void checkStatus(taskId, uploadId, attempt);
+      void checkStatus(taskId, uploadId, attempt, stopOnReceiving);
     }, delay);
     pollingTimers.set(taskId, timer);
   }, []);
 
-  const checkStatus = useCallback(async (taskId: string, uploadId: string, attempt = 0) => {
+  // 查询发布状态；传输报错时限制重查，避免无限轮询。
+  const checkStatus = useCallback(async (taskId: string, uploadId: string, attempt = 0, stopOnReceiving = false) => {
     try {
       const publication = await getUploadPublication(uploadId);
       const terminal = ['published', 'failed', 'partial', 'cancelled'].includes(publication.status);
@@ -311,13 +315,13 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
         phase: isTaskCancelled(taskId) && !terminal
           ? 'cancelling'
           : publication.status === 'receiving'
-            ? task.restored ? 'resume-needed' : task.phase
+            ? task.restored ? 'resume-needed' : task.phase === 'status-error' ? 'transfer-error' : task.phase
             : publicationPhase(publication.status),
         serverStatus: publication.status,
         bytesSent: publication.offset,
         totalBytes: publication.size,
         publishedPath: publication.publishedPath,
-        error: publication.error,
+        error: publication.error ?? (publication.status === 'receiving' ? task.error : undefined),
         statusError: undefined,
         ...(terminal ? { upload: undefined, file: undefined } : {}),
       }));
@@ -330,6 +334,24 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
         return;
       }
       if (terminal) return;
+      if (stopOnReceiving) {
+        // 状态仍未终结时停止自动查询，并保留可执行的恢复入口。
+        if (attempt >= transferErrorPollLimit) {
+          const cancelled = isTaskCancelled(taskId);
+          updateTask(taskId, (task) => ({
+            ...task,
+            phase: cancelled ? 'cancelling' : publication.status === 'receiving' ? 'transfer-error' : 'status-error',
+            statusError: cancelled
+              ? '服务端仍在处理取消请求；可重新查询或重试取消。'
+              : publication.status === 'receiving'
+                ? '服务端仍在接收；重试上传会从已接收位置继续。'
+                : '服务端仍在处理中，最终结果尚未确认；可重新查询。',
+          }));
+          return;
+        }
+        scheduleStatusCheck(taskId, uploadId, attempt + 1, 1400, true);
+        return;
+      }
       scheduleStatusCheck(taskId, uploadId, 0, 1400);
     } catch (error) {
       const message = error instanceof UploadApiError ? error.message : '无法读取服务端发布状态。';
@@ -338,7 +360,8 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
         phase: isTaskCancelled(taskId) ? 'cancelling' : task.phase === 'checking' ? 'status-error' : task.phase,
         statusError: message,
       }));
-      scheduleStatusCheck(taskId, uploadId, attempt + 1, Math.min(1500 * (2 ** Math.min(attempt, 3)), 10000));
+      if (stopOnReceiving && attempt >= transferErrorPollLimit) return;
+      scheduleStatusCheck(taskId, uploadId, attempt + 1, Math.min(1500 * (2 ** Math.min(attempt, 3)), 10000), stopOnReceiving);
     }
   }, [onPublished, scheduleStatusCheck, updateTask]);
 
@@ -499,6 +522,7 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
       };
       upload = new tus.Upload(file, {
         endpoint: UPLOAD_ENDPOINT,
+        chunkSize: UPLOAD_CHUNK_SIZE,
         fingerprint: getFingerprint,
         retryDelays: [0, 1000, 3000, 5000],
         metadata: {
@@ -576,9 +600,12 @@ export function UploadPanel({ open, targetPath, onClose, onPublished }: UploadPa
             }
             return;
           }
+          const uploadId = extractUploadId(upload.url);
           updateTask(id, (task) => ['published', 'failed', 'partial', 'cancelled', 'cancelling', 'checking', 'publishing'].includes(task.phase)
             ? task
             : { ...task, phase: 'transfer-error', error: uploadTransferErrorMessage(error) });
+          // 丢失 PATCH 确认时，按服务端发布状态核对实际结果。
+          if (uploadId) void checkStatus(id, uploadId, 0, true);
         },
       });
       const task: UploadTask = {

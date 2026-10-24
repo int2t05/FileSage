@@ -94,7 +94,7 @@ func newUploadIntegration(t *testing.T) *uploadIntegration {
 	manager := newPublicationManager(uploads, root, locks, metadata)
 	mux := http.NewServeMux()
 	mux.Handle(uploadStatusPath, manager)
-	mux.Handle("/api/v1/uploads/", uploads)
+	mux.Handle(uploadTUSPath, manager.tusHandler(uploads))
 	server := httptest.NewServer(mux)
 	ctx, cancel := context.WithCancel(context.Background())
 	managerDone := make(chan error, 1)
@@ -251,7 +251,8 @@ func (fixture *uploadIntegration) upload(t *testing.T, filename, target, relativ
 	return id
 }
 
-func (fixture *uploadIntegration) startUpload(filename, target, relativePath string, content []byte) (string, error) {
+// createTusUpload 创建未完成的测试上传并返回资源地址。
+func (fixture *uploadIntegration) createTusUpload(filename, target, relativePath string, size int) (string, string, error) {
 	metadata := map[string]string{
 		"filename":     filename,
 		"target":       target,
@@ -263,24 +264,24 @@ func (fixture *uploadIntegration) startUpload(filename, target, relativePath str
 	}
 	create, err := http.NewRequest(http.MethodPost, fixture.server.URL+"/api/v1/uploads/", nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	create.Header.Set("Tus-Resumable", "1.0.0")
-	create.Header.Set("Upload-Length", fmt.Sprint(len(content)))
+	create.Header.Set("Upload-Length", fmt.Sprint(size))
 	create.Header.Set("Upload-Metadata", strings.Join(encoded, ","))
 	response, err := fixture.server.Client().Do(create)
 	if err != nil {
-		return "", fmt.Errorf("create tus upload: %w", err)
+		return "", "", fmt.Errorf("create tus upload: %w", err)
 	}
 	if response.StatusCode != http.StatusCreated {
 		body, _ := io.ReadAll(response.Body)
 		_ = response.Body.Close()
-		return "", fmt.Errorf("create tus upload returned %d: %s", response.StatusCode, body)
+		return "", "", fmt.Errorf("create tus upload returned %d: %s", response.StatusCode, body)
 	}
 	resource, err := url.Parse(response.Header.Get("Location"))
 	if err != nil {
 		_ = response.Body.Close()
-		return "", fmt.Errorf("parse tus location: %w", err)
+		return "", "", fmt.Errorf("parse tus location: %w", err)
 	}
 	if !resource.IsAbs() {
 		base, _ := url.Parse(fixture.server.URL)
@@ -289,16 +290,24 @@ func (fixture *uploadIntegration) startUpload(filename, target, relativePath str
 	_ = response.Body.Close()
 	id := path.Base(resource.Path)
 	if !safeUploadID(id) {
-		return "", fmt.Errorf("tus upload ID %q is not valid", id)
+		return "", "", fmt.Errorf("tus upload ID %q is not valid", id)
 	}
-	patch, err := http.NewRequest(http.MethodPatch, resource.String(), bytes.NewReader(content))
+	return id, resource.String(), nil
+}
+
+func (fixture *uploadIntegration) startUpload(filename, target, relativePath string, content []byte) (string, error) {
+	id, resourceURL, err := fixture.createTusUpload(filename, target, relativePath, len(content))
+	if err != nil {
+		return "", err
+	}
+	patch, err := http.NewRequest(http.MethodPatch, resourceURL, bytes.NewReader(content))
 	if err != nil {
 		return "", err
 	}
 	patch.Header.Set("Tus-Resumable", "1.0.0")
 	patch.Header.Set("Upload-Offset", "0")
 	patch.Header.Set("Content-Type", "application/offset+octet-stream")
-	response, err = fixture.server.Client().Do(patch)
+	response, err := fixture.server.Client().Do(patch)
 	if err != nil {
 		return "", fmt.Errorf("patch tus upload: %w", err)
 	}
@@ -434,6 +443,111 @@ func TestUploadPublicationUsesNumberedNameAndPersistsAudit(t *testing.T) {
 	audit, err := fixture.metadata.AuditForTask(context.Background(), id)
 	if err != nil || len(audit) != 4 {
 		t.Fatalf("audit events = %d, err=%v; expected one each for receiving, queued, publishing and published", len(audit), err)
+	}
+}
+
+// TestPublishedUploadResumesAfterStagingCleanup 验证重启后仍可恢复已发布状态。
+func TestPublishedUploadResumesAfterStagingCleanup(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("safe atomic file publication is implemented on Linux")
+	}
+	fixture := newUploadIntegration(t)
+	content := []byte("published before acknowledgement")
+	id := fixture.upload(t, "ack.txt", ".", "ack.txt", content)
+	result := fixture.waitStatus(t, id, publicationSucceeded)
+	if result.PublishedPath != "ack.txt" {
+		t.Fatalf("published path = %q, want ack.txt", result.PublishedPath)
+	}
+	if _, err := os.Stat(filepath.Join(fixture.staging, id)); !os.IsNotExist(err) {
+		t.Fatalf("published staging file should be removed, stat err=%v", err)
+	}
+
+	// 用新数据库句柄和空缓存模拟服务重启。
+	restartedStore, err := store.Open(context.Background(), filepath.Join(filepath.Dir(fixture.staging), "filesage.sqlite"))
+	if err != nil {
+		t.Fatalf("reopen publication store: %v", err)
+	}
+	defer restartedStore.Close()
+	restarted := newPublicationManager(fixture.uploads, fixture.root, coordination.New(), restartedStore)
+	request := httptest.NewRequest(http.MethodHead, uploadTUSPath+id, nil)
+	request.Header.Set("Tus-Resumable", "1.0.0")
+	response := httptest.NewRecorder()
+	restarted.tusHandler(fixture.uploads).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Tus-Resumable") != "1.0.0" ||
+		response.Header().Get("Upload-Offset") != fmt.Sprint(len(content)) || response.Header().Get("Upload-Length") != fmt.Sprint(len(content)) {
+		t.Fatalf("resumed TUS response = status %d, headers %#v", response.Code, response.Header())
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", response.Header().Get("Cache-Control"))
+	}
+
+	entries, err := os.ReadDir(fixture.rootPath)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "ack.txt" {
+		t.Fatalf("published files = %#v, err=%v", entries, err)
+	}
+	got, err := os.ReadFile(filepath.Join(fixture.rootPath, "ack.txt"))
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("published content = %q, err=%v", got, err)
+	}
+}
+
+// TestPublishedUploadStateReadFailureIsRetryable 验证状态不可读时不会误报上传不存在。
+func TestPublishedUploadStateReadFailureIsRetryable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("safe atomic file publication is implemented on Linux")
+	}
+	fixture := newUploadIntegration(t)
+	content := []byte("published before acknowledgement")
+	id := fixture.upload(t, "ack.txt", ".", "ack.txt", content)
+	fixture.waitStatus(t, id, publicationSucceeded)
+
+	closedStore, err := store.Open(context.Background(), filepath.Join(filepath.Dir(fixture.staging), "filesage.sqlite"))
+	if err != nil {
+		t.Fatalf("open publication store: %v", err)
+	}
+	if err := closedStore.Close(); err != nil {
+		t.Fatalf("close publication store: %v", err)
+	}
+	restarted := newPublicationManager(fixture.uploads, fixture.root, coordination.New(), closedStore)
+	fallbackCalled := false
+	fallback := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fallbackCalled = true
+		w.WriteHeader(http.StatusNotFound)
+	})
+	request := httptest.NewRequest(http.MethodHead, uploadTUSPath+id, nil)
+	request.Header.Set("Tus-Resumable", "1.0.0")
+	response := httptest.NewRecorder()
+	restarted.tusHandler(fallback).ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Tus-Resumable") != "1.0.0" || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("unavailable-state response = status %d, headers %#v", response.Code, response.Header())
+	}
+	if !fallbackCalled {
+		t.Fatal("unavailable publication state must verify whether the TUS resource is still active")
+	}
+}
+
+// TestActiveTusUploadResumesWhenPublicationStateIsUnavailable 验证状态库故障不影响活动上传续传。
+func TestActiveTusUploadResumesWhenPublicationStateIsUnavailable(t *testing.T) {
+	fixture := newUploadIntegration(t)
+	closedStore, err := store.Open(context.Background(), filepath.Join(filepath.Dir(fixture.staging), "filesage.sqlite"))
+	if err != nil {
+		t.Fatalf("open publication store: %v", err)
+	}
+	if err := closedStore.Close(); err != nil {
+		t.Fatalf("close publication store: %v", err)
+	}
+	restarted := newPublicationManager(fixture.uploads, fixture.root, coordination.New(), closedStore)
+	_, resourceURL, err := fixture.createTusUpload("active.txt", ".", "active.txt", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodHead, resourceURL, nil)
+	request.Header.Set("Tus-Resumable", "1.0.0")
+	response := httptest.NewRecorder()
+	restarted.tusHandler(fixture.uploads).ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Tus-Resumable") != "1.0.0" ||
+		response.Header().Get("Upload-Offset") != "0" || response.Header().Get("Upload-Length") != "4" {
+		t.Fatalf("active upload resume response = status %d, headers %#v", response.Code, response.Header())
 	}
 }
 
