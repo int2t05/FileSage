@@ -1,16 +1,20 @@
 # 项目状态
 
-**阶段：**v1.0.0 发布候选准备中。服务器当前 Go/Web 功能代码与候选一致；本轮仅整理文档、发布元数据和 CI。
+**阶段：**稳定版 `v1.0.0` 已发布并部署。
 
-## 完成
+**提交：**`0239fd0` · [GitHub Release](https://github.com/int2t05/FileSage/releases/tag/v1.0.0)
 
-- Go/Web CI、Linux 部署冒烟、上传续传、跨盘恢复及限速负载通过；证据见[验收摘要](ACCEPTANCE.md)。
-- 公开仓库仅保留 `main`，无开放 PR；主分支 CI 在 push 和 PR 时运行。
-- MIT 许可、双语 README、部署说明、API 契约和 ADR 已整理。
-- `main` 历史已净化，163 个提交的 Gitleaks 全历史扫描通过。
+**服务器：**服务健康；程序与前端文件校验和匹配发布包。
 
-## 发布后跟进
+## 已完成
 
-- 用户自行检查实体手机和真实文件；不阻塞稳定版发布。
-- 独立 Linux 主机恢复尚未验证，作为已知运维边界保留。
-- GitHub 的已合并 PR #9 仍保留旧提交只读引用；旧地址是不可公网路由的内网地址，不含凭据。GitHub 仅为敏感数据清理 PR 缓存，详见[官方说明](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)；该缓存边界不阻塞发布。
+- Go/Web CI、Race、漏洞扫描、Linux E2E 与发布包冒烟通过。
+- 上传中断续传、跨盘恢复及限速负载验证通过。
+- `main` 的 166 个提交通过 Gitleaks 全历史扫描；文档和发布流程已整理。
+
+## 后续
+
+- 用户自行验收实体手机和真实文件样本；不阻塞发布。
+- 独立 Linux 主机恢复尚未验证；作为运维边界保留。
+
+详细结果与已知风险见[验收摘要](ACCEPTANCE.md)和[发布验证记录](testing/release-validation.md)。
