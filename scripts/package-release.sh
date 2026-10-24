@@ -74,7 +74,8 @@ cp docs/operations/deployment.md "$stage/docs/operations/"
 cp docs/api/agent-conversation.md "$stage/docs/api/"
 cp LICENSE THIRD_PARTY_NOTICES.md "$stage/"
 cp -R LICENSES/. "$stage/LICENSES/"
-bash scripts/collect-go-licenses.sh "$stage/LICENSES"
+# stdout 只输出 CI 可解析的归档路径；收集日志写入 stderr。
+bash scripts/collect-go-licenses.sh "$stage/LICENSES" >&2
 
 {
   printf 'Version: %s\n' "$version"

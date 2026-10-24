@@ -69,8 +69,9 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/test-package-release-guards.sh
-          output="$(bash scripts/package-release.sh "$GITHUB_REF_NAME" "$GITHUB_SHA")"
-          printf '%s\n' "$output" >> "$GITHUB_OUTPUT"
+          bundle="filesage_${GITHUB_REF_NAME}_linux_amd64"
+          bash scripts/package-release.sh "$GITHUB_REF_NAME" "$GITHUB_SHA"
+          printf 'archive=dist/%s.tar.gz\nchecksum=dist/%s.tar.gz.sha256\n' "$bundle" "$bundle" >> "$GITHUB_OUTPUT"
       - name: Smoke-test release package
         run: |
           set -euo pipefail
