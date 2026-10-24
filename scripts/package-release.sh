@@ -15,6 +15,17 @@ if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 fi
 git cat-file -e "$commit^{commit}"
 
+# 发布包只接收真实构建目录及其普通文件。
+if [ -L web ] || [ -L web/dist ] || [ ! -d web/dist ]; then
+  echo "refusing to package a symlinked web directory or missing web/dist" >&2
+  exit 1
+fi
+web_unsupported="$(find web/dist -mindepth 1 ! -type d ! -type f -print -quit)"
+if [ -n "$web_unsupported" ]; then
+  echo "refusing to package a symlink or special file in web/dist" >&2
+  exit 1
+fi
+
 # 先校验工具链，避免生成缺少构建信息的发布包。
 go_version="$(go version)"
 node_version="$(node --version)"
@@ -28,6 +39,8 @@ fi
 
 bundle="filesage_"$version"_linux_amd64"
 stage="dist/$bundle"
+archive="$bundle.tar.gz"
+checksum="$archive.sha256"
 case "$stage" in
   dist/filesage_v*_linux_amd64) ;;
   *) echo "invalid package path" >&2; exit 2 ;;
@@ -40,6 +53,17 @@ if [ -L dist ]; then
 fi
 
 mkdir -p dist
+if [ -L dist/filesage ] || [ ! -f dist/filesage ]; then
+  echo "refusing to package a symlinked or missing dist/filesage" >&2
+  exit 1
+fi
+for output in "$archive" "$checksum"; do
+  output_path="dist/$output"
+  if [ -L "$output_path" ] || { [ -e "$output_path" ] && [ ! -f "$output_path" ]; }; then
+    printf 'refusing to overwrite a symlink or non-file: %s\n' "$output_path" >&2
+    exit 1
+  fi
+done
 rm -rf -- "$stage"
 mkdir -p "$stage/web" "$stage/deploy" "$stage/docs" "$stage/LICENSES"
 install -m 0755 dist/filesage "$stage/filesage"
@@ -59,11 +83,10 @@ bash scripts/collect-go-licenses.sh "$stage/LICENSES"
 } > "$stage/BUILDINFO.txt"
 
 source_date_epoch="$(git show -s --format=%ct "$commit")"
-archive="$bundle.tar.gz"
 tar --sort=name --mtime="@$source_date_epoch" --owner=0 --group=0 --numeric-owner -cf - -C dist "$bundle" | gzip -n > "dist/$archive"
-(cd dist && sha256sum "$archive" > "$archive.sha256")
+(cd dist && sha256sum "$archive" > "$checksum")
 tar -tzf "dist/$archive" >/dev/null
-(cd dist && sha256sum -c "$archive.sha256" >&2)
+(cd dist && sha256sum -c "$checksum" >&2)
 
 printf 'archive=dist/%s\n' "$archive"
-printf 'checksum=dist/%s.sha256\n' "$archive"
+printf 'checksum=dist/%s\n' "$checksum"

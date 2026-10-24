@@ -36,8 +36,8 @@ jobs:
           sudo install -D -m 0755 /usr/bin/true /usr/local/lib/filesage/filesage
           systemd-analyze verify deploy/filesage.service
       - run: go test -count=1 ./...
-      - name: Check Agent request-context logging for races
-        run: go test -race -count=1 ./internal/logging ./internal/httpapi ./internal/agent
+      - name: Check Agent and file operations for races
+        run: go test -race -p 1 -count=1 ./cmd/filesage ./internal/store ./internal/upload ./internal/logging ./internal/httpapi ./internal/agent
       - run: go vet ./...
       - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - run: go build ./...
@@ -76,6 +76,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -o dist/filesage ./cmd/filesage
+          bash scripts/test-package-release-guards.sh
           output="$(bash scripts/package-release.sh v0.0.0 "$GITHUB_SHA")"
           printf '%s\n' "$output"
           archive="$(printf '%s\n' "$output" | sed -n 's/^archive=//p')"

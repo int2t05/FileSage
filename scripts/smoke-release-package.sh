@@ -131,6 +131,50 @@ done
 test "$listed" = 1
 test -d "$smoke/root/$name"
 
+# 完成一个 TUS 上传，重启后验证已发布状态仍可续传查询。
+upload_name="$name-upload.txt"
+upload_data="FileSage package upload recovery"
+upload_size="${#upload_data}"
+filename_metadata="$(printf '%s' "$upload_name" | base64 | tr -d '\n')"
+target_metadata="$(printf '%s' '.' | base64 | tr -d '\n')"
+upload_create_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  --dump-header "$smoke/upload-create.headers" \
+  --request POST \
+  --header 'Tus-Resumable: 1.0.0' \
+  --header "Upload-Length: $upload_size" \
+  --header "Upload-Metadata: filename $filename_metadata,target $target_metadata,relativepath $filename_metadata" \
+  "http://127.0.0.1:$port/api/v1/uploads/")"
+test "$upload_create_status" = 201
+upload_url="$(awk 'tolower($1) == "location:" { sub("\r$", "", $2); print $2 }' "$smoke/upload-create.headers")"
+test -n "$upload_url"
+case "$upload_url" in
+  http://*|https://*) ;;
+  /*) upload_url="http://127.0.0.1:$port$upload_url" ;;
+  *) upload_url="http://127.0.0.1:$port/$upload_url" ;;
+esac
+upload_id="${upload_url##*/}"
+[[ "$upload_id" =~ ^[0-9a-f]{32}$ ]]
+upload_patch_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  --request PATCH \
+  --header 'Tus-Resumable: 1.0.0' \
+  --header 'Upload-Offset: 0' \
+  --header 'Content-Type: application/offset+octet-stream' \
+  --data-binary "$upload_data" \
+  "$upload_url")"
+test "$upload_patch_status" = 204
+published=0
+for attempt in $(seq 1 20); do
+  if curl -fsS "http://127.0.0.1:$port/api/v1/uploads/status/$upload_id" -o "$smoke/upload-status-before.json" \
+    && grep -q '"status":"published"' "$smoke/upload-status-before.json"; then
+    published=1
+    break
+  fi
+  sleep 1
+done
+test "$published" = 1
+test ! -e "$data/upload-staging/$upload_id"
+printf '%s' "$upload_data" | cmp - "$smoke/root/$upload_name"
+
 kill -TERM "$server_pid"
 wait "$server_pid"
 server_pid=
@@ -148,6 +192,23 @@ for attempt in $(seq 1 20); do
 done
 test "$listed" = 1
 test -d "$smoke/root/$name"
+
+upload_head_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+  --dump-header "$smoke/upload-head.headers" \
+  --head \
+  --header 'Tus-Resumable: 1.0.0' \
+  "$upload_url")"
+test "$upload_head_status" = 200
+tr -d '\r' < "$smoke/upload-head.headers" > "$smoke/upload-head-normalized.headers"
+grep -Eiq "^Upload-Offset:[[:space:]]*$upload_size$" "$smoke/upload-head-normalized.headers"
+grep -Eiq "^Upload-Length:[[:space:]]*$upload_size$" "$smoke/upload-head-normalized.headers"
+grep -Eiq '^Tus-Resumable:[[:space:]]*1\.0\.0$' "$smoke/upload-head-normalized.headers"
+grep -Eiq '^Cache-Control:[[:space:]]*no-store$' "$smoke/upload-head-normalized.headers"
+curl -fsS "http://127.0.0.1:$port/api/v1/uploads/status/$upload_id" -o "$smoke/upload-status-after.json"
+grep -q '"status":"published"' "$smoke/upload-status-after.json"
+grep -q "$upload_name" "$smoke/upload-status-after.json"
+test "$(find "$smoke/root" -maxdepth 1 -type f -name "$upload_name" | wc -l)" -eq 1
+printf '%s' "$upload_data" | cmp - "$smoke/root/$upload_name"
 
 kill -TERM "$server_pid"
 wait "$server_pid"
@@ -180,4 +241,8 @@ for attempt in $(seq 1 20); do
   sleep 1
 done
 test "$listed" = 1
-echo "Release package smoke test passed (start, write, restart, backup, restore, read)."
+curl -fsS "http://127.0.0.1:$port/api/v1/uploads/status/$upload_id" -o "$smoke/upload-status-after-restore.json"
+grep -q '"status":"published"' "$smoke/upload-status-after-restore.json"
+grep -q "$upload_name" "$smoke/upload-status-after-restore.json"
+printf '%s' "$upload_data" | cmp - "$root/$upload_name"
+echo "Release package smoke test passed (start, write, upload, restart, backup, restore, read)."
