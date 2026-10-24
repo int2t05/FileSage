@@ -21,6 +21,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+      - name: Lint GitHub Actions workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 .github/workflows/*.yml
       - name: Scan Git history for secrets
         run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git --redact --no-banner .
       - name: Check Go formatting
