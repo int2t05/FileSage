@@ -102,14 +102,15 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 	}
 	confirmed := conversation
 	plan, err := plans.Plan(ctx, confirmed.PlanID)
-	if err != nil || len(plan.Operations) != 2 {
-		t.Fatalf("photo plan = (%#v, %v), want two dated photos", plan, err)
+	if err != nil || len(plan.Operations) != 3 {
+		t.Fatalf("photo plan = (%#v, %v), want all three photos with capture dates", plan, err)
 	}
-	if !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "2 个照片归档步骤") || !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "1 张缺少拍摄日期并跳过") {
+	if !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "3 个照片归档步骤") || !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "1 张缺少拍摄日期并跳过") {
 		t.Fatalf("archive summary does not show candidate and skip counts: %#v", confirmed.Messages)
 	}
 	if plan.Operations[0].SourcePath != "camera/a/photo.jpg" || plan.Operations[0].TargetPath != "按拍摄日期归档/2020/01/photo.jpg" ||
-		plan.Operations[1].SourcePath != "camera/b/photo.jpg" || plan.Operations[1].TargetPath != "按拍摄日期归档/2020/01/photo (1).jpg" {
+		plan.Operations[1].SourcePath != "camera/archive/previous.jpg" || plan.Operations[1].TargetPath != "按拍摄日期归档/2019/12/previous.jpg" ||
+		plan.Operations[2].SourcePath != "camera/b/photo.jpg" || plan.Operations[2].TargetPath != "按拍摄日期归档/2020/01/photo (1).jpg" {
 		t.Fatalf("archive targets are not deterministic: %#v", plan.Operations)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "按拍摄日期归档", "2020")); !errors.Is(err, os.ErrNotExist) {
@@ -129,6 +130,10 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 		t.Fatalf("partially approved Execute() error = %v, want conflict", err)
 	}
 	approved, err := plans.Decide(ctx, plan.ID, plan.Operations[1].ID, "approve", plan.Version)
+	if err != nil || approved.Status != store.PlanAwaitingApproval {
+		t.Fatalf("second approval = (%#v, %v)", approved, err)
+	}
+	approved, err = plans.Decide(ctx, plan.ID, plan.Operations[2].ID, "approve", approved.Version)
 	if err != nil || approved.Status != store.PlanApproved {
 		t.Fatalf("final approval = (%#v, %v)", approved, err)
 	}
@@ -154,13 +159,13 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 	if err != nil || recovered.Status != store.PlanApproved || recovered.Operations[0].Status != store.OperationSucceeded || recovered.Operations[1].Status != store.OperationPending {
 		t.Fatalf("archive recovery = (%#v, %v), want first item complete and second manually retryable", recovered, err)
 	}
-	if _, err := os.Stat(filepath.Join(rootPath, "camera", "archive", "2020", "01")); err != nil {
+	if _, err := os.Stat(filepath.Join(rootPath, "按拍摄日期归档", "2020", "01")); err != nil {
 		t.Fatalf("recovery did not preserve directories created by the completed photo operation: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(rootPath, "camera", "b", "photo.jpg")); err != nil {
+	if _, err := os.Stat(filepath.Join(rootPath, "camera", "archive", "previous.jpg")); err != nil {
 		t.Fatalf("recovery moved the interrupted source: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(rootPath, "camera", "archive", "2020", "01", "photo (1).jpg")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(rootPath, "按拍摄日期归档", "2019", "12", "previous.jpg")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recovery automatically replayed the interrupted move: %v", err)
 	}
 	completed, err := plans.Execute(ctx, plan.ID, recovered.Version)
@@ -168,7 +173,9 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 		t.Fatalf("Execute() = (%#v, %v)", completed, err)
 	}
 	for target, expected := range map[string][]byte{
-		"camera/archive/2020/01/photo.jpg": photoA, "camera/archive/2020/01/photo (1).jpg": photoB,
+		"按拍摄日期归档/2020/01/photo.jpg":     photoA,
+		"按拍摄日期归档/2019/12/previous.jpg":  previous,
+		"按拍摄日期归档/2020/01/photo (1).jpg": photoB,
 	} {
 		actual, readErr := os.ReadFile(filepath.Join(rootPath, filepath.FromSlash(target)))
 		if readErr != nil || string(actual) != string(expected) {

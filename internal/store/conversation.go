@@ -1271,7 +1271,8 @@ func loadConversation(ctx context.Context, queryer interface {
 		conversation.DuplicateScanID = duplicateScanID.String
 	}
 	canRestoreAnalysis := conversation.State == ConversationAwaitingConfirmation || conversation.DuplicateScanID == "" &&
-		(conversation.State == ConversationAnalyzing || conversation.State == ConversationFailed || conversation.State == ConversationAwaitingApproval)
+		(conversation.State == ConversationAnalyzing || conversation.State == ConversationFailed ||
+			conversation.State == ConversationAwaitingApproval && !planID.Valid)
 	if canRestoreAnalysis && goal != "" {
 		operations := make([]AnalysisOperation, 0, 1)
 		if operationsJSON != "" && operationsJSON != "[]" {
