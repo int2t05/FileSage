@@ -101,7 +101,8 @@ test('清除已完成上传后刷新不再恢复记录', async ({ page }) => {
 
   const taskResponse = await page.request.get('/api/v1/tasks?kind=upload&limit=50&offset=0');
   expect(taskResponse.ok()).toBe(true);
-  expect((await taskResponse.json()).tasks).toHaveLength(1);
+  const storedTasks = (await taskResponse.json()).tasks;
+  expect(storedTasks.filter((item) => item.scopePath === fileName)).toHaveLength(1);
   const fileResponse = await page.request.get(`/api/v1/files?path=${encodeURIComponent(fileName)}`);
   expect(fileResponse.ok()).toBe(true);
   expect((await fileResponse.json()).entries[0]?.name).toBe(fileName);

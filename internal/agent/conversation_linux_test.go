@@ -1357,7 +1357,7 @@ func TestConversationAcceptsLineBreaksInModelClarification(t *testing.T) {
 	if err := validateTurnResult(&valid); err != nil {
 		t.Fatalf("validateTurnResult(multiline clarification) = %v", err)
 	}
-	if !strings.Contains(conversationSystemPrompt, "每种状态都必须包含非空 reply") {
+	if !strings.Contains(conversationSystemPrompt, "clarifying 或 unsupported 必须包含 state、reply、contextSummary") || !strings.Contains(conversationSystemPrompt, "准备操作时调用 propose_plan，参数包含 state=ready、简短 reply、contextSummary、goal 和 operations") {
 		t.Fatal("conversation prompt must require a visible reply for every state")
 	}
 
@@ -1368,10 +1368,10 @@ func TestConversationAcceptsLineBreaksInModelClarification(t *testing.T) {
 }
 
 func TestConversationPromptKeepsUserFacingRepliesBrief(t *testing.T) {
-	if !strings.Contains(conversationSystemPrompt, "简洁自然") || !strings.Contains(conversationSystemPrompt, "不要复述卡片已显示") {
+	if !strings.Contains(conversationSystemPrompt, "表达简洁、自然") || !strings.Contains(conversationSystemPrompt, "不要在回复中重复计划卡已显示的路径和命令") {
 		t.Fatal("conversation prompt must keep user-facing replies concise")
 	}
-	if !strings.Contains(conversationSystemPrompt, "goal 不超过 60 字") || !strings.Contains(conversationSystemPrompt, "reply 不超过 120 字") {
+	if !strings.Contains(conversationSystemPrompt, "目标不超过 60 字") || !strings.Contains(conversationSystemPrompt, "回复不超过 120 字") {
 		t.Fatal("conversation prompt must constrain goal and reply length")
 	}
 	if !strings.Contains(shellIntentPrompt, "不复述卡片中的命令、范围或审批流程") {

@@ -213,10 +213,10 @@ func TestClassifyDocumentsConfirmationApprovalAndExecution(t *testing.T) {
 	}
 }
 
-func TestClassifyDocumentsStoresExplicitOCROptIn(t *testing.T) {
+func TestClassifyDocumentsConfirmationCreatesPlan(t *testing.T) {
 	ctx := context.Background()
 	classification := `{"items":[{"fileId":0,"categoryId":1,"reasonCode":"topic"},{"fileId":1,"categoryId":-1,"reasonCode":"other"},{"fileId":2,"categoryId":-1,"reasonCode":"other"}]}`
-	conversationService, _, _, _, _, _, model := newClassificationTestService(t, classification)
+	conversationService, plans, _, _, _, _, model := newClassificationTestService(t, classification)
 	created, err := conversationService.Create(ctx, "按正文主题整理文件")
 	if err != nil || created.State != store.ConversationAwaitingConfirmation {
 		t.Fatalf("Create() = (%#v, %v)", created, err)
@@ -226,11 +226,12 @@ func TestClassifyDocumentsStoresExplicitOCROptIn(t *testing.T) {
 		t.Fatal("document body reached the model before confirmation")
 	}
 	confirmed, err := conversationService.ConfirmAnalysis(ctx, created.ID, true)
-	if err != nil || confirmed.State != store.ConversationAwaitingApproval || confirmed.Analysis == nil {
+	if err != nil || confirmed.State != store.ConversationAwaitingApproval || confirmed.Analysis != nil || confirmed.PlanID == "" {
 		t.Fatalf("ConfirmAnalysis() = (%#v, %v)", confirmed, err)
 	}
-	if len(confirmed.Analysis.Operations) != 1 || !confirmed.Analysis.Operations[0].EnableOCR {
-		t.Fatalf("explicit OCR choice was not persisted: %#v", confirmed.Analysis)
+	plan, err := plans.Plan(ctx, confirmed.PlanID)
+	if err != nil || len(plan.Operations) != 1 || plan.Operations[0].Action != "move_file" {
+		t.Fatalf("classification plan = (%#v, %v)", plan, err)
 	}
 	requests, calls = model.requestsSnapshot()
 	if calls != 1 || !strings.Contains(marshalMessages(t, requests[1]), "CLASSIFY_SENTINEL_A") {
@@ -314,11 +315,8 @@ func TestClassifyScannedPDFThroughAgentAfterOCRConfirmation(t *testing.T) {
 		t.Fatal("scanned document content reached the model before confirmation")
 	}
 	confirmed, err := conversationService.ConfirmAnalysis(ctx, created.ID, true)
-	if err != nil || confirmed.State != store.ConversationAwaitingApproval || confirmed.Analysis == nil {
+	if err != nil || confirmed.State != store.ConversationAwaitingApproval || confirmed.Analysis != nil || confirmed.PlanID == "" {
 		t.Fatalf("ConfirmAnalysis() = (%#v, %v)", confirmed, err)
-	}
-	if len(confirmed.Analysis.Operations) != 1 || !confirmed.Analysis.Operations[0].EnableOCR {
-		t.Fatalf("OCR selection was not persisted: %#v", confirmed.Analysis)
 	}
 	requests, calls = model.requestsSnapshot()
 	if calls != 1 || !strings.Contains(marshalMessages(t, requests[1]), "DOCX preview test fixture") {

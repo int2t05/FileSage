@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -52,9 +53,10 @@ func TestDuplicateCleanupHTTPFlowRequiresReviewAndCanRestore(t *testing.T) {
 	locks := coordination.New()
 	plans := agent.New(metadata, root, locks, trashManager)
 	modelServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		content := `{"state":"ready","reply":"我会检查 docs 中的重复文件。","goal":"查找 docs 中的重复文件","action":"find_duplicates","filePath":"docs"}`
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}})
+		content := `{"state":"ready","reply":"我会检查 docs 中的重复文件。","contextSummary":"用户要求查找 docs 中的重复文件。","goal":"查找 docs 中的重复文件","action":"find_duplicates","filePath":"docs"}`
+		payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": content}}}})
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
 	}))
 	defer modelServer.Close()
 	conversations := agent.NewConversationService(metadata, root, plans, config.AgentModelConfig{
