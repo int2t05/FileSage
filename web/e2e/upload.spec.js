@@ -103,9 +103,9 @@ test('清除已完成上传后刷新不再恢复记录', async ({ page }) => {
   expect(taskResponse.ok()).toBe(true);
   const storedTasks = (await taskResponse.json()).tasks;
   expect(storedTasks.filter((item) => item.scopePath === fileName)).toHaveLength(1);
-  const fileResponse = await page.request.get(`/api/v1/files?path=${encodeURIComponent(fileName)}`);
+  const fileResponse = await page.request.get('/api/v1/files?path=');
   expect(fileResponse.ok()).toBe(true);
-  expect((await fileResponse.json()).entries[0]?.name).toBe(fileName);
+  expect((await fileResponse.json()).entries.some((entry) => entry.name === fileName)).toBe(true);
 });
 
 test('确认丢失时按服务端发布状态核对结果', async ({ page }) => {
