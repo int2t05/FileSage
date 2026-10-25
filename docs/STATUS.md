@@ -1,12 +1,12 @@
 # 项目状态
 
-**成熟度：**稳定版 `v1.0.0` 已发布；服务器运行 `main` 的 `9e2f6ae`。
+**成熟度：**稳定版 `v1.0.0` 已发布；服务器按 `main` 同步。
 
 **提交：**`0239fd0` · [GitHub Release](https://github.com/int2t05/FileSage/releases/tag/v1.0.0)
 
-**线上复核（2026-10-25）：**健康、文件接口和网页均返回正常；systemd 为 `active`、`enabled`，重启次数为 0。运行二进制构建信息与 `9e2f6ae` 一致，回滚版本保存在 `/usr/local/lib/filesage/rollback-before-9e2f6ae`。
+**线上复核（2026-10-25）：**健康、文件接口和网页均返回正常；systemd 为 `active`、`enabled`，重启次数为 0。部署提交以 `/usr/local/lib/filesage/BUILDINFO.txt` 与 `go version -m /usr/local/lib/filesage/filesage` 一致核验，更新前保留上一版程序和页面用于回退。
 
-**当前版本：**Agent 支持流式工具调用、文件索引上下文和照片归档计划；会话恢复已修复，当前代码已推送并部署。
+**当前版本：**Agent 支持增量计划回复、文件索引上下文和照片归档计划；对话页统一字号、间距与紧凑输入区，适配桌面与手机。
 
 **存储：**`/srv/filesage-files` 位于 NVMe（约 390 GiB 可用）；`/srv/filesage-files/home` 直挂 SSD（约 398 GiB 可用）。两块盘独立；`home/` 下已建立 `Documents`、`Pictures`、`Videos`、`Music`、`Downloads`、`Archives`、`Code`、`Backups` 真实目录。
 

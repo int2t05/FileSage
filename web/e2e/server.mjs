@@ -15,6 +15,7 @@ const stateFile = path.join(os.tmpdir(), `filesage-agent-e2e-${port}.json`);
 const targetName = 'agent-e2e-reviewed';
 const followupName = 'agent-e2e-followup';
 const separateConversationName = 'agent-e2e-separate-session';
+const planStreamReleases = new Map();
 
 // 用参数数组启动命令，避免在 Shell 中拼接测试路径。
 function run(command, args, cwd) {
@@ -48,9 +49,37 @@ function sendModelResponse(requestBody, response, content) {
   response.end('data: [DONE]\n\n');
 }
 
+async function sendStreamedPlan(response, plan, streamKey) {
+  const firstVisibleReply = '我会先检查管理根目录';
+  const splitAt = plan.indexOf(firstVisibleReply) + firstVisibleReply.length;
+  response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  response.flushHeaders();
+  const send = (toolCall) => {
+    const payload = JSON.stringify({ choices: [{ delta: { tool_calls: [toolCall] } }] });
+    response.write(`data: ${payload}\n\n`);
+  };
+  send({ index: 0, id: 'call_streamed_plan', type: 'function', function: { name: 'propose_plan', arguments: plan.slice(0, splitAt) } });
+  await new Promise((resolve) => planStreamReleases.set(streamKey, resolve));
+  send({ index: 0, function: { arguments: plan.slice(splitAt) } });
+  response.end('data: [DONE]\n\n');
+}
+
 // 只为约定的目录任务返回固定 JSON，不访问外网模型。
 async function answerModel(request, response) {
-  if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {
+  const requestURL = new URL(request.url, 'http://127.0.0.1');
+  if (request.method === 'POST' && requestURL.pathname === '/__test__/release-stream') {
+    const key = requestURL.searchParams.get('key') || '';
+    const release = planStreamReleases.get(key);
+    if (!release) {
+      response.writeHead(404).end();
+      return;
+    }
+    planStreamReleases.delete(key);
+    release();
+    response.writeHead(204).end();
+    return;
+  }
+  if (request.method !== 'POST' || requestURL.pathname !== '/v1/chat/completions') {
     response.writeHead(404).end();
     return;
   }
@@ -67,6 +96,20 @@ async function answerModel(request, response) {
       return;
     }
     const userMessage = body.messages?.findLast((message) => message.role === 'user')?.content;
+    const streamKey = typeof userMessage === 'string'
+      ? userMessage.match(/agent-e2e-streaming-plan-\d+/)?.[0]
+      : undefined;
+    if (body.model === 'filesage-e2e' && streamKey) {
+      const plan = JSON.stringify({
+        state: 'ready',
+        reply: `我会先检查管理根目录，再创建文件夹 ${streamKey}，供你审阅。`,
+        contextSummary: '用户正在验证计划回复的流式显示。',
+        goal: '验证 Agent 计划回复可以逐步显示',
+        operations: [{ action: 'create_directory', targetPath: streamKey }],
+      });
+      await sendStreamedPlan(response, plan, streamKey);
+      return;
+    }
     const renameSourcePath = typeof userMessage === 'string'
       ? userMessage.match(/agent-e2e-rename(?:-\d+)?\/source\.md/)?.[0]
       : undefined;
@@ -157,8 +200,6 @@ export default async function globalSetup() {
     const data = path.join(tempDir, 'data');
     const binary = path.join(tempDir, process.platform === 'win32' ? 'filesage.exe' : 'filesage');
     await Promise.all([mkdir(root), mkdir(data)]);
-    await writeFile(stateFile, JSON.stringify({ root }), { mode: 0o600 });
-
     run('go', ['build', '-trimpath', '-o', binary, './cmd/filesage'], repoDir);
     model = createServer((request, response) => { void answerModel(request, response); });
     await new Promise((resolve, reject) => {
@@ -167,6 +208,7 @@ export default async function globalSetup() {
     });
     const modelAddress = model.address();
     if (!modelAddress || typeof modelAddress === 'string') throw new Error('无法启动本地测试模型');
+    await writeFile(stateFile, JSON.stringify({ root, modelPort: modelAddress.port }), { mode: 0o600 });
 
     app = spawn(binary, [], {
       cwd: repoDir,

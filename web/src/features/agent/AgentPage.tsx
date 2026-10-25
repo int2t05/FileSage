@@ -1465,47 +1465,47 @@ export function AgentPage({
                   : `已选 ${activeLaunchContext.paths.length} 项（${activeLaunchContext.paths.slice(0, 2).join('、')}${activeLaunchContext.paths.length > 2 ? '…' : ''}）`}
               </p>
             )}
-            <textarea
-              ref={composerRef}
-              id="agent-chat-input"
-              rows={2}
-              value={draft}
-              onChange={(event) => { setDraft(event.currentTarget.value); setComposerError(''); }}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && composerCanSend && draft.trim()) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              placeholder={conversationLoading || conversationBusy ? '请稍候…'
-                  : conversationError ? '恢复对话后继续'
-                  : conversationMessageLimitReached ? '本会话消息接近上限，请新建对话继续'
-                  : displayedPlan && canSendAgentMessage('awaiting_approval', displayedPlan.status, 0, true) ? '任务已结束，继续描述下一步…'
-                      : currentConversation?.state === 'awaiting_confirmation' ? '有补充要求可以继续说…'
-                        : currentConversation?.state === 'awaiting_approval' ? '请先审核方案'
-                          : selectedConversationId ? '回复或补充整理要求…' : '描述你想完成的文件整理…'}
-              disabled={composerLocked}
-              aria-describedby={[
-                composerError ? 'agent-composer-error' : '',
-                showModelUnavailable ? 'agent-model-message' : '',
-                'agent-privacy-hint',
-              ].filter(Boolean).join(' ') || undefined}
-            />
-            <div className="agent-chat-composer-footer">
-              {showModelUnavailable ? (
+            <div className="agent-composer-input-row">
+              <textarea
+                ref={composerRef}
+                id="agent-chat-input"
+                rows={2}
+                value={draft}
+                onChange={(event) => { setDraft(event.currentTarget.value); setComposerError(''); }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && composerCanSend && draft.trim()) {
+                    event.preventDefault();
+                    event.currentTarget.form?.requestSubmit();
+                  }
+                }}
+                placeholder={conversationLoading || conversationBusy ? '请稍候…'
+                    : conversationError ? '恢复对话后继续'
+                    : conversationMessageLimitReached ? '本会话消息接近上限，请新建对话继续'
+                    : displayedPlan && canSendAgentMessage('awaiting_approval', displayedPlan.status, 0, true) ? '任务已结束，继续描述下一步…'
+                        : currentConversation?.state === 'awaiting_confirmation' ? '有补充要求可以继续说…'
+                          : currentConversation?.state === 'awaiting_approval' ? '请先审核方案'
+                            : selectedConversationId ? '回复或补充整理要求…' : '描述你想完成的文件整理…'}
+                disabled={composerLocked}
+                aria-describedby={[
+                  composerError ? 'agent-composer-error' : '',
+                  showModelUnavailable ? 'agent-model-message' : '',
+                  'agent-privacy-hint',
+                ].filter(Boolean).join(' ') || undefined}
+              />
+              <button className="agent-primary-button" type="submit" disabled={!composerCanSend || !draft.trim()}>
+                {conversationBusy === 'message' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
+                发送
+              </button>
+            </div>
+            {showModelUnavailable ? (
+              <div className="agent-chat-composer-status">
                 <span className="agent-connection-message" id="agent-model-message" role={modelStatusError ? 'alert' : 'status'}>
                   {modelStatusLoading ? <Loader2 className="agent-spinner" size={14} aria-hidden="true" /> : <AlertTriangle size={14} aria-hidden="true" />}
                   {modelUnavailableMessage}
                 </span>
-              ) : null}
-              <div>
-                {showModelUnavailable && modelStatusError && <button className="agent-text-button" type="button" onClick={() => setModelStatusRefreshKey((value) => value + 1)} disabled={modelStatusLoading}>重试</button>}
-                <button className="agent-primary-button" type="submit" disabled={!composerCanSend || !draft.trim()}>
-                  {conversationBusy === 'message' ? <Loader2 className="agent-spinner" size={15} aria-hidden="true" /> : <ArrowRight size={16} aria-hidden="true" />}
-                  发送
-                </button>
+                {modelStatusError && <button className="agent-text-button" type="button" onClick={() => setModelStatusRefreshKey((value) => value + 1)} disabled={modelStatusLoading}>重试</button>}
               </div>
-            </div>
+            ) : null}
             <div className="agent-composer-meta">
               <p id="agent-privacy-hint">消息发送至当前模型；文件正文仅在确认后发送。</p>
               <span className="agent-composer-keyboard-hint">{composerCanSend ? 'Enter 发送 · Shift + Enter 换行' : 'Shift + Enter 换行'}</span>

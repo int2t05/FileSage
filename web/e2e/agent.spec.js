@@ -4,13 +4,22 @@ import { access, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 
-// 读取测试服务记录的临时根目录，直接核验真实文件写入。
-async function readManagedRoot(page) {
+// 读取隔离测试服务记录的临时状态。
+async function readE2EState(page) {
   const port = new URL(page.url()).port;
   if (!port) throw new Error('浏览器测试未连接到隔离服务');
   const statePath = path.join(os.tmpdir(), `filesage-agent-e2e-${port}.json`);
-  const { root } = JSON.parse(await readFile(statePath, 'utf8'));
-  return root;
+  return JSON.parse(await readFile(statePath, 'utf8'));
+}
+
+async function readManagedRoot(page) {
+  return (await readE2EState(page)).root;
+}
+
+async function releasePlanStream(page, key) {
+  const { modelPort } = await readE2EState(page);
+  const response = await fetch(`http://127.0.0.1:${modelPort}/__test__/release-stream?key=${encodeURIComponent(key)}`, { method: 'POST' });
+  if (response.status !== 204) throw new Error(`释放模型流失败（HTTP ${response.status}）`);
 }
 
 // 通过浏览器同源请求修改持久化执行模式。
@@ -35,6 +44,57 @@ async function readConversationResponse(response) {
   }
   throw new Error('Agent 流式响应缺少最终会话');
 }
+
+test('Agent 输入区使用统一紧凑布局并适配桌面与手机', async ({ page }) => {
+  const conversationListResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await page.goto('/#agent');
+  await conversationListResponse;
+  const composer = page.locator('.agent-chat-composer');
+  const input = page.getByRole('textbox', { name: '整理需求消息' });
+  const send = page.getByRole('button', { name: '发送', exact: true });
+  const keyboardHint = page.locator('.agent-composer-keyboard-hint');
+
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(composer).toBeVisible();
+    const inputBox = await input.boundingBox();
+    const sendBox = await send.boundingBox();
+    const composerBox = await composer.boundingBox();
+    if (!inputBox || !sendBox || !composerBox) throw new Error('输入区布局未渲染');
+    expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(sendBox.x);
+    expect(Math.abs((inputBox.y + inputBox.height / 2) - (sendBox.y + sendBox.height / 2))).toBeLessThanOrEqual(2);
+    expect(composerBox.height).toBeLessThan(140);
+    if (width <= 760) await expect(keyboardHint).toBeHidden();
+    else await expect(keyboardHint).toBeVisible();
+    const viewport = await page.evaluate(() => ({
+      width: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }));
+    expect(viewport.scrollWidth).toBeLessThanOrEqual(viewport.width);
+  }
+});
+
+test('Agent 计划回复在模型输出完成前逐步显示', async ({ page }, testInfo) => {
+  const streamKey = `agent-e2e-streaming-plan-${testInfo.repeatEachIndex}`;
+  const conversationListResponse = page.waitForResponse((response) => response.request().method() === 'GET'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await page.goto('/#agent');
+  await conversationListResponse;
+  const composer = page.getByRole('textbox', { name: '整理需求消息' });
+  const createdConversationResponse = page.waitForResponse((response) => response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/api/v1/agent/conversations');
+  await composer.fill(`请新建 ${streamKey}，验证计划回复按模型输出增量显示。`);
+  await page.getByRole('button', { name: '发送', exact: true }).click();
+
+  const streamingReply = page.getByRole('article', { name: '整理助手正在回复' });
+  await expect(streamingReply).toContainText('我会先检查管理根目录');
+  await expect(streamingReply).not.toContainText(streamKey);
+  await releasePlanStream(page, streamKey);
+  const conversation = await readConversationResponse(await createdConversationResponse);
+  expect(conversation.id).toBeTruthy();
+  await expect(page.getByRole('region', { name: '确认操作' })).toContainText(streamKey);
+});
 
 test('Agent 窄屏下恢复并切换会话，审阅计划后执行真实目录创建', async ({ page }, testInfo) => {
   const suffix = `-${testInfo.repeatEachIndex}`;

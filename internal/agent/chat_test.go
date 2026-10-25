@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"filesage/internal/config"
 )
@@ -109,13 +110,92 @@ func TestChatClientStreamsOpenAICompatibleToolCalls(t *testing.T) {
 	}))
 	defer server.Close()
 	client := newChatClient(config.AgentModelConfig{BaseURL: server.URL + "/v1", Model: "local-model"})
-	turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "归档照片"}}, nil)
+	turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "归档照片"}}, nil, nil)
 	if err != nil || turn.Content != "" || len(turn.ToolCalls) != 1 {
 		t.Fatalf("completeAgentTurn() = (%#v, %v)", turn, err)
 	}
 	call := turn.ToolCalls[0]
 	if call.ID != "call_search" || call.Function.Name != "search_files" || call.Function.Arguments != `{"directory":"Photos","recursive":true,"type":"image"}` {
 		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+func TestChatClientStreamsProposePlanArgumentsBeforeModelCompletes(t *testing.T) {
+	firstArguments := `{"state":"ready","reply":"先检查`
+	remainingArguments := `管理根目录，再整理","goal":"创建归档目录","operations":[{"action":"create_directory","targetPath":"Review"}]}`
+	continued := make(chan struct{})
+	firstChunkSent := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("response writer does not support flushing")
+			return
+		}
+		first, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{
+			"tool_calls": []any{map[string]any{"index": 0, "id": "call_plan", "type": "function", "function": map[string]string{"name": "propose_plan", "arguments": firstArguments}}},
+		}}}})
+		_, _ = fmt.Fprintf(w, "data: %s\n\n", first)
+		flusher.Flush()
+		close(firstChunkSent)
+		<-continued
+		second, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{
+			"tool_calls": []any{map[string]any{"index": 0, "function": map[string]string{"arguments": remainingArguments}}},
+		}}}})
+		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", second)
+		flusher.Flush()
+	}))
+	defer server.Close()
+	defer func() {
+		select {
+		case <-continued:
+		default:
+			close(continued)
+		}
+	}()
+	client := newChatClient(config.AgentModelConfig{BaseURL: server.URL + "/v1", Model: "local-model"})
+	updates := make(chan string, 4)
+	completed := make(chan struct {
+		turn agentModelTurn
+		err  error
+	}, 1)
+	go func() {
+		turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "创建归档目录"}}, nil, func(piece string) {
+			updates <- piece
+		})
+		completed <- struct {
+			turn agentModelTurn
+			err  error
+		}{turn: turn, err: err}
+	}()
+	select {
+	case <-firstChunkSent:
+	case <-time.After(2 * time.Second):
+		t.Fatal("model did not send its first plan chunk")
+	}
+	select {
+	case piece := <-updates:
+		if piece != firstArguments {
+			t.Fatalf("first plan argument update = %q", piece)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("plan arguments were not streamed before the model completed")
+	}
+	close(continued)
+	result := <-completed
+	if result.err != nil || len(result.turn.ToolCalls) != 1 {
+		t.Fatalf("completeAgentTurn() = (%#v, %v)", result.turn, result.err)
+	}
+	if got, want := result.turn.ToolCalls[0].Function.Arguments, firstArguments+remainingArguments; got != want {
+		t.Fatalf("plan arguments = %q, want %q", got, want)
+	}
+	select {
+	case piece := <-updates:
+		if piece != remainingArguments {
+			t.Fatalf("remaining plan argument update = %q", piece)
+		}
+	default:
+		t.Fatal("remaining plan arguments were not streamed")
 	}
 }
 
@@ -133,7 +213,7 @@ func TestChatClientAcceptsBoundedLargePlanArguments(t *testing.T) {
 	}))
 	defer server.Close()
 	client := newChatClient(config.AgentModelConfig{BaseURL: server.URL + "/v1", Model: "local-model"})
-	turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "批量整理文件"}}, nil)
+	turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "批量整理文件"}}, nil, nil)
 	if err != nil || len(turn.ToolCalls) != 1 {
 		t.Fatalf("large plan tool call = (%#v, %v)", turn.ToolCalls, err)
 	}

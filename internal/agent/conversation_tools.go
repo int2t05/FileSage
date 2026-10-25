@@ -18,7 +18,7 @@ const maxAgentToolRounds = 6
 const maxAgentSearchResults = 40
 
 type agentToolCallingConversationModel interface {
-	completeAgentTurn(context.Context, []ChatMessage, func(string)) (agentModelTurn, error)
+	completeAgentTurn(context.Context, []ChatMessage, func(string), func(string)) (agentModelTurn, error)
 }
 
 type agentFileSearchArgs struct {
@@ -59,11 +59,11 @@ type agentPhotoArchiveInput struct {
 }
 
 // completeWithAgentTools 让模型先调用只读工具，再提交待审计划。
-func (s *ConversationService) completeWithAgentTools(ctx context.Context, model agentToolCallingConversationModel, messages []ChatMessage, onContent func(string), onTool func(string)) (string, bool, error) {
+func (s *ConversationService) completeWithAgentTools(ctx context.Context, model agentToolCallingConversationModel, messages []ChatMessage, onContent, onPlanArguments, onTool func(string)) (string, bool, error) {
 	contextMessages := append([]ChatMessage(nil), messages...)
 	toolCalls := 0
 	for round := 0; round < maxAgentToolRounds; round++ {
-		turn, err := model.completeAgentTurn(ctx, contextMessages, onContent)
+		turn, err := model.completeAgentTurn(ctx, contextMessages, onContent, onPlanArguments)
 		if err != nil {
 			return "", false, err
 		}

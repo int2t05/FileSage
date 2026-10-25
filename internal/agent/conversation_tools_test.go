@@ -34,7 +34,7 @@ type scriptedAgentToolModel struct {
 	requests [][]ChatMessage
 }
 
-func (m *scriptedAgentToolModel) completeAgentTurn(_ context.Context, messages []ChatMessage, _ func(string)) (agentModelTurn, error) {
+func (m *scriptedAgentToolModel) completeAgentTurn(_ context.Context, messages []ChatMessage, _, _ func(string)) (agentModelTurn, error) {
 	m.requests = append(m.requests, append([]ChatMessage(nil), messages...))
 	turn := m.turns[0]
 	m.turns = m.turns[1:]
@@ -123,7 +123,7 @@ func TestAgentToolLoopSearchesBeforeProposingPlan(t *testing.T) {
 	}}
 	service := &ConversationService{photoIndex: index}
 	var progress []string
-	content, planned, err := service.completeWithAgentTools(context.Background(), model, []ChatMessage{{Role: "user", Content: "按日期归档照片"}}, nil, func(value string) { progress = append(progress, value) })
+	content, planned, err := service.completeWithAgentTools(context.Background(), model, []ChatMessage{{Role: "user", Content: "按日期归档照片"}}, nil, nil, func(value string) { progress = append(progress, value) })
 	if err != nil || !planned || content != planArguments || len(model.requests) != 2 {
 		t.Fatalf("tool loop = (%q, %t, %v), requests=%d", content, planned, err, len(model.requests))
 	}

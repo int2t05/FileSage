@@ -264,12 +264,26 @@ func (s *ConversationService) runTurn(ctx context.Context, id string, onUpdate f
 				onUpdate(ConversationStreamUpdate{Reset: true})
 			}
 			var replyStream replyFieldStreamer
+			var streamedReply strings.Builder
+			var planReplyStream replyFieldStreamer
+			var streamedPlanReply strings.Builder
 			var planned bool
 			content, planned, completionErr = s.completeWithAgentTools(ctx, toolModel, messages, func(piece string) {
 				if delta := replyStream.Feed(piece); delta != "" && onUpdate != nil {
+					streamedReply.WriteString(delta)
 					onUpdate(ConversationStreamUpdate{Text: delta})
 				}
+			}, func(piece string) {
+				if delta := planReplyStream.Feed(piece); delta != "" {
+					streamedPlanReply.WriteString(delta)
+					if onUpdate != nil {
+						onUpdate(ConversationStreamUpdate{Text: delta})
+					}
+				}
 			}, func(status string) {
+				if status == "整理执行计划" && (streamedReply.Len() > 0 || streamedPlanReply.Len() > 0) {
+					return
+				}
 				if onUpdate != nil {
 					onUpdate(ConversationStreamUpdate{Reset: true})
 					onUpdate(ConversationStreamUpdate{Tool: status})
@@ -278,8 +292,16 @@ func (s *ConversationService) runTurn(ctx context.Context, id string, onUpdate f
 			if completionErr == nil && planned && onUpdate != nil {
 				var streamedResult conversationTurnResult
 				if json.Unmarshal([]byte(content), &streamedResult) == nil && validateTurnResult(&streamedResult) == nil && streamedResult.Reply != "" {
-					onUpdate(ConversationStreamUpdate{Reset: true})
-					onUpdate(ConversationStreamUpdate{Text: streamedResult.Reply})
+					streamedText := streamedPlanReply.String()
+					if streamedText == "" {
+						streamedText = streamedReply.String()
+					}
+					if streamedText != streamedResult.Reply {
+						if streamedText != "" {
+							onUpdate(ConversationStreamUpdate{Reset: true})
+						}
+						onUpdate(ConversationStreamUpdate{Text: streamedResult.Reply})
+					}
 				}
 			}
 		} else if streamed, ok := s.model.(streamingConversationModel); ok && onUpdate != nil {

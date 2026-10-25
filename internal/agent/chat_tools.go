@@ -38,7 +38,7 @@ type indexedChatToolCall struct {
 }
 
 // completeAgentTurn 请求模型自主选择只读查询或生成待审计划。
-func (c *chatClient) completeAgentTurn(ctx context.Context, messages []ChatMessage, onContent func(string)) (agentModelTurn, error) {
+func (c *chatClient) completeAgentTurn(ctx context.Context, messages []ChatMessage, onContent, onPlanArguments func(string)) (agentModelTurn, error) {
 	if c == nil || !c.status.Available {
 		return agentModelTurn{}, ErrModelUnavailable
 	}
@@ -77,6 +77,7 @@ func (c *chatClient) completeAgentTurn(ctx context.Context, messages []ChatMessa
 	scanner.Buffer(make([]byte, 4096), maxModelResponseBytes+1)
 	var content strings.Builder
 	calls := make(map[int]*ChatToolCall)
+	pendingPlanArguments := make(map[int]string)
 	responseBytes := 0
 	for scanner.Scan() {
 		line := scanner.Bytes()
@@ -143,6 +144,22 @@ func (c *chatClient) completeAgentTurn(ctx context.Context, messages []ChatMessa
 			}
 			call.Function.Name += item.Function.Name
 			call.Function.Arguments += item.Function.Arguments
+			switch {
+			case call.Function.Name == "propose_plan":
+				if pending := pendingPlanArguments[item.Index]; pending != "" {
+					if onPlanArguments != nil {
+						onPlanArguments(pending)
+					}
+					delete(pendingPlanArguments, item.Index)
+				}
+				if item.Function.Arguments != "" && onPlanArguments != nil {
+					onPlanArguments(item.Function.Arguments)
+				}
+			case call.Function.Name == "" || strings.HasPrefix("propose_plan", call.Function.Name):
+				pendingPlanArguments[item.Index] += item.Function.Arguments
+			default:
+				delete(pendingPlanArguments, item.Index)
+			}
 		}
 	}
 	if err := scanner.Err(); err != nil {

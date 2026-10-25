@@ -46,6 +46,8 @@ Agent 手机：单栏对话 | 横向会话切换 | 任务确认 | 步骤与当�
 
 Agent 页面使用以下界面提示原则：一屏只有一个主要任务；优先突出对话、当前工具动作和下一步；会话历史保持窄栏；计划详情和 Shell 命令按需展开；手机改为单列，输入区固定在安全区上方；检查 1440 px 桌面与 390 px 手机视口，清除重复标题、重复状态和装饰性卡片。
 
+**Agent 视觉参考：**[Claude](https://support.anthropic.com/en/articles/10574485-using-extended-thinking)用简短处理中状态和可展开内容承载辅助信息；[Linear](https://linear.app/now/behind-the-latest-design-refresh)以更弱的导航、更少的分隔线和统一的控件位置降低界面噪声；[Apple HIG](https://developer.apple.com/design/human-interface-guidelines/layout)强调内容层级、对齐、渐进披露和适配；[Primer](https://primer.style/product/contribute/design/)把字号、间距、颜色和布局作为可复用基础。FileSage 采用对话优先、操作信息按需展开的布局，不复刻品牌视觉。
+
 ## 状态与可用性要求
 
 | 场景 | 必须显示 |
@@ -75,7 +77,7 @@ Agent 页面使用以下界面提示原则：一屏只有一个主要任务；�
 
 前端定为 React + TypeScript + Vite。组件策略采用少量 Radix Primitives 管理对话框、菜单和焦点／键盘行为，配合 FileSage 自有样式与业务组件；不用完整后台模板。复杂表格、审批卡、上传队列和阅读器工具条按产品语义设计。图标使用 `lucide-react` 按需导入。
 
-设计令牌：间距按 4 px 递增；控件、卡片和主要工作区分别使用 8、12、16 px 圆角。主要操作高度 40 px，手机触控区至少 44 px；正文 14–16 px，关键辅助说明至少 12 px。强调色为松绿，危险色仅用于删除／冲突等状态。CSS 变量集中维护颜色、间距、圆角与阴影，避免页面各自定义视觉基线。
+设计令牌：Agent 页统一使用 4／8／12／16／20／24 px 间距和 12／13／14／16／18／20／22 px 字级；桌面会话栏收至 208 px，聊天输入与发送按钮同行，手机输入保持 44 px 触控高度。全站主要操作至少 40 px，手机触控目标至少 44 px。强调色为松绿，危险色仅用于删除／冲突等状态；CSS 变量集中维护视觉基线。
 
 ## 参考依据与边界
 

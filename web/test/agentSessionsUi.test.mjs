@@ -38,14 +38,14 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentStyles, /\.agent-conversation-flow\.is-empty\s*\{[^}]*align-content: center/);
     assert.match(agentStyles, /@media \(max-width: 440px\)[\s\S]*?\.agent-prompt-suggestions\s*\{[^}]*display: none/);
     assert.match(agentStyles, /@media \(max-width: 440px\) and \(max-height: 760px\)[\s\S]*?\.agent-chat-composer textarea\s*\{[^}]*height: 56px/);
-    assert.match(agentStyles, /@media \(max-width: 440px\) and \(max-height: 760px\)[\s\S]*?\.agent-composer-meta \.agent-composer-keyboard-hint\s*\{[^}]*display: none/);
+    assert.match(agentStyles, /@media \(max-width: 760px\)[\s\S]*?\.agent-composer-keyboard-hint\s*\{[^}]*display: none/);
     assert.match(agentPage, /agent-composer-meta/);
   });
 
   it('Agent 工具调用只展示当前动作和简短结果', () => {
     assert.match(agentPage, /agent-tool-progress/);
     assert.match(agentPage, /setStreamingTool\(update\.tool\)/);
-    assert.match(agentStyles, /\.agent-tool-progress\s*\{[^}]*font-size: 12px/);
+    assert.match(agentStyles, /\.agent-tool-progress\s*\{[^}]*font-size: var\(--agent-text-ui\)/);
     assert.match(agentStyles, /\.agent-tool-progress > span[\s\S]*?animation: agent-tool-pulse/);
   });
 
@@ -59,12 +59,15 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentPage, /data-conversation-id=\{item\.id\}/);
     assert.match(agentStyles, /\.agent-chat-thread,[\s\S]*?\.agent-chat-composer\s*\{[\s\S]*?width: min\(100%, 760px\)/);
     assert.match(agentStyles, /\.agent-chat-header h2\s*\{[^}]*flex: 1/);
-    assert.match(agentStyles, /\.agent-chat-composer-footer > div\s*\{[^}]*margin-left: auto/);
+    assert.match(agentStyles, /\.agent-chat-composer-status > button\s*\{[^}]*margin-left: auto/);
     assert.match(agentStyles, /\.agent-workspace\s*\{[^}]*border: 1px solid var\(--color-line\)[^}]*background: var\(--color-surface\)/);
     assert.match(agentStyles, /\.agent-session-sidebar\s*\{[^}]*border-right: 1px solid var\(--color-line\)/);
     assert.match(agentStyles, /\.agent-chat-panel\s*\{[^}]*border: 0[^}]*background: var\(--color-surface-subtle\)/);
     assert.match(agentStyles, /\.agent-session-item\s*\{[^}]*display: flex[^}]*align-items: center/);
     assert.match(agentStyles, /@media \(max-width: 760px\)[\s\S]*?\.agent-chat-composer\s*\{[^}]*position: sticky[^}]*bottom: calc\(var\(--mobile-nav-height\) \+ env\(safe-area-inset-bottom\)\)/);
+    assert.match(agentStyles, /--agent-space-1: 4px;[\s\S]*?--agent-space-6: 24px;[\s\S]*?--agent-text-caption: 12px/);
+    assert.match(agentStyles, /\.agent-composer-input-row\s*\{[^}]*display: flex/);
+    assert.match(agentPage, /<div className="agent-composer-input-row">[\s\S]*?<button className="agent-primary-button" type="submit"/);
   });
 
   it('首条消息创建会话后，在历史列表同步前保留当前会话', () => {
@@ -92,7 +95,7 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentPage, /agent-privacy-hint/);
     assert.match(agentPage, /消息发送至当前模型；文件正文仅在确认后发送/);
     assert.match(agentPage, /'agent-privacy-hint'/);
-    assert.match(agentStyles, /\.agent-composer-meta\s*\{[^}]*font-size: 10px[^}]*line-height: 1\.35/);
+    assert.match(agentStyles, /\.agent-composer-meta\s*\{[^}]*font-size: var\(--agent-text-caption\)[^}]*line-height: 1\.35/);
   });
 
   it('计划结束后保留同一会话输入，并按当前计划状态启用发送', () => {
