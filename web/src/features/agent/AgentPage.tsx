@@ -500,6 +500,7 @@ export function AgentPage({
   const [conversationBusy, setConversationBusy] = useState('');
   const [pendingUserMessage, setPendingUserMessage] = useState('');
   const [streamingReply, setStreamingReply] = useState('');
+  const [streamingTool, setStreamingTool] = useState('');
   const [deletingConversationId, setDeletingConversationId] = useState('');
   const [enableDocumentOCR, setEnableDocumentOCR] = useState(false);
   const [plan, setPlan] = useState<AgentPlan | null>(null);
@@ -764,18 +765,25 @@ export function AgentPage({
     setConversationBusy('message');
     setPendingUserMessage(message);
     setStreamingReply('');
+    setStreamingTool('');
     setComposerError('');
     setConversationError('');
     setActionError('');
     setNotice('');
-    const onStreamUpdate = (update: { text?: string; reset?: boolean }) => {
-      setStreamingReply((current) => update.reset ? '' : current + (update.text ?? ''));
+    const onStreamUpdate = (update: { text?: string; reset?: boolean; tool?: string }) => {
+      if (update.reset) setStreamingReply('');
+      if (update.tool) setStreamingTool(update.tool);
+      if (update.text) {
+        setStreamingTool('');
+        setStreamingReply((current) => update.reset ? update.text ?? '' : current + update.text);
+      }
     };
     try {
       const updated = selectedConversationId
         ? await sendAgentConversationMessageStreaming(selectedConversationId, message, onStreamUpdate)
         : await createAgentConversationStreaming(initialMessage, onStreamUpdate);
       setStreamingReply('');
+      setStreamingTool('');
       setPendingUserMessage('');
       setConversation(updated);
       setSelectedTaskId('');
@@ -793,6 +801,7 @@ export function AgentPage({
       setConversationHistoryRefreshKey((value) => value + 1);
     } catch (error) {
       setStreamingReply('');
+      setStreamingTool('');
       setPendingUserMessage('');
       setComposerError(`${apiMessage(error, '消息发送失败。')} 草稿已保留。`);
       if (error instanceof AgentConversationApiError && error.status === 409 && selectedConversationId) {
@@ -1262,7 +1271,9 @@ export function AgentPage({
               )}
               {conversationBusy === 'message' && (
                 <article className="agent-chat-message is-assistant agent-streaming-message" aria-label="整理助手正在回复" aria-live="polite">
-                  <p>{streamingReply || '正在思考…'}</p>
+                  {streamingTool && <div className="agent-tool-progress"><span aria-hidden="true" />{streamingTool}</div>}
+                  {streamingReply && <p>{streamingReply}</p>}
+                  {!streamingReply && !streamingTool && <p>正在思考…</p>}
                 </article>
               )}
               {currentConversation?.state === 'failed'
@@ -1457,7 +1468,7 @@ export function AgentPage({
             <textarea
               ref={composerRef}
               id="agent-chat-input"
-              rows={3}
+              rows={2}
               value={draft}
               onChange={(event) => { setDraft(event.currentTarget.value); setComposerError(''); }}
               onKeyDown={(event) => {
@@ -1495,8 +1506,10 @@ export function AgentPage({
                 </button>
               </div>
             </div>
-            <p className="agent-composer-hint agent-composer-privacy-hint" id="agent-privacy-hint">对话消息会发送到当前模型；文件正文仅在你确认分析后发送。</p>
-            <p className="agent-composer-hint agent-composer-keyboard-hint">{composerCanSend ? 'Enter 发送 · Shift + Enter 换行' : 'Shift + Enter 换行'}</p>
+            <div className="agent-composer-meta">
+              <p id="agent-privacy-hint">消息发送至当前模型；文件正文仅在确认后发送。</p>
+              <span className="agent-composer-keyboard-hint">{composerCanSend ? 'Enter 发送 · Shift + Enter 换行' : 'Shift + Enter 换行'}</span>
+            </div>
             {composerError && <p className="agent-composer-error" id="agent-composer-error" role="alert">{composerError}</p>}
           </form>
         </section>

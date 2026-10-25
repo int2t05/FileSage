@@ -29,6 +29,8 @@ FileSage 应像一个目录优先的文件工作台：真实目录是导航和�
 
 **Agent 文件操作：**选择或新建会话 → 用自然语言描述目标 → Agent 澄清 → 用户确认任务、文件范围与数据使用 → 展示按复杂度组织的计划 → 用户审阅并启动计划 → 默认连续执行；手动模式每次只启动当前步骤 → 展示当前步骤与结果。回复实时显示；侧栏只列会话标题和时间，支持新建与删除，不显示完成状态或独立任务列表；计划和工具步骤在对话内展示。任务终态后同一会话恢复输入并显示结果回执；待审或执行中保持锁定。待确认卡片承担结构化回执，不在聊天中重复方案；卡片以路径和实际发送的数据为主，模型信息默认折叠。过长的历史助手回复默认折叠，用户可展开原文。Bash 步骤显示命令摘要和结果；统一 Diff 显示文件名、行号及增删内容，完整命令、范围和多行输出收在“命令与结果”中。目录、二进制和已提交修改／删除的旧正文说明为何无法生成 Diff，不伪造旧内容。永久删除在计划级确认时明确标记不可恢复。计划中的工具步骤均由服务端校验，当前首期不在执行中动态追加依赖步骤。
 
+模型需要查找路径时主动调用文件索引工具；工具调用在消息流中只显示当前动作和简短结果，命令、输出与差异按需展开。每轮注入最新索引摘要，搜索工具仅返回元数据；照片归档默认扫描管理根目录并直接提出计划。文件状态在计划创建、审阅和写入前复核，并发变化显示冲突，不静默覆盖。
+
 **阅读与并发编辑：**文件详情打开阅读页或独立标签页，允许同时阅读多个文件。Agent 或外部工具改动正在阅读的文件时，旧内容明确标记为旧版本并提供重新加载；用户编辑中的草稿不丢弃，保存发现变化时进入“重新加载／另存为”冲突处理，不静默覆盖。
 
 ## 桌面与手机布局
@@ -41,6 +43,8 @@ Agent 手机：单栏对话 | 横向会话切换 | 任务确认 | 步骤与当�
 ```
 
 手机先呈现文件名、类型、必要状态和更多操作，不显示桌面多列元数据；单击行打开，复选框进入批量选择。触控目标至少 44 × 44 px，底部安全区留白。面包屑可横向滚动，目录树以抽屉展示；详情面板改为独立页面／底部抽屉。Agent 输入框在滚动时停留在底部导航上方，保留软键盘与安全区空间。上传用系统文件选择器，拖拽仅作桌面增强。窄屏编辑器和阅读器保持文字缩放与明确返回路径。
+
+Agent 页面使用以下界面提示原则：一屏只有一个主要任务；优先突出对话、当前工具动作和下一步；会话历史保持窄栏；计划详情和 Shell 命令按需展开；手机改为单列，输入区固定在安全区上方；检查 1440 px 桌面与 390 px 手机视口，清除重复标题、重复状态和装饰性卡片。
 
 ## 状态与可用性要求
 
@@ -77,6 +81,7 @@ Agent 手机：单栏对话 | 横向会话切换 | 任务确认 | 步骤与当�
 
 - **文件浏览：**参考 [Google Drive](https://support.google.com/drive/answer/2375177?hl=zh-Hans)、[Nextcloud Files](https://docs.nextcloud.com/server/stable/user_manual/en/files/access_webgui.html)和 [Dropbox Quick View](https://help.dropbox.com/view-edit/preview)的路径导航、列表／网格、就近排序、行操作和预览布局。
 - **Agent：**参考 [Claude Code 计划审阅流程](https://code.claude.com/docs/en/common-workflows#plan-before-editing)和 [GitHub Copilot Agent Sessions](https://docs.github.com/en/copilot/how-tos/github-copilot-app/agent-sessions)的持久会话、计划先于执行和会话导航；FileSage 的文件根目录与人工门禁仍由自身规则决定。
+- **布局与工具反馈：**参考 [Apple Layout HIG](https://developer.apple.com/design/human-interface-guidelines/layout/)的内容层级、留白和自适应布局；Agent 工具循环按 [OpenAI Function Calling](https://developers.openai.com/api/docs/guides/function-calling) 的“模型选工具—服务端执行—结果回传—继续推理”构建。
 - **组件与图标：**采用 [Radix Primitives](https://www.radix-ui.com/primitives/docs/overview/accessibility)管理基础交互，以 [Lucide](https://lucide.dev/guide/)作为统一图标库。其他候选与许可证见[前端和图标参考索引](../../reference/catalog.md)。
 - **产品对照：**参考范围覆盖 Nextcloud Files、File Browser、Filestash、Copyparty、Immich、PhotoPrism、PiGallery2、Paperless-ngx 和 Stirling-PDF。公开仓库仅保留结论、来源与哈希，不分发上游原文；资料清单见[参考目录](../../reference/README.md)及[官方页面来源](../../reference/official/manifest.json)。
 

@@ -30,20 +30,21 @@ func TestConversationPromptKeepsSummaryAndRecentMessages(t *testing.T) {
 	if !strings.Contains(messages[0].Content, "run_shell：在隔离副本中运行 Shell") || !strings.Contains(messages[0].Content, "输入：scopePath, workingDir, shellCommand") {
 		t.Fatalf("system prompt omitted the registered tool catalog: %q", messages[0].Content)
 	}
-	if !strings.Contains(messages[0].Content, "输入契约是服务端预检字段，不是对话 JSON 字段名") ||
-		!strings.Contains(messages[0].Content, "对话输出字段以本指令中的 JSON 契约为准") {
-		t.Fatal("system prompt did not distinguish backend input contracts from conversation JSON")
+	if !strings.Contains(messages[0].Content, "输入：scopePath, workingDir, shellCommand") ||
+		!strings.Contains(messages[0].Content, "propose_plan 提交完整步骤") ||
+		!strings.Contains(messages[0].Content, "只生成待审计划") {
+		t.Fatal("system prompt did not describe model tool calls and the plan gate")
 	}
 	for _, analysisAction := range []string{"find_duplicates", "archive_photos", "classify_documents"} {
 		if !strings.Contains(messages[0].Content, analysisAction) {
 			t.Errorf("system prompt omitted the conversation analysis capability %q", analysisAction)
 		}
 	}
-	if !strings.Contains(messages[0].Content, "候选文件与类别目录由服务端") || !strings.Contains(messages[0].Content, "不发送给模型、不修改文件") {
+	if !strings.Contains(messages[0].Content, "分类意图只允许") || !strings.Contains(messages[0].Content, "用户确认后才读取正文") || !strings.Contains(messages[0].Content, "照片归档只用本机索引元数据") {
 		t.Fatal("system prompt omitted the analysis data or side-effect boundaries")
 	}
-	if !strings.Contains(messages[0].Content, "从上述已登记工具和对话分析能力中选择") {
-		t.Fatal("system prompt did not make the analysis actions selectable")
+	if !strings.Contains(messages[0].Content, "可调用 get_file_index_status") || !strings.Contains(messages[0].Content, "search_files") {
+		t.Fatal("system prompt did not expose the read-only index tools")
 	}
 	if messages[2].Content != "消息-36" || messages[len(messages)-1].Content != "消息-59" {
 		t.Fatalf("recent window = (%q, %q)", messages[2].Content, messages[len(messages)-1].Content)
@@ -141,7 +142,7 @@ func TestConversationAllowsReplyOnlySummaryFromToolReceipt(t *testing.T) {
 	}}
 	messages := conversationPromptMessages(conversation)
 	if !strings.Contains(messages[0].Content, "只要求解释或总结既有计划结果") ||
-		!strings.Contains(messages[0].Content, "步骤回执提供实际执行状态、结果和失败边界") ||
+		!strings.Contains(messages[0].Content, "工具回执是后续决策的事实来源") ||
 		!strings.Contains(messages[len(messages)-2].Content, "已创建文件夹") ||
 		!strings.Contains(messages[len(messages)-1].Content, "只总结上一轮结果") {
 		t.Fatalf("reply-only turn did not receive the execution receipt and guidance: %#v", messages)

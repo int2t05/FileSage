@@ -114,6 +114,8 @@ type trashOperationState struct {
 
 type photoArchiveTargetState struct {
 	ArchiveRootPath string             `json:"archiveRootPath"`
+	ParentPath      string             `json:"parentPath"`
+	Parent          fsroot.Fingerprint `json:"parent"`
 	CapturedDate    string             `json:"capturedDate"`
 	Generation      int64              `json:"generation"`
 	Root            fsroot.Fingerprint `json:"root"`
@@ -2818,8 +2820,29 @@ func (s *Service) snapshotArchivePhoto(proposal Proposal, sourceJSON, targetStat
 		return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
 	}
 	date := proposal.PhotoCapturedAt.UTC().Format("2006-01-02")
-	root, err := s.root.LstatEntry(proposal.ArchiveRootPath)
-	if err != nil || root.Symlink || root.Kind != fsroot.KindDirectory || !root.IdentityAvailable {
+	archiveParentPath := path.Dir(proposal.ArchiveRootPath)
+	if archiveParentPath == "." {
+		archiveParentPath = ""
+	}
+	var archiveParent fsroot.Entry
+	if archiveParentPath == "" {
+		if _, err := s.root.List(""); err != nil {
+			return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
+		}
+	} else {
+		archiveParent, err = s.root.LstatEntry(archiveParentPath)
+		if err != nil || archiveParent.Symlink || archiveParent.Kind != fsroot.KindDirectory || !archiveParent.IdentityAvailable {
+			return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
+		}
+	}
+	root, rootErr := s.root.LstatEntry(proposal.ArchiveRootPath)
+	rootFingerprint := fsroot.Fingerprint{Exists: false}
+	if rootErr == nil {
+		if root.Symlink || root.Kind != fsroot.KindDirectory || !root.IdentityAvailable {
+			return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
+		}
+		rootFingerprint = root.Fingerprint()
+	} else if !errors.Is(rootErr, fs.ErrNotExist) {
 		return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
 	}
 	yearPath := path.Join(proposal.ArchiveRootPath, date[:4])
@@ -2841,15 +2864,19 @@ func (s *Service) snapshotArchivePhoto(proposal Proposal, sourceJSON, targetStat
 		return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
 	}
 	state := photoArchiveTargetState{
-		ArchiveRootPath: proposal.ArchiveRootPath, CapturedDate: date, Generation: proposal.PhotoIndexGeneration,
-		Root: root.Fingerprint(), YearPath: yearPath, Year: year, MonthPath: monthPath, Month: month,
+		ArchiveRootPath: proposal.ArchiveRootPath, ParentPath: archiveParentPath, CapturedDate: date, Generation: proposal.PhotoIndexGeneration,
+		Root: rootFingerprint, YearPath: yearPath, Year: year, MonthPath: monthPath, Month: month,
+	}
+	if archiveParentPath != "" {
+		state.Parent = archiveParent.Fingerprint()
 	}
 	if targetStateJSON != nil {
 		var expected photoArchiveTargetState
 		if json.Unmarshal([]byte(*targetStateJSON), &expected) != nil || expected.ArchiveRootPath != state.ArchiveRootPath ||
+			expected.ParentPath != state.ParentPath || expected.ParentPath != "" && !matchesDirectoryIdentity(archiveParent.Fingerprint(), mustJSON(expected.Parent)) ||
 			expected.CapturedDate != state.CapturedDate || expected.Generation != state.Generation ||
 			expected.YearPath != state.YearPath || expected.MonthPath != state.MonthPath ||
-			!matchesDirectoryIdentity(state.Root, mustJSON(expected.Root)) ||
+			!archiveDirectoryMatches(state.Root, expected.Root) ||
 			!archiveDirectoryMatches(state.Year, expected.Year) || !archiveDirectoryMatches(state.Month, expected.Month) {
 			return fsroot.Entry{}, photoArchiveTargetState{}, ErrConflict
 		}

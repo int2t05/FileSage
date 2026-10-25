@@ -4,6 +4,7 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,7 @@ func TestAgentConversationSessionsPersistIndependentlyAcrossRestart(t *testing.T
 			return
 		}
 		var request struct {
+			Stream   bool                `json:"stream"`
 			Messages []agent.ChatMessage `json:"messages"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
@@ -45,8 +47,12 @@ func TestAgentConversationSessionsPersistIndependentlyAcrossRestart(t *testing.T
 		modelMu.Lock()
 		modelUserMessages = append(modelUserMessages, userMessages)
 		modelMu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"{\"state\":\"clarifying\",\"reply\":\"请补充具体范围。\"}"}}]}`)
+		if !request.Stream {
+			t.Errorf("tool-capable conversation request was not streamed")
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]string{"content": `{"state":"clarifying","reply":"请补充具体范围。","contextSummary":""}`}}}})
+		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
 	}))
 	defer model.Close()
 
@@ -131,9 +137,9 @@ func TestAgentConversationSessionsPersistIndependentlyAcrossRestart(t *testing.T
 		t.Fatalf("continued first session messages = %#v", first.Messages)
 	}
 	modelMu.Lock()
-	if len(modelUserMessages) != 3 || strings.Join(modelUserMessages[0], "|") != "甲会话的整理需求" ||
-		strings.Join(modelUserMessages[1], "|") != "乙会话的归档需求" ||
-		strings.Join(modelUserMessages[2], "|") != "甲会话的整理需求|甲会话的补充说明" {
+	if len(modelUserMessages) != 3 || strings.Join(modelUserMessages[0], "|") != "文件索引状态：未接入。|甲会话的整理需求" ||
+		strings.Join(modelUserMessages[1], "|") != "文件索引状态：未接入。|乙会话的归档需求" ||
+		strings.Join(modelUserMessages[2], "|") != "文件索引状态：未接入。|甲会话的整理需求|甲会话的补充说明" {
 		modelMu.Unlock()
 		t.Fatalf("model received mixed session context: %#v", modelUserMessages)
 	}

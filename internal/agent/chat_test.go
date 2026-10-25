@@ -82,6 +82,66 @@ func TestChatClientStreamsOpenAICompatibleJSONContent(t *testing.T) {
 	}
 }
 
+func TestChatClientStreamsOpenAICompatibleToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Stream      bool                 `json:"stream"`
+			ToolChoice  string               `json:"tool_choice"`
+			Tools       []chatToolDefinition `json:"tools"`
+			ResponseFmt json.RawMessage      `json:"response_format"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+		}
+		if !request.Stream || request.ToolChoice != "auto" || len(request.Tools) != 3 || len(request.ResponseFmt) != 0 {
+			t.Errorf("tool request = %#v", request)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		chunks := []map[string]any{
+			{"index": 0, "id": "call_search", "type": "function", "function": map[string]string{"name": "search_files", "arguments": `{"directory":"`}},
+			{"index": 0, "function": map[string]string{"arguments": `Photos","recursive":true,"type":"image"}`}},
+		}
+		for _, toolCall := range chunks {
+			payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{"tool_calls": []any{toolCall}}}}})
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", payload)
+		}
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	client := newChatClient(config.AgentModelConfig{BaseURL: server.URL + "/v1", Model: "local-model"})
+	turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "归档照片"}}, nil)
+	if err != nil || turn.Content != "" || len(turn.ToolCalls) != 1 {
+		t.Fatalf("completeAgentTurn() = (%#v, %v)", turn, err)
+	}
+	call := turn.ToolCalls[0]
+	if call.ID != "call_search" || call.Function.Name != "search_files" || call.Function.Arguments != `{"directory":"Photos","recursive":true,"type":"image"}` {
+		t.Fatalf("tool call = %#v", call)
+	}
+}
+
+func TestChatClientAcceptsBoundedLargePlanArguments(t *testing.T) {
+	arguments, err := json.Marshal(map[string]string{"padding": strings.Repeat("x", 40<<10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{
+			"tool_calls": []any{map[string]any{"index": 0, "id": "call_plan", "type": "function", "function": map[string]string{"name": "propose_plan", "arguments": string(arguments)}}},
+		}}}})
+		_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
+	}))
+	defer server.Close()
+	client := newChatClient(config.AgentModelConfig{BaseURL: server.URL + "/v1", Model: "local-model"})
+	turn, err := client.completeAgentTurn(context.Background(), []ChatMessage{{Role: "user", Content: "批量整理文件"}}, nil)
+	if err != nil || len(turn.ToolCalls) != 1 {
+		t.Fatalf("large plan tool call = (%#v, %v)", turn.ToolCalls, err)
+	}
+	if turn.ToolCalls[0].Function.Arguments != string(arguments) {
+		t.Fatalf("large plan arguments = %d bytes, want %d", len(turn.ToolCalls[0].Function.Arguments), len(arguments))
+	}
+}
+
 func TestChatClientDoesNotFollowRedirectOrExposeProviderBody(t *testing.T) {
 	const secret = "provider-secret"
 	var redirected bool

@@ -6,6 +6,8 @@
 
 **线上复核（2026-10-25）：**健康 API 正常；Agent 模型流式回复通过。systemd 为 `active`、`enabled`；测试会话已清空。
 
+**本地未发布改进：**Agent 已接入流式工具调用、每轮文件索引上下文和照片自动归档计划；Go 与 Web 检查通过，Linux 沙箱端到端验证待 CI。
+
 **存储：**`/srv/filesage-files` 位于 NVMe（约 390 GiB 可用）；`/srv/filesage-files/home` 直挂 SSD（约 398 GiB 可用）。两块盘独立；`home/` 下已建立 `Documents`、`Pictures`、`Videos`、`Music`、`Downloads`、`Archives`、`Code`、`Backups` 真实目录。
 
 ## 已完成

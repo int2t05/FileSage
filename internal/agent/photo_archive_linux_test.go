@@ -8,6 +8,9 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"filesage/internal/config"
 	"filesage/internal/fsroot"
 	"filesage/internal/indexer"
 	"filesage/internal/store"
@@ -51,22 +55,52 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 	}
 	defer fileIndex.Close()
 	waitPhotoIndexReady(t, fileIndex)
-	model := &scriptedConversationModel{
-		status:  ModelStatus{Available: true, Provider: "test-provider", Model: "test-model", Destination: "local"},
-		replies: []string{`{"state":"ready","reply":"我会按拍摄日期整理相机照片，请确认来源和目标。","goal":"按拍摄日期归档照片","action":"archive_photos","filePath":"camera","targetPath":"camera/archive"}`},
+	var modelRequests [][]ChatMessage
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Messages   []ChatMessage        `json:"messages"`
+			Stream     bool                 `json:"stream"`
+			ToolChoice string               `json:"tool_choice"`
+			Tools      []chatToolDefinition `json:"tools"`
+		}
+		if request.Method != http.MethodPost || request.URL.Path != "/v1/chat/completions" || json.NewDecoder(request.Body).Decode(&body) != nil || !body.Stream || body.ToolChoice != "auto" || len(body.Tools) != 3 {
+			http.Error(w, "invalid model request", http.StatusBadRequest)
+			return
+		}
+		modelRequests = append(modelRequests, body.Messages)
+		if len(modelRequests) == 1 {
+			writeAgentToolCall(w, "call-search", "search_files", `{"directory":"","recursive":true,"type":"image"}`)
+			return
+		}
+		if len(modelRequests) == 2 {
+			writeAgentToolCall(w, "call-plan", "propose_plan", `{"state":"ready","reply":"我会按拍摄日期归档照片。","contextSummary":"照片归档到默认目录。","goal":"按拍摄日期归档照片","operations":[{"action":"archive_photos","filePath":""}]}`)
+			return
+		}
+		http.Error(w, "unexpected model turn", http.StatusBadRequest)
+	}))
+	defer model.Close()
+	conversationService := &ConversationService{
+		store: metadata, root: root, plans: plans,
+		model:      newChatClient(config.AgentModelConfig{BaseURL: model.URL + "/v1", Model: "test-model", Provider: "test-provider"}),
+		photoIndex: fileIndex,
 	}
-	conversationService := &ConversationService{store: metadata, root: root, plans: plans, model: model, photoIndex: fileIndex}
-	conversation, err := conversationService.Create(ctx, "把照片按拍摄日期归档到 archive")
-	if err != nil || conversation.State != store.ConversationAwaitingConfirmation || conversation.Analysis == nil || conversation.Analysis.Action != "archive_photos" {
+	conversation, err := conversationService.Create(ctx, "按拍摄日期归档照片")
+	if err != nil || conversation.State != store.ConversationAwaitingApproval || conversation.Analysis != nil || conversation.PlanID == "" {
 		t.Fatalf("Create() = (%#v, %v)", conversation, err)
 	}
-	if strings.Contains(marshalMessages(t, model.requests[0]), privatePhotoMarker) {
+	if len(modelRequests) != 2 || strings.Contains(marshalMessages(t, modelRequests[0]), privatePhotoMarker) {
 		t.Fatal("photo bytes reached the clarification model")
 	}
-	confirmed, err := conversationService.ConfirmAnalysis(ctx, conversation.ID)
-	if err != nil || confirmed.State != store.ConversationAwaitingApproval || confirmed.PlanID == "" {
-		t.Fatalf("ConfirmAnalysis() = (%#v, %v)", confirmed, err)
+	searchResultSeen := false
+	for _, message := range modelRequests[1] {
+		if message.Role == "tool" && message.ToolCallID == "call-search" && strings.Contains(message.Content, "camera/a/photo.jpg") {
+			searchResultSeen = true
+		}
 	}
+	if !searchResultSeen {
+		t.Fatalf("real index search result did not return to the plan call: %#v", modelRequests[1])
+	}
+	confirmed := conversation
 	plan, err := plans.Plan(ctx, confirmed.PlanID)
 	if err != nil || len(plan.Operations) != 2 {
 		t.Fatalf("photo plan = (%#v, %v), want two dated photos", plan, err)
@@ -74,11 +108,11 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 	if !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "2 个照片归档步骤") || !strings.Contains(confirmed.Messages[len(confirmed.Messages)-1].Content, "1 张缺少拍摄日期并跳过") {
 		t.Fatalf("archive summary does not show candidate and skip counts: %#v", confirmed.Messages)
 	}
-	if plan.Operations[0].SourcePath != "camera/a/photo.jpg" || plan.Operations[0].TargetPath != "camera/archive/2020/01/photo.jpg" ||
-		plan.Operations[1].SourcePath != "camera/b/photo.jpg" || plan.Operations[1].TargetPath != "camera/archive/2020/01/photo (1).jpg" {
+	if plan.Operations[0].SourcePath != "camera/a/photo.jpg" || plan.Operations[0].TargetPath != "按拍摄日期归档/2020/01/photo.jpg" ||
+		plan.Operations[1].SourcePath != "camera/b/photo.jpg" || plan.Operations[1].TargetPath != "按拍摄日期归档/2020/01/photo (1).jpg" {
 		t.Fatalf("archive targets are not deterministic: %#v", plan.Operations)
 	}
-	if _, err := os.Stat(filepath.Join(rootPath, "camera", "archive", "2020")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(rootPath, "按拍摄日期归档", "2020")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("analysis created archive directories before approval: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(rootPath, "camera", "a", "photo.jpg")); err != nil {
@@ -166,6 +200,14 @@ func TestPhotoArchiveConversationApprovalAndExecution(t *testing.T) {
 	}
 }
 
+func writeAgentToolCall(w http.ResponseWriter, id, name, arguments string) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	payload, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{"delta": map[string]any{
+		"tool_calls": []any{map[string]any{"index": 0, "id": id, "type": "function", "function": map[string]string{"name": name, "arguments": arguments}}},
+	}}}})
+	_, _ = fmt.Fprintf(w, "data: %s\n\ndata: [DONE]\n\n", payload)
+}
+
 func TestPhotoArchiveRejectsWholeBatchAboveLimits(t *testing.T) {
 	for _, count := range []int{257, 10001} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
@@ -187,13 +229,9 @@ func TestPhotoArchiveRejectsWholeBatchAboveLimits(t *testing.T) {
 				replies: []string{`{"state":"ready","reply":"请确认。","goal":"归档照片","action":"archive_photos","filePath":"","targetPath":"archive"}`},
 			}
 			conversationService := &ConversationService{store: metadata, root: root, plans: plans, model: model, photoIndex: staticPhotoIndex{records: records}}
-			conversation, err := conversationService.Create(ctx, "归档所有照片")
-			if err != nil || conversation.State != store.ConversationAwaitingConfirmation {
-				t.Fatalf("Create() = (%#v, %v)", conversation, err)
-			}
-			failed, err := conversationService.ConfirmAnalysis(ctx, conversation.ID)
+			failed, err := conversationService.Create(ctx, "归档所有照片")
 			if !errors.Is(err, ErrUnsupported) || failed.State != store.ConversationFailed {
-				t.Fatalf("ConfirmAnalysis() = (%#v, %v), want whole-batch rejection", failed, err)
+				t.Fatalf("Create() = (%#v, %v), want whole-batch rejection", failed, err)
 			}
 			tasks, err := metadata.ListTasks(ctx, store.TaskListQuery{Limit: 10})
 			if err != nil || len(tasks.Tasks) != 0 {

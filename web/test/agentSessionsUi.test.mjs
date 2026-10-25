@@ -38,8 +38,15 @@ describe('Agent 会话与设置界面', () => {
     assert.match(agentStyles, /\.agent-conversation-flow\.is-empty\s*\{[^}]*align-content: center/);
     assert.match(agentStyles, /@media \(max-width: 440px\)[\s\S]*?\.agent-prompt-suggestions\s*\{[^}]*display: none/);
     assert.match(agentStyles, /@media \(max-width: 440px\) and \(max-height: 760px\)[\s\S]*?\.agent-chat-composer textarea\s*\{[^}]*height: 56px/);
-    assert.match(agentStyles, /@media \(max-width: 440px\) and \(max-height: 760px\)[\s\S]*?\.agent-composer-keyboard-hint\s*\{[^}]*display: none/);
-    assert.match(agentPage, /agent-composer-hint agent-composer-keyboard-hint/);
+    assert.match(agentStyles, /@media \(max-width: 440px\) and \(max-height: 760px\)[\s\S]*?\.agent-composer-meta \.agent-composer-keyboard-hint\s*\{[^}]*display: none/);
+    assert.match(agentPage, /agent-composer-meta/);
+  });
+
+  it('Agent 工具调用只展示当前动作和简短结果', () => {
+    assert.match(agentPage, /agent-tool-progress/);
+    assert.match(agentPage, /setStreamingTool\(update\.tool\)/);
+    assert.match(agentStyles, /\.agent-tool-progress\s*\{[^}]*font-size: 12px/);
+    assert.match(agentStyles, /\.agent-tool-progress > span[\s\S]*?animation: agent-tool-pulse/);
   });
 
   it('会话侧栏只管理对话，任务进度留在执行计划里', () => {
@@ -83,9 +90,9 @@ describe('Agent 会话与设置界面', () => {
 
   it('在输入框附近说明对话消息和文件正文的模型发送边界', () => {
     assert.match(agentPage, /agent-privacy-hint/);
-    assert.match(agentPage, /对话消息会发送到当前模型；文件正文仅在你确认分析后发送/);
+    assert.match(agentPage, /消息发送至当前模型；文件正文仅在确认后发送/);
     assert.match(agentPage, /'agent-privacy-hint'/);
-    assert.match(agentStyles, /\.agent-composer-privacy-hint\s*\{[^}]*font-size: 11px[^}]*text-align: left/);
+    assert.match(agentStyles, /\.agent-composer-meta\s*\{[^}]*font-size: 10px[^}]*line-height: 1\.35/);
   });
 
   it('计划结束后保留同一会话输入，并按当前计划状态启用发送', () => {

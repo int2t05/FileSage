@@ -1,6 +1,6 @@
 # 技术基线
 
-**更新：** 2026-10-24
+**更新：** 2026-10-25
 
 本文只保留当前架构和技术决策入口。方案比较和决策依据见各 ADR；当前发布状态见[项目状态](STATUS.md)，验收证据见[验收记录](ACCEPTANCE.md)。
 
@@ -31,6 +31,7 @@ flowchart LR
 | 前端 | React、TypeScript、Vite、Radix Primitives、Lucide | [ADR-0007](design/adr/0007-frontend-framework.md) |
 | 文本编辑 | 私有暂存候选；数据库和日志不保存正文 | [ADR-0008](design/adr/0008-agent-text-edit-staging.md) |
 | Agent | 持久会话、类型化工具步骤；整份计划审核后按模式执行 | [ADR-0009](design/adr/0009-agent-tool-steps.md) |
+| Agent 工具调用 | 流式函数调用、每轮索引摘要、只读搜索与待审计划 | [ADR-0010](design/adr/0010-agent-tool-runtime.md) |
 
 ## 必须保持的边界
 

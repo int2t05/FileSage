@@ -763,6 +763,8 @@ describe('Agent 对话 API 请求', () => {
   it('以 SSE 接收回复增量并以服务端最终会话作为结果', async () => {
     const chunks = [
       `event: delta\ndata: ${JSON.stringify({ text: '请补' })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ reset: true })}\n\n`,
+      `event: delta\ndata: ${JSON.stringify({ tool: '正在搜索文件索引 · 找到 3 项' })}\n\n`,
       `event: delta\ndata: ${JSON.stringify({ text: '充范围' })}\n\n`,
       `event: done\ndata: ${JSON.stringify(conversation())}\n\n`,
     ];
@@ -782,7 +784,12 @@ describe('Agent 对话 API 请求', () => {
     assert.equal(request.url, '/api/v1/agent/conversations');
     assert.equal(request.init.headers.Accept, 'text/event-stream, application/json');
     assert.equal(result.id, 'conv-1');
-    assert.deepEqual(updates, [{ text: '请补' }, { text: '充范围' }]);
+    assert.deepEqual(updates, [
+      { text: '请补' },
+      { reset: true },
+      { tool: '正在搜索文件索引 · 找到 3 项' },
+      { text: '充范围' },
+    ]);
   });
 
   it('支持会话续聊的 SSE 与同源删除请求', async () => {

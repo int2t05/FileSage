@@ -665,7 +665,7 @@ async function requestConversationStream(
   url: string,
   init: RequestInit,
   jsonStatus: number,
-  onUpdate: (update: { text?: string; reset?: boolean }) => void,
+  onUpdate: (update: { text?: string; reset?: boolean; tool?: string }) => void,
 ): Promise<AgentConversation> {
   let response: Response;
   try {
@@ -706,6 +706,7 @@ async function requestConversationStream(
     const payload = JSON.parse(data.join('\n')) as unknown;
     if (event === 'delta' && isRecord(payload)) {
       if (payload.reset === true) onUpdate({ reset: true });
+      if (typeof payload.tool === 'string' && payload.tool) onUpdate({ tool: payload.tool });
       else if (typeof payload.text === 'string' && payload.text) onUpdate({ text: payload.text });
       return;
     }
@@ -789,7 +790,7 @@ export function createAgentConversation(message: string): Promise<AgentConversat
 
 export function createAgentConversationStreaming(
   message: string,
-  onUpdate: (update: { text?: string; reset?: boolean }) => void,
+  onUpdate: (update: { text?: string; reset?: boolean; tool?: string }) => void,
 ): Promise<AgentConversation> {
   return requestConversationStream('/api/v1/agent/conversations', {
     method: 'POST',
@@ -811,7 +812,7 @@ export function sendAgentConversationMessage(id: string, message: string): Promi
 export function sendAgentConversationMessageStreaming(
   id: string,
   message: string,
-  onUpdate: (update: { text?: string; reset?: boolean }) => void,
+  onUpdate: (update: { text?: string; reset?: boolean; tool?: string }) => void,
 ): Promise<AgentConversation> {
   return requestConversationStream(`/api/v1/agent/conversations/${encodeURIComponent(id)}/messages`, {
     method: 'POST',
