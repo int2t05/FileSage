@@ -1,10 +1,10 @@
 # 项目状态
 
-**成熟度：**稳定版 `v1.0.0` 已发布；服务器运行 `main` 的 `f87d5b3`。
+**成熟度：**稳定版 `v1.0.0` 已发布；服务器运行 `main` 的 `9e2f6ae`。
 
 **提交：**`0239fd0` · [GitHub Release](https://github.com/int2t05/FileSage/releases/tag/v1.0.0)
 
-**线上复核（2026-10-25）：**健康、文件接口和网页均返回正常；systemd 为 `active`、`enabled`，重启次数为 0。运行二进制构建信息与 `f87d5b3` 一致。
+**线上复核（2026-10-25）：**健康、文件接口和网页均返回正常；systemd 为 `active`、`enabled`，重启次数为 0。运行二进制构建信息与 `9e2f6ae` 一致，回滚版本保存在 `/usr/local/lib/filesage/rollback-before-9e2f6ae`。
 
 **当前版本：**Agent 支持流式工具调用、文件索引上下文和照片归档计划；会话恢复已修复，当前代码已推送并部署。
 
