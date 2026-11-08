@@ -7,7 +7,7 @@ require (
 	github.com/tus/lockfile v1.2.0
 	github.com/tus/tusd/v2 v2.10.1
 	golang.org/x/sys v0.49.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
