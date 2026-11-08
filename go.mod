@@ -3,7 +3,7 @@ module filesage
 go 1.27.3
 
 require (
-	github.com/bep/imagemeta v1.1.0
+	github.com/bep/imagemeta v1.1.1
 	github.com/tus/lockfile v1.2.0
 	github.com/tus/tusd/v2 v2.10.1
 	golang.org/x/sys v0.49.0
